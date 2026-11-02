@@ -110,3 +110,7 @@ graphify-out/
 .claude/settings.local.json
 .claude/settings.local.md
 .claude/CLAUDE.local.md
+# 某些插件会把本地设置写到 rules/ 下（而不是 .claude/ 根），一并排除：
+# rules/ 只该有 *.md 规范文件。
+.claude/rules/*.local.json
+.claude/rules/*.local.md
