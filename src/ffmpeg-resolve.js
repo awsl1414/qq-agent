@@ -626,6 +626,40 @@ const SOURCE_PROBE_TIMEOUT_MS = 6000;
 const SOURCE_LIST_TTL_MS = 30 * 1000;
 let _sourceListCache = null;   // { at, entry, list }
 
+/**
+ * 一个候选的"真实身份"，用于去重。
+ *
+ * 裸名（'ffmpeg'）与绝对路径可能指向同一个二进制：PATH 里有 /opt/homebrew/bin，
+ * 裸名就会解析到 /opt/homebrew/bin/ffmpeg，与候选清单里那条绝对路径重复。
+ * 所以先尽力解析成真实路径（realpath 会一并处理软链），解析不出来才退回原字符串。
+ *
+ * 只在非 Windows 上做 realpath：Windows 上路径大小写不敏感、短名（8.3）等形态
+ * 会让 realpath 结果与用户看到的路径差异过大，展示用绝对路径更直观，而去重
+ * 靠 buildCandidatesByGroup 的字符串去重已经够（那边不会同时产生裸名与绝对路径
+ * 的同一份 —— where/注册表/WinGet 给的都是绝对路径）。
+ */
+function realIdentity(cand) {
+  const s = String(cand || '');
+  if (!s) return '';
+  if (!path.isAbsolute(s)) {
+    // 裸名：在 PATH 里找它，找到就返回真实路径；找不到就保留裸名
+    for (const dir of String(process.env.PATH || '').split(path.delimiter)) {
+      if (!dir) continue;
+      const p = path.join(dir, s);
+      try {
+        if (fs.statSync(p).isFile()) return safeRealpath(p);
+      } catch { /* 该目录下没有，继续 */ }
+    }
+    return s;
+  }
+  return safeRealpath(s);
+}
+
+/** realpath 的容错版：失败时返回原路径（文件可能刚被删掉）。 */
+function safeRealpath(p) {
+  try { return fs.realpathSync(p); } catch { return p; }
+}
+
 export async function listFfmpegSources({ perGroupLimit = SOURCE_PROBE_LIMIT_PER_GROUP, force = false } = {}) {
   const key = cacheKey();
   if (!force && _sourceListCache
@@ -640,6 +674,7 @@ export async function listFfmpegSources({ perGroupLimit = SOURCE_PROBE_LIMIT_PER
   } catch { return []; }
 
   const out = [];
+  const identities = new Set();   // 已列出的可执行文件的真实身份，见下方 realIdentity
   for (const group of FFMPEG_SOURCE_ORDER) {
     let seen = 0;
     for (const cand of groups[group] || []) {
@@ -648,6 +683,14 @@ export async function listFfmpegSources({ perGroupLimit = SOURCE_PROBE_LIMIT_PER
       if (abs && !isFile(cand)) continue;
       const v = await probeFfmpeg(cand, SOURCE_PROBE_TIMEOUT_MS);
       if (!v.ok) continue;
+      // 按**真实文件**去重，不按字符串。
+      // 裸名 'ffmpeg' 与它解析出的绝对路径（如 /opt/homebrew/bin/ffmpeg）是同一个
+      // 二进制，只按字符串比会列成两条 —— 设置页显示"本机可用：ffmpeg、
+      // /opt/homebrew/bin/ffmpeg"，用户会以为装了两份。
+      // 裸名解析成真实路径后再比；解析不出来（PATH 里没有）就用原字符串。
+      const identity = realIdentity(cand);
+      if (identities.has(identity)) continue;
+      identities.add(identity);
       seen += 1;
       out.push({
         group,

@@ -3347,23 +3347,31 @@ function renderMediaSection(c) {
       <button class="btn btn-small btn-primary" id="ffmpeg-download-btn" hidden disabled>下载并安装</button>
       <span class="sl-hint" id="ffmpeg-progress-hint"></span>
     </div>
-    <!-- 安装指引（按平台）：内容依赖 /api/ffmpeg/status，首帧只能是空占位。
-         paint() 拿到 installGuide 后才填内容并取消 hidden；Windows 上
-         installGuide 为 null，这块永远不出现（Windows 的安装路径就是下面的下载按钮）。 -->
-    <div id="ffmpeg-install-guide" style="margin-bottom:14px" hidden></div>
+    <!-- 说明文字必须在安装指引之前：用户的阅读顺序是「它是什么 → 怎么装 →
+         怎么选」。反过来会先看到一条命令，却还不知道 ffmpeg 干什么用。 -->
     <div class="hint" style="margin-bottom:14px">
       ffmpeg 是一个外部工具，负责四项功能：<b>大图压缩</b>（群友发的大图先缩到模型能接受的尺寸）、
       <b>GIF 转视频</b>、<b>视频抽帧</b>（让只能看图的模型也能理解视频）、<b>动态壁纸导入</b>。
       没有它时这四项各自降级 —— 不报错，但也用不了；聊天与其它功能完全不受影响。
     </div>
+    <!-- 安装指引（按平台）：内容依赖 /api/ffmpeg/status，首帧只能是空占位。
+         paint() 拿到 installGuide 后才填内容并取消 hidden；Windows 上
+         installGuide 为 null，这块永远不出现（Windows 的安装路径就是下面的下载按钮）。
+         已装好时整体折叠成一行 —— 状态条刚说完"能用"，紧接着教怎么装是自相矛盾的。 -->
+    <details id="ffmpeg-install-guide-wrap" class="fold-sub" hidden>
+      <summary id="ffmpeg-install-guide-summary" class="hint" style="cursor:pointer;margin-bottom:10px">安装方式</summary>
+      <div id="ffmpeg-install-guide" style="margin-bottom:14px"></div>
+    </details>
     <div class="hint" id="ffmpeg-proxy-line" style="margin-bottom:14px" hidden></div>
 
     <h3>优先使用哪一个</h3>
     <div class="field">
       <label>如果你系统里已经装过 ffmpeg，可以直接用它，不必再下载一份</label>
       <div class="checkbox-row"><input type="radio" name="cfg-ffmpeg-source" id="cfg-ffmpeg-source-auto" value="" ${source === '' ? 'checked' : ''} />
-        <label for="cfg-ffmpeg-source-auto">自动（手填路径 → 下载的 → 系统安装）</label></div>
-      <div class="checkbox-row"><input type="radio" name="cfg-ffmpeg-source" id="cfg-ffmpeg-source-managed" value="managed" ${source === 'managed' ? 'checked' : ''} />
+        <label for="cfg-ffmpeg-source-auto" id="cfg-ffmpeg-source-auto-label">自动（手填路径 → 下载的 → 系统安装）</label></div>
+      <!-- 「下载并安装」那一份只在能程序内下载的平台存在（Windows / Linux）。
+           macOS 上它恒为空，列出来会让用户去找一个不存在的东西，由 paint() 整行隐藏。 -->
+      <div class="checkbox-row" id="cfg-ffmpeg-source-managed-row"><input type="radio" name="cfg-ffmpeg-source" id="cfg-ffmpeg-source-managed" value="managed" ${source === 'managed' ? 'checked' : ''} />
         <label for="cfg-ffmpeg-source-managed">优先用「下载并安装」装的那份</label></div>
       <div class="checkbox-row"><input type="radio" name="cfg-ffmpeg-source" id="cfg-ffmpeg-source-system" value="system" ${source === 'system' ? 'checked' : ''} />
         <label for="cfg-ffmpeg-source-system" id="cfg-ffmpeg-source-system-label">优先用系统里自己装的（PATH / winget）</label></div>

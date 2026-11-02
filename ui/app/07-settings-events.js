@@ -1887,12 +1887,27 @@ function bindSettingsEvents(c) {
     const bindCopyButtons = (root) => {
       $$('[data-ffmpeg-copy]', root).forEach((btn) => {
         btn.addEventListener('click', async () => {
+          const cmd = btn.dataset.ffmpegCopy || '';
           try {
-            await navigator.clipboard.writeText(btn.dataset.ffmpegCopy || '');
+            await navigator.clipboard.writeText(cmd);
             btn.textContent = '已复制 ✓';
-          } catch (_) {
-            // 剪贴板被拒（网页版无权限 / 非安全上下文）时明说，别假装成功。
+          } catch (e) {
+            // 剪贴板被拒（窗口未聚焦 / 浏览器权限 / 非安全上下文）时不能假装成功，
+            // 但只说「复制失败」用户无从下手 —— 退一步把命令选中，让他自己按复制键。
+            // 这不是"吞掉错误"：失败原因记在 title 上，主路径仍是自动复制。
+            //
+            // 不区分 ⌘C / Ctrl+C：`navigator.platform` 已废弃（Chromium 返回空串），
+            // 而为了一个提示文案去嗅探 UA 不值得 —— 直接说「复制键」两边都说得通。
             btn.textContent = '复制失败';
+            btn.title = `自动复制不可用（${e?.message || e?.name || '未知原因'}）。命令已选中，按系统的复制快捷键即可`;
+            const code = btn.closest('div')?.querySelector('code');
+            if (code) {
+              const range = document.createRange();
+              range.selectNodeContents(code);
+              const sel = window.getSelection();
+              sel.removeAllRanges();
+              sel.addRange(range);
+            }
           }
           setTimeout(() => { btn.textContent = '复制'; }, 1500);
         });
@@ -1934,7 +1949,15 @@ function bindSettingsEvents(c) {
       const isWin = s.platform === 'win32';
       // 安装指引区：有 installGuide 才注入（win32 为 null → 保持 hidden）。
       // 内容随平台而变，每次刷新都按内容哈希判断是否重写。
+      //
+      // 已装好时整块折叠成一行「安装方式」：状态条刚说完"ffmpeg 9.0.2 可用"，
+      // 紧接着摆一条安装命令是自相矛盾的，用户还会以为哪里没配好。
+      // 未装 / 不健康时才默认展开 —— 那时安装命令正是他要找的东西。
+      // 用户手动展开过就不再覆盖（dataset.userToggled），否则每次轮询刷新
+      // 都会把他刚点开的区块重新折上。
       const guideBox = $('#ffmpeg-install-guide');
+      const guideWrap = $('#ffmpeg-install-guide-wrap');
+      const guideSummary = $('#ffmpeg-install-guide-summary');
       if (guideBox && s.installGuide !== undefined) {
         const html = installGuideHtml(s.installGuide);
         // 内容没变就不重写：innerHTML 重建会把「已复制 ✓」的按钮态和展开的
@@ -1942,9 +1965,30 @@ function bindSettingsEvents(c) {
         if (html !== guideBox.dataset.guideHtml) {
           guideBox.innerHTML = html;
           guideBox.dataset.guideHtml = html;
-          guideBox.hidden = !html;
           if (html) bindCopyButtons(guideBox);
         }
+        if (guideWrap) {
+          guideWrap.hidden = !html;
+          const unhealthyNow = s.ok && s.health && s.health.ok === false;
+          const installed = s.ok && !unhealthyNow;
+          if (html && !guideWrap.dataset.userToggled) {
+            guideWrap.open = !installed;
+          }
+          if (guideSummary) {
+            guideSummary.textContent = installed ? '已安装，查看安装方式' : '安装方式';
+          }
+        }
+      }
+      // 「优先使用哪一个」里，程序内下载那一份只在能下载的平台存在。
+      // macOS 上它恒为空，留着会让用户去找一个不存在的东西。
+      const managedRow = $('#cfg-ffmpeg-source-managed-row');
+      if (managedRow) managedRow.hidden = !canAutoInstall;
+      const autoLabel = $('#cfg-ffmpeg-source-auto-label');
+      if (autoLabel) {
+        // 「自动」那条的描述列了整条查找顺序，其中「下载的」在 mac 上不存在。
+        autoLabel.textContent = canAutoInstall
+          ? '自动（手填路径 → 下载的 → 系统安装）'
+          : '自动（手填路径 → 系统安装）';
       }
       // 下载按钮与高级区：macOS 整块不显示。高级区里全是下载相关的东西
       // （下载 / 下载源 / Token / 删除），藏掉后只剩一个展开后空白的入口，
@@ -2120,6 +2164,15 @@ function bindSettingsEvents(c) {
         const folded = advBox.classList.toggle('folded');
         advToggle.setAttribute('aria-expanded', folded ? 'false' : 'true');
         advToggle.textContent = folded ? '高级：下载与安装设置' : '收起下载与安装设置';
+      });
+    }
+
+    // 安装方式的折叠：用户手动开合过就记下来，paint() 不再按"已装/未装"
+    // 自动覆盖他的选择。不记的话每次状态轮询都会把他刚点开的区块折回去。
+    const guideWrapEl = $('#ffmpeg-install-guide-wrap');
+    if (guideWrapEl) {
+      guideWrapEl.addEventListener('toggle', () => {
+        guideWrapEl.dataset.userToggled = '1';
       });
     }
 

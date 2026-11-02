@@ -8343,7 +8343,25 @@ code, .mono { font-family: var(--mono); }
   background: color-mix(in srgb, var(--accent-hi) 5%, transparent);
 }
 .sl-quickbar-text { flex: 1; min-width: 220px; font-size: 12.5px; color: var(--muted); }
-.sl-quickbar .sl-hint { flex-basis: 100%; }
+/* 细条里的提示行独占一整行（进度 / 原因说明都很长，挤在同一行会截断）。
+   ⚠️ 必须排除空元素：`:empty` 之前它仍占一个 100% 宽的 flex item，即使高度为 0
+   也会让 flex 容器多算一行、把主文字挤到偏上，表现为"文字没居中、下方空一块"。
+   ffmpeg 状态条的 #ffmpeg-progress-hint 平时就是空的，正是这个形态。 */
+.sl-quickbar .sl-hint:not(:empty) { flex-basis: 100%; }
+
+/* 媒体工具的安装命令（Homebrew / 各发行版包管理器）。
+   `break-all` 是必需的：Homebrew 安装脚本那条是一条没有空格的超长 URL，
+   默认 white-space: normal 只会在空格处折行，窄窗口下会把整块内容撑出卡片。
+   字号显式给 11.5px —— 否则 <code> 会落到浏览器默认的 14px，比旁边的标签
+   与「复制」按钮（都是 11.5px）明显大一圈。
+   背景与边框让命令从普通文字里区分出来（它是要被复制执行的东西，不是说明），
+   与 .guide-code 同一口径。 */
+#ffmpeg-install-guide code {
+  word-break: break-all; max-width: 100%;
+  font-family: var(--mono); font-size: 11.5px; color: var(--text);
+  padding: 3px 8px; border-radius: 6px;
+  background: var(--inset-bg); border: 1px solid var(--border);
+}
 
 /* 管线小节标题的补充说明（区标题可能是全大写字距样式，子说明还原） */
 .sl-section-sub { margin-left: 8px; font-size: 11.5px; font-weight: 400; letter-spacing: 0; color: var(--faint); }
