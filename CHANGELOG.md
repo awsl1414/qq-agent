@@ -4,6 +4,29 @@
 
 ---
 
+## 0.5.1.0 · ffmpeg 支持 macOS / Linux（2026-11-03，需重启）
+
+### 新增：ffmpeg 全平台支持
+
+- **macOS 现在能用 ffmpeg 了**：设置页「媒体工具」在 mac 上给出 `brew install ffmpeg`（可复制）与 Homebrew 安装脚本，装好后自动识别、无需配置。mac 上不提供程序内下载，原因是 Homebrew 的 ffmpeg 为动态链接，依赖 7 个 `libav*.dylib` 与十余个 formula，无法拆成单文件；唯一能单文件化的第三方静态包会与 Homebrew 形成两条互不兼容的升级路径。另外官方只给 arm64 的 bottle，Intel Mac 上 brew 会源码编译，需先 `xcode-select --install`
+- **Linux 优先发行版包管理器，程序内下载作兜底**：Debian/Ubuntu、Fedora、Arch、openSUSE 四种命令按发行版列出并可复制；没有包管理器权限的容器场景仍可在程序内下载（取自 martin-riedl 的 9.0.2 构建，约 66MB）
+- **macOS / Linux 自动识别常见安装位置**：`/opt/homebrew/bin`、`/usr/local/bin`、`/home/linuxbrew/.linuxbrew/bin`、`~/.local/bin`、`/snap/bin`，并识别 `HOMEBREW_PREFIX`。解决从 systemd / launchd 启动时进程 PATH 被裁剪、终端里能跑而应用报「未找到」的问题
+- **`/api/ffmpeg/status` 新增 `platform` / `arch` / `canAutoInstall` / `installGuide`**：设置页据此决定渲染下载入口还是安装命令，不新增请求
+
+### 修复
+
+- **macOS / Linux 上「导入动态壁纸」报 `ddagrab 录制失败`，无从自查**：动态壁纸录制依赖 Windows 专有的 `ddagrab` 桌面抓取与 Wallpaper Engine，但 `checkFfmpeg` 只区分「没装」和「版本过旧」，于是用户被引去装一个装了也没用的 ffmpeg。现在非 Windows 直接返回 `unsupported-platform` 原因码，前端据此隐藏导入入口并说明这是功能本身的平台限制
+- **`/api/open-data-dir` 与 `/api/bundle/reveal` 在非 Windows 上静默失败**：两处硬编码 `spawn('explorer.exe')`，macOS / Linux 上子进程直接报 ENOENT。改为按平台分派 `open` / `explorer.exe` / `xdg-open`
+- **B站视频下载看不见设置里配置的 ffmpeg**：`media-download` 插件的 `findFfmpeg` 只查 PATH 与 B站客户端的 Windows 路径，于是「在设置页下载了 ffmpeg」或「手填了路径」的用户，B站视频仍退化成 FLV 单流（画质低）—— 同一个安装包里别的功能能用、B站下载不用。现在收敛到统一解析链，B站客户端自带那份保留为兜底
+- **语音识别找不到 Homebrew 装的 whisper-cli**：`speech-to-text` 只探测 PATH 裸名，而从 systemd / launchd 启动时 PATH 不含 `/opt/homebrew/bin`，终端里能跑、应用里报「找不到 whisper-cli」。现在与 ffmpeg 同口径补常见安装目录；配置里填的路径也改为「存在且能执行」才算数，写错时立刻报错而不是等到识别时才失败
+- **壁纸转码多起一个注定失败的子进程**：`loop.js` 的 `probeDuration` 用手写正则推导 ffprobe 路径，猜出来的文件不存在时要先失败一次才落到 `ffmpeg -i` 兜底。改用 `ffmpeg-resolve.js` 的 `ffprobeFor()`，它会先确认同目录文件存在、没有就退回 PATH
+
+### 说明
+
+- **Linux 程序内下载的那份是动态链接的，要求 glibc ≥ 2.22**：CentOS 7、Ubuntu 16.04 这类老系统上跑不起来。这是已知且接受的取舍 —— 这类系统请改用发行版包管理器或手动指定路径，文档里已写明
+
+---
+
 ## 0.5.0.1 · 修复网页模式终端无输出（2026-11-03，需重启）
 
 ### 修复
