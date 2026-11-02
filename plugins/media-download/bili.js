@@ -21,6 +21,7 @@
 // 依赖：
 //   · safe-fetch（防 SSRF，B站 CDN 是公网不会拦）
 //   · ffmpeg（DASH 分轨合流需要；没装则降级 FLV 单流，画质低但有声音）
+//     路径解析走 src/ffmpeg-resolve.js，与图片压缩 / 视频抽帧 / 壁纸共用同一条链
 //   · SESSDATA（搜索必需；下载时能拿高清，不填则 480P/720P）
 //
 // 安全：公共库供管理员放入 data/plugins/ 的可信插件调用，与内置工具同信任级。
@@ -95,11 +96,20 @@ export function parseDuration(s) {
 
 // ── ffmpeg ─────────────────────────────────────────────────────────────
 
-// ffmpeg 可用性缓存（进程级，只查一次；reloadPlugins 重导会清空）
+// 合流只需要 `-c copy`，对编码器/滤镜没有要求，所以这里不用 checkFfmpegCapabilities。
+// 路径解析统一交给 src/ffmpeg-resolve.js（全项目唯一入口）：它覆盖「手填 >
+// QQ_AGENT_FFMPEG > 设置页下载的 > 旧随包 > PATH / 注册表 / WinGet / 常见目录」。
+//
+// 为什么不在这里自己探测（2026-11-03 收敛）：此前本文件只查 PATH 与 B站客户端的
+// Windows 路径，于是「设置页下载了 ffmpeg / 在设置里手填了路径」的用户，B站视频
+// 仍会退化成 FLV 单流 —— 同一个安装包里，别的功能能用、B站下载不用，正是
+// ffmpeg-resolve.js 头注释里记录的那类不一致。插件不能 import 核心模块做路径
+// 解析以外的判断（那会变成第二份实现），所以这里只取它给出的路径。
 let ffmpegPath = undefined;
 export async function findFfmpeg(customPath) {
   if (ffmpegPath !== undefined) return ffmpegPath;
-  // ① 用户在插件配置里指定的路径
+
+  // ① 插件配置里单独指定的路径（优先于全局设置 —— 插件可能要用另一份）
   if (customPath && fs.existsSync(customPath)) {
     try {
       await execFileAsync(customPath, ['-version'], { timeout: 5000 });
@@ -107,13 +117,20 @@ export async function findFfmpeg(customPath) {
       return ffmpegPath;
     } catch { /* 路径存在但执行失败，继续往下找 */ }
   }
-  // ② 系统 PATH 里的 ffmpeg
+
+  // ② 全局解析链。插件加载时核心必然已就绪，动态 import 只是让这一条依赖
+  //    在插件被单独加载（测试 / 沙箱）时能失败得体面，而不是模块级抛错。
   try {
-    await execFileAsync('ffmpeg', ['-version'], { timeout: 5000 });
-    ffmpegPath = 'ffmpeg';
-    return ffmpegPath;
-  } catch { /* PATH 里没有 */ }
-  // ③ 常见自带位置（B站桌面客户端等 —— B站自带 3.x，足够做 -c copy 合流）
+    const { resolveFfmpeg } = await import('../../src/ffmpeg-resolve.js');
+    const r = await resolveFfmpeg();
+    if (r.ok && r.ffmpeg) {
+      ffmpegPath = r.ffmpeg;
+      return ffmpegPath;
+    }
+  } catch { /* 核心模块不可用：退回下面的自带位置 */ }
+
+  // ③ B站桌面客户端自带的那份（Windows）。全局链认不到时的兜底：
+  //    装了 B站客户端的机器上，这份 3.x 足以做 `-c copy` 合流。
   const bundled = [
     path.join(process.env.APPDATA || '', 'bilibili', 'ffmpeg', 'ffmpeg.exe'),
     path.join(process.env.LOCALAPPDATA || '', 'bilibili', 'ffmpeg', 'ffmpeg.exe'),

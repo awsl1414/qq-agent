@@ -16,6 +16,18 @@ const MIN_FFMPEG_MAJOR = 5;
  * 这里只做本模块特有的**版本下限判定**（ddagrab 需要 ≥5）与安装引导文案。
  */
 export async function checkFfmpeg() {
+  // 动态壁纸录制是**平台本身**不可用，不是依赖没装：ddagrab 是 D3D11 桌面
+  // 抓屏滤镜，Wallpaper Engine 也只有 Windows 版。macOS / Linux 上无论装
+  // 多少份 ffmpeg 都录不出来，所以必须给独立原因码 —— 混进 'missing' 会把
+  // 用户引去装一个装了也没用的 ffmpeg，最后仍然在 recordSceneWindow 撞上
+  // "No such filter: ddagrab"。
+  if (process.platform !== 'win32') {
+    return {
+      ok: false,
+      reason: 'unsupported-platform',
+      detail: '动态壁纸录制依赖 Windows 的 ddagrab 桌面抓取与 Wallpaper Engine，macOS / Linux 上不可用。'
+    };
+  }
   const r = await resolveFfmpeg();
   if (!r.ok) {
     return {

@@ -192,7 +192,9 @@ export function startImport(entry, weExe, dataDir, opts = {}) {
         // 把原因码带出去：前端据此决定"给一键去安装"还是"只报错"。
         // 只传中文文案的话，UI 只能靠正则猜，改一句措辞就断。
         const e = new SceneImportError(ff.detail);
-        e.code = ff.reason === 'missing' ? 'ffmpeg_missing' : 'ffmpeg_outdated';
+        // 平台不支持要单独透传：前端据此只展示原因，不给"去安装"的引导。
+        if (ff.reason === 'unsupported-platform') e.code = 'unsupported_platform';
+        else e.code = ff.reason === 'missing' ? 'ffmpeg_missing' : 'ffmpeg_outdated';
         throw e;
       }
       // 编码器选择结果进进度条（NVENC/AMF 硬件编码 or CPU 软编码，一目了然）

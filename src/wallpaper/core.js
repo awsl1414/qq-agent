@@ -45,13 +45,15 @@ async function loadDynLib() {
   return dynLib;
 }
 
-// ffmpeg 相关工具（deps 检测 + exec）：给「GIF 预览冻结」用，与导入管线分离
+// ffmpeg 相关工具（路径解析 + exec）：给「GIF 预览冻结」用，与导入管线分离。
+// 注意这里**不走 deps.checkFfmpeg()**：那个函数带动态壁纸的平台门禁，
+// 抽首帧只用 -frames:v、不需要 ddagrab，非 Windows 上照样可用。
 let ffLib = null;
 async function loadFfLib() {
   if (!ffLib) {
     ffLib = {
-      deps: await import('./lib/deps.js'),
-      exec: await import('./lib/exec.js')
+      exec: await import('./lib/exec.js'),
+      resolve: await import('../ffmpeg-resolve.js')
     };
   }
   return ffLib;
@@ -72,10 +74,10 @@ async function staticPreviewOf(id, gifPath) {
   } catch { /* 还没生成 */ }
   try {
     const lib = await loadFfLib();
-    const ff = await lib.deps.checkFfmpeg();
+    const ff = await lib.resolve.resolveFfmpeg();
     if (!ff.ok) return '';
     fs.mkdirSync(STATIC_ROOT, { recursive: true });
-    await lib.exec.execFileP(ff.path, ['-y', '-loglevel', 'error', '-i', gifPath, '-frames:v', '1', '-q:v', '3', out], { timeout: 30_000 });
+    await lib.exec.execFileP(ff.ffmpeg, ['-y', '-loglevel', 'error', '-i', gifPath, '-frames:v', '1', '-q:v', '3', out], { timeout: 30_000 });
     return fs.existsSync(out) && fs.statSync(out).size > 0 ? out : '';
   } catch { return ''; }
 }
@@ -341,7 +343,10 @@ export const providers = {
     if (!r.ok) return { ok: false, error: r.error, items: [] };
     // fileMap 是内部登记表，不外泄
     const { fileMap, ...rest } = r;
-    return rest;
+    // 动态壁纸录制依赖 Windows 的 ddagrab 与 wallpaper64.exe：非 Windows
+    // 上「转动态」入口没有成功的可能，界面据此提前藏掉，而不是让用户点了
+    // 才收到一个"平台不支持"。平台是后端事实，不靠前端猜 UA。
+    return { ...rest, dynSupported: process.platform === 'win32' };
   },
   // 文件定位（/api/wallpaper/file 能力中介）；只按 id 查登记过的路径
   'wallpaper.file': ({ id, kind } = {}) => file({ id, kind }),
@@ -394,7 +399,7 @@ export const providers = {
     if (!j) return { ok: false, error: '没有这个导入任务（可能重启过，重新导入即可——缓存命中是秒级的）' };
     return {
       ok: true, job: j.id, stage: j.stage, detail: j.detail,
-      done: j.done, error: j.error, fromCache: !!j.fromCache
+      done: j.done, error: j.error, errorCode: j.errorCode || '', fromCache: !!j.fromCache
     };
   },
   // 重新录制：删掉该壁纸的导入登记与缓存循环（比如录制时窗口被动过、

@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileP } from './exec.js';
 import { resolveHwEncoder } from './deps.js';
+import { ffprobeFor, exeName } from '../../ffmpeg-resolve.js';
 
 const exec = execFileP;
 
@@ -87,9 +88,17 @@ export async function makeSeamless(input, output, fadeSec, ffmpegPath, options =
   return { inputDuration: duration, outputDuration: await probeDuration(output, ffmpeg) };
 }
 
-/** 容器时长（秒）：ffprobe 优先，ffmpeg -i 兜底。 */
+/**
+ * 容器时长（秒）：ffprobe 优先，ffmpeg -i 兜底。
+ *
+ * ffprobe 的路径推导统一走 `ffmpeg-resolve.js` 的 `ffprobeFor()`，不要在这里
+ * 自己 replace 文件名：那份实现会**先确认同目录文件真的存在**，没有就退回 PATH
+ * 里的 ffprobe。手工推导只会得到"同目录应该有"的猜测 —— 用户把 ffmpeg 单独
+ * 拷进某个目录（旧随包那份就是只有 ffmpeg 没有 ffprobe）时，猜出来的路径不存在，
+ * 于是每次都要先失败一次才落到 `ffmpeg -i` 兜底，白起一个子进程。
+ */
 export async function probeDuration(file, ffmpegPath) {
-  const ffprobe = ffmpegPath.replace(/ffmpeg(\.exe)?$/i, 'ffprobe$1');
+  const ffprobe = ffprobeFor(ffmpegPath) || exeName('ffprobe');
   try {
     const { stdout } = await exec(ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file], { timeout: 30_000 });
     return Number(stdout.trim());

@@ -82,7 +82,7 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "bili.js": "89fe9164ece68cb6",
+        "bili.js": "27b833c0523c9577",
         "douyin.js": "e0d5b89584d87b36",
         "index.js": "434402d8822704d1",
         "media-common.js": "9283ff65e5e56f26",
@@ -115,7 +115,7 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "index.js": "89e6d779b26243a0",
+        "index.js": "1d02ae973b2932c1",
         "plugin.json": "2c23269b7861f1fe"
       }
     },

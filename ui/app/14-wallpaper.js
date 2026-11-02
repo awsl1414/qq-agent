@@ -678,12 +678,21 @@ function wpBadge(item) {
   return '<span class="wp-badge">静态</span>';
 }
 
-/** 能否转动态：场景（录 WE 渲染窗）或源视频（截段+无缝循环）。 */
-function wpCanDyn(it) {
+/** 能否转动态：场景（录 WE 渲染窗）或源视频（截段+无缝循环）。
+ *  后端 dynSupported=false 时整条链路都跑不通（非 Windows 没有 ddagrab），
+ *  直接不渲染入口 —— 与运行时的 unsupported_platform 提示形成两层：
+ *  一层防用户白点，一层防页面数据过期。 */
+function wpCanDyn(it, dynSupported) {
+  if (dynSupported === false) return false;
   return String(it.type || '').toLowerCase() === 'scene' || (it.kind === 'video' && !it.dyn);
 }
 
 function wpPageHtml(data, cfg, settings) {
+  // 平台不支持动态壁纸时给一句固定说明：入口全藏掉之后，用户看到的只是
+  // "怎么没有转动态按钮"，不解释就变成另一个无从自查的谜。
+  const dynNote = data.dynSupported === false
+    ? '<div class="muted" style="padding:0 2px 10px">动态壁纸录制依赖 Windows 的 ddagrab 桌面抓取与 Wallpaper Engine，macOS / Linux 上不可用。</div>'
+    : '';
   const cells = (data.items || []).map((it) => `
     <button class="wp-cell ${it.id === (cfg?.id || '') ? 'on' : ''}" data-id="${esc(it.id)}" title="${esc(it.title)}">
       <div class="wp-thumb">
@@ -692,8 +701,8 @@ function wpPageHtml(data, cfg, settings) {
       </div>
       <div class="wp-name">${esc(it.title)}</div>
       <div class="wp-sub">${esc(it.kind === 'video' ? '视频壁纸' : '场景/图片 · 用预览图')} · ${esc(it.source === 'workshop' ? '创意工坊' : '本地')}</div>
-      ${wpCanDyn(it) && !it.dyn ? `<div class="wp-dynrow"><span class="wp-dyn" role="button" tabindex="0" data-id="${esc(it.id)}">⚡ 转动态壁纸</span><span class="wp-sub" style="padding:0">${it.type === 'scene' ? '录制渲染窗' : '无缝循环'}</span></div>` : ''}
-      ${it.dyn ? `<div class="wp-dynrow"><span class="wp-redo" role="button" tabindex="0" data-id="${esc(it.id)}" title="录坏了？清掉缓存重新录制">↻ 重新录制</span></div>` : ''}
+      ${wpCanDyn(it, data.dynSupported) && !it.dyn ? `<div class="wp-dynrow"><span class="wp-dyn" role="button" tabindex="0" data-id="${esc(it.id)}">⚡ 转动态壁纸</span><span class="wp-sub" style="padding:0">${it.type === 'scene' ? '录制渲染窗' : '无缝循环'}</span></div>` : ''}
+      ${it.dyn && data.dynSupported !== false ? `<div class="wp-dynrow"><span class="wp-redo" role="button" tabindex="0" data-id="${esc(it.id)}" title="录坏了？清掉缓存重新录制">↻ 重新录制</span></div>` : ''}
     </button>`).join('');
   const fit = cfg?.fit || 'smart';
   // 界面透明度：真值在 config.ui.panelAlpha（和设置页同一条滑条）。
@@ -759,6 +768,7 @@ function wpPageHtml(data, cfg, settings) {
       <button class="btn btn-small" id="wp-settings-save">保存设置</button>
       <span class="muted" id="wp-settings-msg" style="font-size:11px"></span>
     </div>
+    ${dynNote}
     <div class="wp-grid">${cells || '<div class="wp-hintbox">壁纸库里没有可用的壁纸。</div>'}</div>
   </div>`;
 }
@@ -1165,6 +1175,16 @@ async function loadWallpaperPage() {
     // "去设置里下载"的说明，不如直接把人送过去并高亮那一块。
     // 判据是后端给的结构化原因码，不是匹配文案 —— 文案改一句就断。
     const isMissingFfmpeg = (code) => code === 'ffmpeg_missing';
+    // 平台本身不支持（macOS / Linux 没有 ddagrab 与 Wallpaper Engine）：
+    // 装 ffmpeg 也录不出来，所以不能给"去安装"的引导，只把原因说清楚。
+    const isUnsupportedPlatform = (code) => code === 'unsupported_platform';
+    const wpImportFailUnsupported = (btn, msg) => {
+      const full = String(msg || '动态壁纸录制在当前平台不可用');
+      btn.textContent = '✗ 当前平台不支持动态壁纸';
+      btn.title = full;
+      btn.setAttribute('aria-disabled', 'true');   // 再点也不会有结果，直接禁用
+      alert(full);
+    };
     const wpImportFailWithGuide = (btn, msg) => {
       const full = String(msg || '未知错误');
       btn.textContent = '✗ 需要 ffmpeg（点此去安装）';
@@ -1188,9 +1208,10 @@ async function loadWallpaperPage() {
     // 与导入管线的报错。用它判断是否该走"一键去安装"，而不是靠宽松的 /ffmpeg/i
     // （正常的转码失败也可能提到 ffmpeg，那时给跳转是误导）。
     if (!r?.ok) {
-      if (isMissingFfmpeg(r?.errorCode)) wpImportFailWithGuide(btn, r?.error);
+      if (isUnsupportedPlatform(r?.errorCode)) wpImportFailUnsupported(btn, r?.error);
+      else if (isMissingFfmpeg(r?.errorCode)) wpImportFailWithGuide(btn, r?.error);
       else wpImportFail(btn, '启动失败', r?.error || '未知错误');
-      btn.removeAttribute('aria-disabled');
+      if (!isUnsupportedPlatform(r?.errorCode)) btn.removeAttribute('aria-disabled');
       return;
     }
     const timer = setInterval(async () => {
@@ -1206,6 +1227,8 @@ async function loadWallpaperPage() {
       if (s?.ok && s.done && !s.error) {
         btn.textContent = redo ? '✓ 已重录' : '✓ 已动态';
         setTimeout(() => loadWallpaperPage(), 600);   // 刷新徽标与选中态（kind 变 video）
+      } else if (isUnsupportedPlatform(s?.errorCode)) {
+        wpImportFailUnsupported(btn, s?.error);
       } else if (isMissingFfmpeg(s?.errorCode)) {
         wpImportFailWithGuide(btn, s?.error);
         btn.removeAttribute('aria-disabled');

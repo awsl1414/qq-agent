@@ -28,23 +28,61 @@ let log = () => {};
 
 /**
  * 定位 whisper-cli 可执行文件。
- * 优先用配置里的完整路径；留空则探测 PATH 里的常见名字。
+ *
+ * 三路，顺序即优先级：
+ *   ① 配置里填的完整路径 —— 用户显式指定就该赢过一切自动探测
+ *   ② PATH 里的常见名字（whisper-cli / whisper）
+ *   ③ 常见安装目录（Homebrew / ~/.local/bin / /usr/local/bin）
+ *
+ * ⚠️ 为什么要第 ③ 路：从 systemd / launchd 启动时进程 PATH 与交互式终端不同，
+ *    brew 装的 whisper-cli 在 /opt/homebrew/bin 下，终端里能跑、应用里 ENOENT。
+ *    这与 src/ffmpeg-resolve.js 补候选目录是同一个根因。
  *
  * ⚠️ 刻意**不**探测裸的 `main` / `main.exe`：这名字太通用，
  * PATH 里恰好有同名无关程序时会被误选，然后拿错误参数去执行一个不认识的程序。
  */
+const WHISPER_NAMES = ['whisper-cli', 'whisper-cli.exe', 'whisper', 'whisper.exe'];
+
+/** 试一个候选：能执行就算找到。返回 true 表示可用。 */
+async function whisperWorks(cmd) {
+  try {
+    await execFileAsync(cmd, ['--version'], { timeout: 5000, windowsHide: true });
+    return true;                            // 能执行到这一步 = 命令存在
+  } catch (e) {
+    if (e?.code === 'ENOENT') return false; // 找不到
+    // 超时（killed / SIGTERM）不能当成"找到了"：5 秒跑不完 --version 说明二进制本身就挂了
+    if (e?.killed || e?.signal === 'SIGTERM') return false;
+    return true;                            // 找到了但参数不被识别（退出码非零），也算找到
+  }
+}
+
+/** 非 Windows 上额外要搜的目录（与 ffmpeg 的候选口径一致）。 */
+function unixBinDirs() {
+  if (process.platform === 'win32') return [];
+  const dirs = ['/opt/homebrew/bin', '/usr/local/bin', '/home/linuxbrew/.linuxbrew/bin',
+    path.join(os.homedir(), '.local', 'bin'), '/snap/bin'];
+  const prefix = String(process.env.HOMEBREW_PREFIX || '').trim();
+  if (prefix) dirs.push(path.join(prefix, 'bin'));
+  return dirs;
+}
+
 export async function resolveWhisperPath(configured) {
+  // ① 配置路径：存在**且**能跑才算数。只判存在会把"路径写错到某个同名文件"
+  //    当成可用，报错推迟到真正识别时才出现，用户很难把两件事联系起来。
   const p = String(configured || '').trim();
-  if (p && fs.existsSync(p)) return p;
-  for (const name of ['whisper-cli', 'whisper-cli.exe', 'whisper', 'whisper.exe']) {
-    try {
-      await execFileAsync(name, ['--version'], { timeout: 5000, windowsHide: true });
-      return name;                       // 能执行到这一步 = 命令存在
-    } catch (e) {
-      if (e?.code === 'ENOENT') continue;   // 找不到，试下一个
-      // 超时（killed / SIGTERM）不能当成"找到了"：5 秒跑不完 --version 说明二进制本身就挂了
-      if (e?.killed || e?.signal === 'SIGTERM') continue;
-      return name;                          // 找到了但参数不被识别（退出码非零），也算找到
+  if (p && fs.existsSync(p) && await whisperWorks(p)) return p;
+
+  // ② PATH 裸名
+  for (const name of WHISPER_NAMES) {
+    if (await whisperWorks(name)) return name;
+  }
+
+  // ③ 常见安装目录（绝对路径）
+  for (const dir of unixBinDirs()) {
+    for (const name of WHISPER_NAMES) {
+      const abs = path.join(dir, name);
+      if (!fs.existsSync(abs)) continue;
+      if (await whisperWorks(abs)) return abs;
     }
   }
   return '';
