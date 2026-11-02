@@ -4,3 +4,9 @@
 # 不再有 postinstall。将来加了原生模块（sharp / better-sqlite3 之类），
 # 在下面显式列出，避免 pnpm 的构建脚本白名单把它们跳过。
 onlyBuiltDependencies: []
+
+# electron-winstaller 是 electron-builder 为 Squirrel 目标拉进来的传递依赖（本项目只用 NSIS）。
+# 它的 install 脚本只把 vendor/7z-<arch>.exe 复制成 7z.exe，不跑也完全不影响 NSIS/zip 构建。
+# 显式标为 false 表示「已知并同意跳过」，pnpm 就不会再报 ERR_PNPM_IGNORED_BUILDS。
+allowBuilds:
+  electron-winstaller: false

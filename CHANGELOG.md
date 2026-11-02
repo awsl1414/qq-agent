@@ -4,10 +4,49 @@
 
 ---
 
-## 未发布
+## 0.4.9.2 · 打包基础设施与网页模式修复（2026-11-03，需重启）
+
+### 新增：可复现的打包基础设施
+
+此前仓库没有任何打包配置，安装包靠人工构建。现在 `pnpm run build` 一条命令产出
+NSIS 安装包与免安装 zip，`pnpm run build:dir` 只出解包目录用于快速验证。
+本次实跑产出安装包 126.9MB、免安装 zip 157.8MB。
+
+- `electron-builder.yml` 固化三条硬约束：`asar: false`（运行时要往代码根写 `plugins/`、
+  `skills/` 与 `builtin-modules.json`）、`nsis.perMachine: false`（数据目录固定在 exe 同级的
+  `data/`，装进 Program Files 会写不进去）、卸载保留 `data/`（群聊记录、记忆、API Key 都在里面）
+- `scripts/prepack-check.mjs` 在构建前拦下「构建成功但装出来是坏的」：`asar` 被改成 true、
+  关键文件缺失、用户数据目录未被排除、混入其它包管理器的锁文件
+- `scripts/verify-version.mjs` 校验 `package.json` 与 CHANGELOG 顶部第一个已发布版本一致，
+  防「同一版本号对应两份内容」的历史事故
+- GitHub Actions：推送到 main / 提 PR 跑测试与解包构建；打 `v*` 标签产出安装包与 zip 并
+  上传为构建产物
+
+### 新增：运行方式文档
+
+新增 `doc/running.md`，覆盖此前散落各处、甚至完全没写的运行细节：三种运行方式（桌面端 /
+网页模式 / 打包版）、环境变量全表、数据目录清单、多实例、端口与让位规则、9 条常见故障。
+README 的「安装与使用」只保留最短上手路径并链到该文档。
 
 ### 修复
 
+- **网页模式配置 `server.token` 后壁纸实时跟随失效、背景图恒空白**：这两处资源由浏览器原生
+  发起（`EventSource` 与 CSS `url()`），附加不了 `x-console-token` 请求头，而 token 的传递
+  只散落在 `api()` 与 SSE 两处、没有统一出口，于是每新增一处原生加载路径就必然漏一次。
+  新增 `withToken(url)` 作为唯一出口，四处调用点收敛过去。同一根因下还修了两处：壁纸缩略图
+  把 `CONSOLE_MARKER` 当令牌拼进 URL（marker 只是 Electron 下由主进程替换的占位符，浏览器里
+  没人认）、桌宠预览图只发 marker
+- **打包后 `node_modules` 不进包**：`files` 里写了 `!node_modules/**`，而 electron-builder 的
+  依赖收集器会把 `files` 中的所有 `!` 项当作**它自己的**排除规则，于是三个生产依赖
+  （`js-yaml` / `undici` / `ws`）被整体排掉。本机构建后能跑纯属巧合 —— Node 会向上解析到
+  仓库根的 `node_modules`；换台机器就是 `MODULE_NOT_FOUND`。改为不手写该排除项，由收集器按
+  `dependencies` 自动收集
+- **四段式版本号导致构建直接失败**：electron-builder 26 用严格 semver 校验 `package.json`
+  的 `version`，`0.4.9.1` 被拒绝（`Invalid version`），且没有配置开关能绕过。新增
+  `scripts/run-builder.mjs`：构建期间临时把版本写成 semver 合法形式，再用 `extraMetadata`
+  把真实四段版本写回包内 `package.json` 与 exe 版本信息，结束后（含异常与 Ctrl-C）恢复原文件。
+  不改 `package.json` 本身，因为 `src/app.js` 的更新检查按段数取最大值比较，少一段会让
+  第四段的更新永远检测不到
 - **headless 启动会在仓库根生成 `plugin-data/`**：`QQ_AGENT_DATA_DIR` 只有桌面端入口会设置，
   `node src/server.js` 从不设置，而自检 / 自动修复 / 工具上下文三处用的是
   `QQ_AGENT_DATA_DIR || '.'`，env 为空时回落到**进程 cwd**。在仓库根跑 headless 时，
@@ -15,6 +54,8 @@
   表现为「自检报告存了但看不到」，同时仓库多出一坨未跟踪文件。三处统一改走 `src/config.js`
   导出的 `DATA_DIR`（按模块位置锚定，不看 cwd，多实例 profile 也一并正确），与
   forge / dev / cache-guard 的既有做法一致。
+- **README 把 headless 端口写死成 3210**：实际端口从 `config.server.port` 起步，被占时 +1
+  依次试到 +9，多实例还会按 profile 整体偏移，以 `data/console-port` 为准
 
 ---
 

@@ -1,0 +1,90 @@
+# electron-builder 配置（QQ Agent 桌面版）
+#
+# ⚠️ asar 必须是 false。这不是风格选择，是硬约束：
+#   src/config.js 的 ROOT、src/plugin-loader.js 的 APP_ROOT 都由 import.meta.url
+#   上溯两级得到「代码根」，而运行时会往代码根写文件 —— 市场装扩展、锻造台、
+#   自动修复都直接落盘到 plugins/ 与 skills/，builtin-modules.json 也会被
+#   refreshBuiltinEntry 重写。asar 打包后这些路径不可写，上述功能会集体失效。
+#
+# ⚠️ 同理，安装目录必须可写 → nsis.perMachine 为 false（装到
+#   %LOCALAPPDATA%\Programs\...）。electron/main.js 的 resolveDataDir 在打包态
+#   把数据目录固定为「exe 同级的 data/」，装进 Program Files 会因权限写不进去。
+
+appId: com.kondius.qq-agent
+productName: qq-agent
+copyright: Copyright © 2026 Kondius
+
+directories:
+  output: dist
+  buildResources: assets
+
+# 见文件头：硬约束，不要改成 true
+asar: false
+
+files:
+  # 白名单：只把这些放进 resources/app
+  - electron/**/*
+  - src/**/*
+  - ui/**/*
+  - plugins/**/*
+  - skills/**/*
+  - assets/**/*
+  - doc/**/*
+  - builtin-modules.json
+  - prices.json
+  - package.json
+  - LICENSE
+  - README.md
+  - CHANGELOG.md
+
+  # 显式排除。白名单已经挡掉大部分，这里再写一遍是防御：
+  # 将来有人往白名单里加目录（比如 `**/*`）时，用户数据与超大缓存不会顺带进包。
+  #
+  # ⚠️ 不要在这里写 "!node_modules/**"。electron-builder 的依赖收集器
+  #    （fileMatcher.js 的 getNodeModuleFileMatcher）会把 files 里所有 `!` 项
+  #    当成它自己的排除规则，于是生产依赖 js-yaml / undici / ws 会被整体排掉。
+  #    症状极隐蔽：本机构建后能跑，因为 Node 会向上解析到仓库根的 node_modules；
+  #    换台机器就是 MODULE_NOT_FOUND。node_modules 由收集器按 dependencies 自动收集，
+  #    白名单本来也不会把它带进来，无需手写排除。
+  - "!data/**"
+  - "!data-*/**"
+  - "!runtime/**"
+  - "!graphify-out/**"
+  - "!.git/**"
+  - "!dev-sandbox/**"
+  - "!dist/**"
+  - "!logs/**"
+  - "!**/*.log"
+  - "!.env"
+  - "!.env.*"
+  - "!community.key"
+  - "!account.json"
+  - "!**/.forge-origin.json"
+  - "!**/*.tmp"
+  - "!**/*.bak"
+  - "!**/*.orig"
+  - "!**/*.rej"
+
+# 产物名带版本号：同目录并存多份安装包时能区分（历史上出过「安装包停在旧构建上」的事故）
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+
+win:
+  icon: assets/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: zip
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  # 见文件头：安装目录与数据目录都要可写，不能进 Program Files
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: QQ Agent
+  # 卸载时保留 data/（用户资产：群聊记录、记忆、API Key）
+  deleteAppDataOnUninstall: false

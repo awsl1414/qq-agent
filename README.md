@@ -1,4 +1,4 @@
-# QQ Agent（洛版 v0.4.9.1 · 桌面端）
+# QQ Agent（洛版 v0.4.9.2 · 桌面端）
 
 ![平台](https://img.shields.io/badge/platform-Windows%20%7C%20Electron-lightgrey)
 ![技术栈](https://img.shields.io/badge/stack-Node.js%20%7C%20原生前端-orange)
@@ -72,7 +72,7 @@
 - Live2D 桌面伙伴（插件 `desktop-pet`，PixiJS + Cubism Core）。随包带 DS鼠控版 默认模型（8 个动作组 / 44 个表情），控制台「桌宠」页可导入 Cubism 4 模型（自动读动作组与表情），支持置顶/穿透/缩放/透明度、待机动作与表情
 - 交互：单击弹「今日用量」卡片（今日 N 次运行 · X tok · 缓存 Y% · ¥Z，下面一行「搜索：N 次」，16 秒自动收起，期间每 5 秒刷新）；双击打开开发工单对话窗（需启用 `dev-orders`）
 - 模型放在 `data/desktop-pet/models/<模型 id>/`，导入走插件真实链路 `service.importModel`。运行时导入会被 5 秒一次的状态落盘覆盖，**导入前先完整退出应用**
-- 依赖 GPU 渲染。显卡驱动异常导致白屏/崩溃时，删掉 `data/render-gpu-off.flag` 即可恢复（应用连续崩溃 3 次会自动写这个文件降级到软件渲染）
+- 依赖 GPU 渲染。显卡驱动异常导致白屏/崩溃时，按 [doc/running.md](doc/running.md) 第 7 节的显卡条目处理
 
 **OneBot**
 
@@ -154,9 +154,11 @@ pnpm start
 ```bash
 pnpm install         # 装依赖（含 electron）
 pnpm start           # 桌面端启动
-pnpm run server      # headless 模式：浏览器打开 http://127.0.0.1:3210
+pnpm run server      # headless 模式：浏览器打开 http://127.0.0.1:3210（实际端口见 data/console-port）
 pnpm test            # 全量测试（等价于 pnpm run check）
 ```
+
+环境变量、网页模式的鉴权与端口规则、数据目录、多实例、常见故障，见 **[doc/running.md](doc/running.md)**。
 
 > 首次 `pnpm install` 会下载 Electron 二进制（约 238 MB）。国内网络慢的话先设镜像：
 > `$env:ELECTRON_MIRROR = "https://npmmirror.com/mirrors/electron/"`（PowerShell）

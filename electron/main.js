@@ -544,7 +544,7 @@ if (!gotLock) {
   app.whenReady().then(() => {
     showDialog({
       type: 'info',
-      title: '洛版 QQ Agent v0.4.9.1',
+      title: '洛版 QQ Agent v0.4.9.2',
       message: 'QQ Agent 已经在运行了',
       detail: '已为你唤出正在运行的窗口。\n如果那个窗口一直停在启动画面，请从右下角托盘图标选择「退出」，再重新打开。',
       buttons: ['知道了']

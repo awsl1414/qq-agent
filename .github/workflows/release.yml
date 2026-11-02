@@ -1,0 +1,101 @@
+# 发布构建：打 `v*` 标签时（或手动触发）产出完整安装包。
+#
+# 只上传 artifact，**不**自动创建 GitHub Release、不自动推送任何东西 ——
+# 发布是对外可见的操作，必须由人确认后手动执行。
+#
+# 与 ci.yml 的区别：这里跑完整 `pnpm run build`（NSIS 安装包 + 免安装 zip），
+# 因此要下载 NSIS 与 winCodeSign，首次运行耗时明显更长，见文件末尾的风险说明。
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # 手动触发：用于在正式打标签前验证发布链路，或在标签之外补构建
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    # 完整构建含 NSIS / winCodeSign 下载，比 CI 宽裕一些
+    timeout-minutes: 60
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # 版本由 package.json 的 packageManager 字段决定，这里不写死版本号。
+      # 必须在 setup-node 之前：setup-node 的 cache: pnpm 需要 PATH 上已有 pnpm。
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+
+      # 与 package.json 的 engines.node（>=22.12.0）对齐，取声明的最低版本
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 校验版本号与 CHANGELOG 一致
+        run: pnpm run verify:version
+
+      # 读取版本供后续步骤使用。单独成步而不是在每处跑 `node -p`：
+      # 标签校验与 artifact 命名必须用同一个值，两处各读一次就可能不一致。
+      - name: 读取 package.json 版本
+        id: pkg
+        shell: pwsh
+        run: |
+          $v = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      # 标签是用户看到的发布标识，必须与 package.json 的版本一致：
+      # 否则产物文件名（artifactName 带 ${version}）与标签对不上，
+      # 正是「同一版本号对应两份内容」这类事故的入口。
+      # 只在标签触发时检查；workflow_dispatch 没有标签可比。
+      #
+      # 标签值经 env 传入而不是直接内插进脚本体：`${{ }}` 内插发生在 shell 解析之前，
+      # 含引号或 `$()` 的标签名会被当成脚本执行。
+      - name: 校验标签与 package.json 版本一致
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          PKG_VERSION: ${{ steps.pkg.outputs.version }}
+        run: |
+          $tag = $env:TAG_NAME.TrimStart('v')
+          if ($tag -ne $env:PKG_VERSION) {
+            Write-Error "标签 v$tag 与 package.json 的版本 $($env:PKG_VERSION) 不一致"
+            exit 1
+          }
+          Write-Host "标签与版本一致：$($env:PKG_VERSION)"
+
+      # 发布前先跑测试：坏代码不该被打进安装包
+      - name: 运行测试
+        run: pnpm test
+
+      # 完整构建：build 脚本内部已含 prepack-check
+      - name: 构建安装包
+        run: pnpm run build
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: qq-agent-${{ steps.pkg.outputs.version }}
+          path: |
+            dist/*.exe
+            dist/*.zip
+          # 产物为空时直接失败，而不是上传一个空 artifact 让问题藏到发布之后
+          if-no-files-found: error
+
+    # 可选：网络受限时启用镜像，加速 electron / electron-builder 二进制下载。
+    # GitHub 托管运行器访问 GitHub Releases 本身就快，默认不启用；
+    # 若改为自建运行器或频繁超时，取消下面两行注释即可。
+    # env:
+    #   ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
