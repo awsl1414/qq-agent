@@ -1,0 +1,17 @@
+{
+  "id": "desktop-pet",
+  "name": "Live2D 桌面伙伴",
+  "version": "1.3.7",
+  "apiVersion": 1,
+  "category": "utility",
+  "description": "透明桌宠、角色与动作管理、屏幕陪伴和生活成就。在控制台「桌宠」页设置；自动观察默认关闭。",
+  "enabledByDefault": true,
+  "capabilities": [
+    "desktop.pet.service"
+  ],
+  "settings": {},
+  "configSchema": {},
+  "permissions": [
+    "web_fetch"
+  ]
+}

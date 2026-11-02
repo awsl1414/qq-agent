@@ -1,0 +1,78 @@
+{
+  "id": "self-fix",
+  "name": "自动修复",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "category": "utility",
+  "description": "带两道人工闸的自动修复：模型只出提案（不写盘）→ 你批准才落暂存区 → 过「协议闸 + 五道闸门」→ 沙箱里真跑一遍 → 你看着实跑效果决定「通过/重跑」。全程不原地改，落地前必快照、随时可回滚；审计留存、可从 QQA 删除，并能从「日志+审计+修改」导出 Word 报告。默认关闭。",
+  "author": "QQ Agent",
+  "enabledByDefault": false,
+  "capabilities": [
+    "fix.status",
+    "fix.list",
+    "fix.detail",
+    "fix.prompt",
+    "fix.parse",
+    "fix.create",
+    "fix.apply",
+    "fix.gate",
+    "fix.verify",
+    "fix.rerun",
+    "fix.commit",
+    "fix.rollback",
+    "fix.discard",
+    "fix.delete",
+    "fix.prune",
+    "fix.export",
+    "fix.report-prompt",
+    "fix.report-save"
+  ],
+  "requires": [],
+  "settings": {
+    "fixEnabled": false,
+    "maxReruns": 3,
+    "verifyTimeoutSec": 30,
+    "auditKeepDays": 90,
+    "auditMaxRecords": 500,
+    "snapshotKeepDays": 30,
+    "allowCoreFiles": false
+  },
+  "configSchema": {
+    "fixEnabled": {
+      "type": "boolean",
+      "label": "启用自动修复",
+      "description": "总开关。关闭时「对话审查」保持纯只读，本模块的所有写能力都不可达。默认关闭。"
+    },
+    "maxReruns": {
+      "type": "number",
+      "label": "闸②「重跑」上限",
+      "description": "同一版本最多允许重跑几次验证。真跑有抖动，但不能不设限 —— 不设限就会退化成「刷到通过为止」，等于把闸②废掉。默认 3。"
+    },
+    "verifyTimeoutSec": {
+      "type": "number",
+      "label": "单个验证器超时（秒）",
+      "description": "沙箱内每个验证器的墙上时间上限。默认 30。"
+    },
+    "auditKeepDays": {
+      "type": "number",
+      "label": "审计保留天数",
+      "description": "超过该天数的「未落地」记录会被自动清理。默认 90。"
+    },
+    "auditMaxRecords": {
+      "type": "number",
+      "label": "审计记录数上限",
+      "description": "超过后自动清理最旧的未落地记录。默认 500。"
+    },
+    "snapshotKeepDays": {
+      "type": "number",
+      "label": "快照保留天数",
+      "description": "已落地改动的快照保留多久（决定「还能回滚多久」）。默认 30。"
+    },
+    "allowCoreFiles": {
+      "type": "boolean",
+      "label": "允许修改核心代码（src/ui/electron）",
+      "description": "关闭时修复只能落在 plugins/ 与 skills/ 下（风险最低、都能回滚）。开启后核心代码也可被改，但落地后需要重启才生效。默认关闭。"
+    }
+  },
+  "prompt": null
+}

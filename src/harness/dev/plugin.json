@@ -1,0 +1,64 @@
+{
+  "id": "dev-orders",
+  "name": "开发工单",
+  "version": "0.2.2",
+  "apiVersion": 1,
+  "category": "utility",
+  "description": "开发模式：白名单成员发「开发 xxx」开启开发会话 —— 之后的对话直接由开发 agent 处理（模型直接读改项目文件、在项目根执行命令），回复直接发回 QQ；发「退出开发」结束。harness「开发工单」页可以看会话、也可以本机接着聊。⚠️ 白名单 = 全信任，等价于把开发机交给白名单账号：文件工具以项目根为界，但 dev_run 在项目根启动 shell 执行任意命令（cwd 不是沙箱，可越出项目根），账号被盗 = 机器被接管。",
+  "author": "QQ Agent",
+  "enabledByDefault": false,
+  "capabilities": [
+    "dev.snapshot",
+    "dev.whitelist-add",
+    "dev.whitelist-remove",
+    "dev.order-detail",
+    "dev.send",
+    "dev.new-session",
+    "dev.reopen",
+    "dev.close",
+    "dev.abort",
+    "dev.delete",
+    "dev.route"
+  ],
+  "requires": [],
+  "settings": {
+    "maxRounds": 120,
+    "turnTimeoutSec": 3600,
+    "maxSessionsPerDay": 20,
+    "thinkingNotice": true,
+    "noticeMinGapSec": 20,
+    "ctxCharBudget": 409600
+  },
+  "configSchema": {
+    "maxRounds": {
+      "type": "number",
+      "label": "单轮工具循环上限",
+      "description": "模型每次回复最多来回几轮工具调用。默认 120 —— 自检/截图迭代会吃轮次，复杂任务开大点；消耗随轮次上涨。"
+    },
+    "turnTimeoutSec": {
+      "type": "number",
+      "label": "单轮超时（秒）",
+      "description": "一轮对话的墙上时间上限（含模型调用与命令执行）。默认 3600（1 小时）。"
+    },
+    "maxSessionsPerDay": {
+      "type": "number",
+      "label": "每日新会话上限",
+      "description": "来自 QQ 的新开发会话一天最多开几个，默认 20。防刷（本机会话不受限）。"
+    },
+    "thinkingNotice": {
+      "type": "boolean",
+      "label": "思考前提示",
+      "description": "每轮开始思考前，先回一句「正在连接深度求索…」之类，让人知道它开始干活了（默认开）。厂商名按当前实际使用的模型自动判断（认不出就用模型名本身）。"
+    },
+    "noticeMinGapSec": {
+      "type": "number",
+      "label": "提示最小间隔(秒)",
+      "description": "同一会话两次提示之间的最小间隔，默认 20 秒 —— 第一轮一定发，之后按这个间隔节流（一轮任务可能跑上百个工具轮，不节流会把群刷屏）。设 0 = 每轮都发。"
+    },
+    "ctxCharBudget": {
+      "type": "number",
+      "label": "上下文预算(字符)",
+      "description": "单次请求允许携带的上下文上限，默认 409600（400K 字符）。超过就丢掉最早的那几段对话（最初的需求会保留在省略提示里）。如果模型窗口较小、经常报「上下文超出模型上限」，把它调小到窗口的 6~7 成（例如 128K token 的模型填 200000）。最低 32768。"
+    }
+  }
+}

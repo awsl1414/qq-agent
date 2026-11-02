@@ -1,0 +1,82 @@
+{
+  "id": "sticker",
+  "name": "表情系统",
+  "version": "1.0.5",
+  "apiVersion": 1,
+  "category": "message",
+  "description": "把 QQ 收藏表情变成机器人自己的「表情库」，并教会它在合适的时候自然用出来。收藏同步（fetch_custom_face_detail）→ 本地认知层（备注/标签/使用计数）→ 每轮把候选表情列进提示词 → 按积极程度引导发送。另带看图（视觉模型可直接看懂没备注的表情）、备注、收藏别人发的表情。发送前会把图片转存到本地，避免 QQ 图床直链过期导致「表情发不出去」。",
+  "author": "local",
+  "enabledByDefault": true,
+  "capabilities": [
+    "sticker.state"
+  ],
+  "requires": [],
+  "permissions": [
+    "qq_sticker"
+  ],
+  "settings": {
+    "enabled": true,
+    "encourage": 3,
+    "promptMaxStickers": 10,
+    "rotatePeriodMin": 60,
+    "collectEnabled": true,
+    "maxCollectPerHour": 10
+  },
+  "configSchema": {
+    "viewer": {
+      "type": "action",
+      "label": "表情库",
+      "button": "查看收藏的表情",
+      "panel": "panel/viewer.html",
+      "description": "打开只读的表情库查看器：搜 id / 备注 / 标签，按「用过 / 有备注 / 本地转存」筛选，点开看大图和完整字段。数据是插件写进 plugin-data/sticker/storage.json 的快照（每次收藏同步、备注、收藏新表情、发送表情后自动更新），所以这里改不了东西 —— 想加备注就在聊天里让机器人用「备注表情」。"
+    },
+    "enabled": {
+      "type": "boolean",
+      "label": "启用表情包",
+      "description": "总开关。关掉后不再同步收藏、不再把表情列进提示词，发送/看图/收藏工具也随之不可用（已有表情库留在磁盘上不会删）。"
+    },
+    "encourage": {
+      "type": "enum",
+      "label": "发表情包的积极程度",
+      "options": [
+        {
+          "value": 0,
+          "label": "0 · 保守（几乎不用）"
+        },
+        {
+          "value": 1,
+          "label": "1 · 偶尔"
+        },
+        {
+          "value": 2,
+          "label": "2 · 较积极（回应/接梗优先配）"
+        },
+        {
+          "value": 3,
+          "label": "3 · 很积极（表情包爱好者）（默认）"
+        }
+      ],
+      "description": "这是在提示词层面「引导」模型更愿意用表情，不是「强制」每句都发——强制会显得机械。0 = 纯文字也完全没问题；1 = 大约每 3~5 轮一张；2 = 回应/吐槽/接梗时优先考虑配一张；3 = 能配的地方尽量配。"
+    },
+    "promptMaxStickers": {
+      "type": "number",
+      "label": "提示词里列举的表情包数量（1~50）",
+      "description": "每次唤醒时，把收藏表里最多这么多个表情列进提示词供模型挑选。调大 = 候选更多但提示词更占 token（且按轮次轮换以稳定缓存）。默认 10。"
+    },
+    "rotatePeriodMin": {
+      "type": "number",
+      "label": "候选表情轮换周期（分钟）",
+      "description": "提示词里固定列出的只有一半，另一半按这个周期在不同表情之间轮换，避免模型每次都只看到同一批。0 = 关闭轮换（永远列同一批）。默认 60。"
+    },
+    "collectEnabled": {
+      "type": "boolean",
+      "label": "允许收藏群里的表情",
+      "description": "打开后模型可以把你发的表情/图片收进表情库（会先转存到本地，防止图床直链过期）。"
+    },
+    "maxCollectPerHour": {
+      "type": "number",
+      "label": "每小时收藏上限",
+      "description": "防止刷屏式收藏。默认 10。"
+    }
+  }
+}

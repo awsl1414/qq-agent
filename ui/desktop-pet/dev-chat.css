@@ -1,0 +1,71 @@
+/* 开发工单对话框：452×568 透明圆角卡片。
+   视觉与桌宠气泡/用量卡片同一套（白底、圆角、淡阴影）。 */
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
+body { font: 13px/1.55 "Microsoft YaHei", "Segoe UI", sans-serif; color: #1a2a3a; }
+
+.panel {
+  position: absolute; inset: 4px; display: flex; flex-direction: column;
+  border-radius: 16px; overflow: hidden;
+  background: rgba(255, 255, 255, .97);
+  box-shadow: 0 10px 28px rgba(16, 34, 51, .22), 0 0 0 1px rgba(120, 150, 175, .18);
+}
+
+.hd { display: flex; align-items: center; gap: 7px; padding: 10px 12px; border-bottom: 1px solid #e8eff5; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: #b7c6d2; flex: 0 0 auto; }
+.dot.on { background: #1d9e75; }
+.dot.busy { background: #ef9f27; }
+.hd-title { font-size: 13px; font-weight: 600; }
+.hd-status { font-size: 11px; color: #7b93a6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ghost {
+  margin-left: auto; padding: 3px 8px; border: 1px solid #d6e3ee; border-radius: 8px;
+  background: #fff; color: #365e7e; font: 11px/1.4 inherit; cursor: pointer;
+}
+.ghost:hover { background: #f2f7fb; }
+.x {
+  width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%;
+  background: transparent; color: #7b93a6; font: 17px/1 "Segoe UI", sans-serif; cursor: pointer;
+}
+.x:hover { background: #eef4f9; color: #365e7e; }
+
+.session-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #f0f5f9; }
+.session {
+  flex: 1 1 auto; min-width: 0; height: 26px; padding: 0 24px 0 8px; border: 1px solid #d6e3ee; border-radius: 8px;
+  background: #fff; color: #22384a; font: 12px/1.4 inherit; appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, #7b93a6 50%), linear-gradient(135deg, #7b93a6 50%, transparent 50%);
+  background-position: calc(100% - 13px) 11px, calc(100% - 8px) 11px;
+  background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+}
+.session-meta { font-size: 10px; color: #8aa0b2; white-space: nowrap; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+.list { flex: 1 1 auto; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; scroll-behavior: smooth; }
+.list::-webkit-scrollbar { width: 8px; }
+.list::-webkit-scrollbar-thumb { background: #d6e3ee; border-radius: 8px; }
+
+.empty { margin: auto 8px; text-align: center; color: #7b93a6; }
+.empty-title { margin: 0 0 6px; font-size: 13px; color: #365e7e; }
+.empty-desc { margin: 0; font-size: 11px; line-height: 1.7; }
+
+.msg { max-width: 86%; padding: 7px 10px; border-radius: 12px; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; }
+.msg.user { align-self: flex-end; background: #e6f1fb; color: #12354f; border-bottom-right-radius: 4px; }
+.msg.assistant { align-self: flex-start; background: #f4f8fb; color: #22384a; border-bottom-left-radius: 4px; }
+.who { display: block; margin-bottom: 2px; font-size: 10px; color: #8aa0b2; }
+.tool { align-self: flex-start; max-width: 92%; font-size: 11px; color: #5f7a8f; background: #f7fafc; border: 1px dashed #dbe7f0; border-radius: 8px; padding: 4px 8px; }
+.tool.err { color: #a32d2d; border-color: #f0c9c9; background: #fdf6f6; }
+.notice { align-self: center; font-size: 10.5px; color: #9aaebd; }
+.divider { align-self: center; font-size: 10px; color: #9aaebd; padding: 2px 8px; border-radius: 999px; background: #f4f8fb; }
+
+.composer { display: flex; gap: 8px; padding: 10px 12px 12px; border-top: 1px solid #e8eff5; background: #fbfdff; }
+.input {
+  flex: 1 1 auto; min-height: 52px; max-height: 96px; resize: none; padding: 8px 10px;
+  border: 1px solid #d6e3ee; border-radius: 10px; background: #fff; color: #1a2a3a;
+  font: 12.5px/1.5 inherit; outline: none;
+}
+.input:focus { border-color: #85b7eb; box-shadow: 0 0 0 3px rgba(133, 183, 235, .18); }
+.send {
+  flex: 0 0 auto; align-self: flex-end; height: 36px; padding: 0 16px; border: 0; border-radius: 10px;
+  background: #185fa5; color: #fff; font: 13px/1 inherit; cursor: pointer;
+}
+.send:hover { background: #134e87; }
+.send:disabled { background: #b7c6d2; cursor: default; }

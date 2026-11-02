@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>分层记忆（增强版）· 遗忘曲线与记忆曲线模拟器</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --surface: #f7f7f5;
+    --border: rgba(0,0,0,.12);
+    --text: #1f1f1d;
+    --muted: #6b6a66;
+    --hint: #8f8e89;
+    --accent: #185FA5;
+    --danger: #A32D2D;
+    --warn: #BA7517;
+    --ok: #0F6E56;
+    --grid: rgba(0,0,0,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1a1a;
+      --surface: #242423;
+      --border: rgba(255,255,255,.14);
+      --text: #ececea;
+      --muted: #b4b2a9;
+      --hint: #8f8e89;
+      --accent: #85B7EB;
+      --danger: #F09595;
+      --warn: #EF9F27;
+      --ok: #5DCAA5;
+      --grid: rgba(255,255,255,.12);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 24px 64px;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px; line-height: 1.65;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 6px; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 28px; }
+  .formula {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px; margin: 0 0 28px; overflow-x: auto;
+  }
+  .formula div { white-space: nowrap; }
+  .formula span.k { color: var(--accent); }
+  .formula span.c { color: var(--hint); }
+  .controls {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 18px 28px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px 20px; margin-bottom: 24px;
+  }
+  .ctl label { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; margin-bottom: 6px; }
+  .ctl label b { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .ctl label em { font-style: normal; color: var(--hint); font-size: 12px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 28px; }
+  .card { background: var(--surface); border-radius: 10px; padding: 14px 16px; }
+  .card .lb { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .card .vl { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .card .nt { font-size: 12px; color: var(--hint); margin-top: 2px; }
+  .chartbox { border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px 10px; margin-bottom: 24px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--muted); margin: 6px 0 12px; }
+  .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+  .legend i.dia { width: 10px; height: 10px; border-radius: 2px; transform: rotate(45deg); }
+  .holder { position: relative; width: 100%; height: 320px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); }
+  th { font-weight: 600; color: var(--muted); font-size: 12px; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .alive { color: var(--ok); }
+  .dead { color: var(--danger); }
+  .note { font-size: 12.5px; color: var(--hint); margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>分层记忆（增强版）· 遗忘曲线与记忆曲线</h1>
+  <p class="sub">
+    曲线不是画的示意图，是按 <code>lib/store.js</code> 的式子逐点复算的。
+    命中只改 <code>score</code> 与 <code>S</code>，有效权重是派生值，
+    淘汰要「够老」和「权重低」同时成立。
+  </p>
+  <p class="sub" style="margin:-16px 0 28px;font-size:12.5px;color:var(--hint)">
+    模型假设：一块被创建后，每隔固定天数被检索命中一次（现实中是否命中取决于有没有人问到相关的事）。
+    每轮自动检索、模型主动调检索工具、以及 30 分钟的重复注入冷却，共同决定这个间隔。
+    <b>注意自动注入只记「被动命中」、不加权重</b>，所以真正会喂胖权重的只有模型主动调检索工具那一条路。
+  </p>
+
+  <div class="formula">
+    <div><span class="c">// 派生值：不写回，所以衰减不会被重复施加</span></div>
+    <div><span class="k">effectiveScore</span> = clamp(score, 0.05, 3) &times; 0.5<sup>((距上次命中天数 / S)<sup>q</sup>)</sup></div>
+    <div><span class="c">// 命中：增益看间隔，S 自己会长（间隔重复效应）</span></div>
+    <div>r = min(4, log<sub>2</sub>(1 + 间隔天数 / S))</div>
+    <div><span class="k">score</span> = clamp(score &times; (1 + (hitBoost - 1) &times; r), 0.05, 3)</div>
+    <div><span class="k">S</span> = clamp(S &times; (1 + stabilityGain &times; r), 1, 3650)&nbsp;&nbsp;&nbsp;lastHitAt = now</div>
+    <div><span class="c">// 淘汰：两个条件必须同时成立</span></div>
+    <div><span class="k">块年龄</span> &ge; forgetAfterDays&nbsp;&nbsp;<b>且</b>&nbsp;&nbsp;effectiveScore &le; minForgetScore</div>
+  </div>
+
+  <div class="controls">
+    <div class="ctl">
+      <label for="hl">decayHalfLifeDays <em>初始稳定性 S</em></label>
+      <input type="range" id="hl" min="5" max="200" step="1" value="45">
+      <label><span></span><b><span id="hlv">45</span> 天</b></label>
+    </div>
+    <div class="ctl">
+      <label for="hb">hitBoost <em>命中加权</em></label>
+      <input type="range" id="hb" min="1" max="2" step="0.01" value="1.15">
+      <label><span></span><b>&times;<span id="hbv">1.15</span></b></label>
+    </div>
+    <div class="ctl">
+      <label for="q">decayShape <em>衰减形状 q</em></label>
+      <input type="range" id="q" min="0.1" max="1" step="0.01" value="0.7">
+      <label><span></span><b><span id="qv">0.70</span></b></label>
+    </div>
+    <div class="ctl">
+      <label for="gain">stabilityGain <em>稳定性增长</em></label>
+      <input type="range" id="gain" min="0" max="3" step="0.05" value="1">
+      <label><span></span><b><span id="gainv">1.00</span></b></label>
+    </div>
+    <div class="ctl">
+      <label for="fa">forgetAfterDays <em>淘汰闸门</em></label>
+      <input type="range" id="fa" min="0" max="400" step="5" value="120">
+      <label><span></span><b><span id="fav">120</span> 天</b></label>
+    </div>
+    <div class="ctl">
+      <label for="ms">minForgetScore <em>淘汰阈值</em></label>
+      <input type="range" id="ms" min="0.05" max="1" step="0.01" value="0.25">
+      <label><span></span><b><span id="msv">0.25</span></b></label>
+    </div>
+    <div class="ctl">
+      <label for="gw">gistWeight <em>墓碑候选权重</em></label>
+      <input type="range" id="gw" min="0.05" max="1" step="0.01" value="0.35">
+      <label><span></span><b>&times;<span id="gwv">0.35</span></b></label>
+    </div>
+  </div>
+
+  <div class="cards">
+    <div class="card"><div class="lb">跌破淘汰阈值</div><div class="vl" id="c1">—</div><div class="nt">第几天权重掉到阈值</div></div>
+    <div class="card"><div class="lb">真正被删除</div><div class="vl" id="c2">—</div><div class="nt">两个条件都满足的那天</div></div>
+    <div class="card"><div class="lb">最长可存活间隔</div><div class="vl" id="c3">—</div><div class="nt">平均间隔短于此就永不淘汰</div></div>
+    <div class="card"><div class="lb">间隔 vs 密集</div><div class="vl" id="c4">—</div><div class="nt">同样 8 次命中：每 30 天一次 ÷ 天天见</div></div>
+  </div>
+
+  <div class="chartbox">
+    <h2>图一 · 遗忘曲线（从不被想起）</h2>
+    <p class="sub" style="margin-bottom:0">块创建后一直没被检索命中，权重按 <code>0.5^((t/S)^q)</code> 衰减；曲线在实心菱形处中断，代表块文件被删除。
+      删除之后那条水平虚线是<b>梗概墓碑</b>：细节没了，但「我好像记得有这么回事」还在，仍能被检索到（命中时还会按 id 区间从原文把整块重建回来）。</p>
+    <div class="legend">
+      <span><i style="background:#BA7517"></i>稳定性 S &times; 1/3</span>
+      <span><i style="background:#185FA5"></i>当前设置（实线）</span>
+      <span><i style="background:#0F6E56"></i>稳定性 S &times; 2</span>
+      <span><i style="background:#A32D2D;height:2px"></i>淘汰阈值</span>
+      <span><i style="background:#8f8e89;height:2px"></i>淘汰闸门</span>
+      <span><i class="dia" style="background:#A32D2D"></i>被淘汰</span>
+      <span><i style="background:#6B4FA8;height:2px"></i>梗概墓碑（只剩印象）</span>
+    </div>
+    <div class="holder"><canvas id="c1canvas" role="img" aria-label="遗忘曲线：有效权重随天数衰减，三条不同稳定性的曲线分别在各自淘汰点中断"></canvas></div>
+  </div>
+
+  <div class="chartbox">
+    <h2>图二 · 记忆曲线（被周期性想起）</h2>
+    <p class="sub" style="margin-bottom:0">每次命中按间隔加分并让 S 变长，于是锯齿的谷底越来越高、衰减越来越慢。间隔越短，抬升越快。</p>
+    <div class="legend">
+      <span><i style="background:#185FA5"></i>每 7 天想起（实线）</span>
+      <span><i style="background:#0F6E56"></i>每 30 天（长虚线）</span>
+      <span><i style="background:#BA7517"></i>每 90 天（短虚线）</span>
+      <span><i style="background:#A32D2D"></i>每 120 天（点线）</span>
+      <span><i class="dia" style="background:#A32D2D"></i>被淘汰</span>
+      <span><i style="background:#6B4FA8;height:2px"></i>梗概墓碑（只剩印象）</span>
+    </div>
+    <div class="holder"><canvas id="c2canvas" role="img" aria-label="记忆曲线：周期性想起形成锯齿，间隔越短谷底越高，间隔过长的曲线在淘汰点中断"></canvas></div>
+  </div>
+
+  <div class="chartbox">
+    <h2>生存表 · 多久想不起来一次，它就会消失</h2>
+    <p class="sub" style="margin-bottom:12px">按当前参数逐条模拟到 1200 天，看每种想起间隔的最终结局。</p>
+    <table>
+      <thead>
+        <tr><th style="width:14%">想起间隔</th><th style="width:16%">首轮谷底</th><th style="width:18%">稳态下限</th><th style="width:16%">稳定性 S</th><th style="width:36%">结局</th></tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <p class="note" id="tableNote"></p>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+(function () {
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const C = {
+    grid: dark ? 'rgba(255,255,255,.12)' : 'rgba(0,0,0,.08)',
+    tick: dark ? '#B4B2A9' : '#5F5E5A',
+    blue: dark ? '#85B7EB' : '#185FA5',
+    amber: dark ? '#EF9F27' : '#BA7517',
+    teal: dark ? '#5DCAA5' : '#0F6E56',
+    red: dark ? '#F09595' : '#A32D2D',
+    purple: dark ? '#B4A0E5' : '#6B4FA8',
+    mark: dark ? '#1a1a1a' : '#ffffff'
+  };
+  const $ = (id) => document.getElementById(id);
+  const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, Number(n)));
+  const DAYS = 240;
+
+  function readParams() {
+    return {
+      hl: +$('hl').value,
+      hb: +$('hb').value,
+      q: +$('q').value,
+      gain: +$('gain').value,
+      fa: +$('fa').value,
+      ms: +$('ms').value,
+      gw: +$('gw').value
+    };
+  }
+
+  const R_MAX = 4;      // 与 lib/store.js 的 R_MAX 一致
+  const S_MAX = 3650;   // 与 stabilityMax 默认值一致
+
+  // 有效权重：0.5^((t/S)^q)。q=1 时就是纯指数（旧行为）。
+  function eff(score, age, S, q) {
+    return clamp(clamp(score, 0.05, 3) * Math.pow(0.5, Math.pow(Math.max(0, age) / S, q)), 0.05, 3);
+  }
+
+  // 一次"主动回忆"：增益看间隔，稳定性同步增长（间隔重复效应）
+  function hitOnce(score, S, gap, p) {
+    const r = Math.min(R_MAX, Math.log2(1 + Math.max(0, gap) / S));
+    return {
+      score: clamp(score * (1 + (p.hb - 1) * r), 0.05, 3),
+      S: clamp(S * (1 + p.gain * r), 1, S_MAX),
+      r
+    };
+  }
+
+  // 权重从 score 掉到阈值需要多少天（解析解，避免网格误差）
+  function crossAge(score, S, p) {
+    if (!(score > p.ms)) return 0;
+    return S * Math.pow(Math.log2(score / p.ms), 1 / p.q);
+  }
+
+  // ── 纯遗忘：score 恒为 1、S 恒定（从没命中过，稳定性不会长）──
+  function forgettingCurve(S, p) {
+    const pts = [];
+    // 闸门没开之前不会删；闸门开了而权重早已跌破，就在闸门那天删
+    const born = crossAge(1, S, p);
+    const deathAt = p.fa > 0 ? Math.max(born, p.fa) : null;
+    for (let t = 0; t <= DAYS + 1e-9; t += 2) {
+      if (deathAt !== null && t >= deathAt) break;
+      pts.push({ x: t, y: +eff(1, t, S, p.q).toFixed(4) });
+    }
+    const dead = deathAt !== null && deathAt <= DAYS ? deathAt : null;
+    if (dead !== null) pts.push({ x: +dead.toFixed(2), y: +eff(1, dead, S, p.q).toFixed(4) });
+    return { pts, dead };
+  }
+
+  // ── 周期性想起：第 N、2N、3N… 天各命中一次 ──
+  function recallCurve(N, p) {
+    const pts = [];
+    let score = 1, S = p.hl, lastHit = 0, dead = null, nextHit = N;
+    const step = Math.max(0.25, Math.min(2, N / 24));
+    for (let i = 0; i * step <= DAYS + 1e-9; i++) {
+      const t = +(i * step).toFixed(4);
+      if (t >= nextHit - 1e-9) {
+        const h = hitOnce(score, S, nextHit - lastHit, p);
+        score = h.score; S = h.S; lastHit = nextHit; nextHit += N;
+      }
+      // 这一轮里有没有可能已经被删掉？（权重在周期内单调下降，最低点在命中前）
+      if (p.fa > 0) {
+        const gate = Math.max(lastHit + crossAge(score, S, p), p.fa);
+        if (gate <= Math.min(t, nextHit) + 1e-9) { dead = gate; break; }
+      }
+      pts.push({ x: t, y: +eff(score, t - lastHit, S, p.q).toFixed(4) });
+    }
+    const shown = dead !== null && dead <= DAYS ? dead : null;
+    if (shown !== null) pts.push({ x: +shown.toFixed(2), y: +eff(score, shown - lastHit, S, p.q).toFixed(4) });
+    return { pts, dead: shown };
+  }
+
+  // ── 生存判定：逐次命中推进（解析式，不用网格）──
+  function survival(N, p, horizon) {
+    const limit = horizon || 1200;
+    if (!(N > 0)) return { dead: null, score: 1, S: p.hl, steady: 1 };
+    let score = 1, S = p.hl, t = 0, dead = null;
+    let steady = Infinity;
+    for (let guard = 0; guard < 20000; guard++) {
+      const next = t + N;
+      if (next > limit) break;
+      const gate = p.fa > 0 ? Math.max(t + crossAge(score, S, p), p.fa) : Infinity;
+      if (gate <= next + 1e-9) { dead = gate; break; }
+      // 稳态下限 = 每个周期末（命中前）的权重，只看后半程
+      if (next > limit * 0.5) steady = Math.min(steady, eff(score, next - t, S, p.q));
+      const h = hitOnce(score, S, next - t, p);
+      score = h.score; S = h.S; t = next;
+    }
+    if (steady === Infinity) steady = eff(score, 0, S, p.q);
+    return { dead, score, S, steady };
+  }
+
+  // ── 同样 times 次命中：每 gapDays 一次 vs 全部挤在同一瞬间 ──
+  function intervalGain(gapDays, times, p) {
+    let dense = { score: 1, S: p.hl };
+    for (let i = 0; i < times; i++) dense = hitOnce(dense.score, dense.S, 0, p);
+    let spaced = { score: 1, S: p.hl };
+    for (let i = 0; i < times; i++) spaced = hitOnce(spaced.score, spaced.S, gapDays, p);
+    return { dense, spaced };
+  }
+
+  // ── 最长可存活的想起间隔：二分 ──
+  // 比"首轮谷底 = 阈值"那个解析值更有用 —— 因为间隔够短时，
+  // 第一次命中会在闸门开启之前把权重抬回阈值以上，等于"被救回来了"。
+  function survivalBoundary(p) {
+    if (p.fa <= 0) return Infinity;
+    let lo = 0.5, hi = 1200;
+    if (survival(lo, p).dead !== null) return 0;
+    if (survival(hi, p).dead === null) return Infinity;
+    for (let i = 0; i < 60; i++) {
+      const mid = (lo + hi) / 2;
+      if (survival(mid, p).dead !== null) hi = mid; else lo = mid;
+    }
+    return Math.round((lo + hi) / 2);
+  }
+
+  /**
+   * 梗概墓碑：块被删之后留下的一条水平线。
+   *
+   * ⚠️ 与上面几条**不是同一量纲**：活块是 score × 衰减，墓碑是 hits × gistWeight。
+   *    画在同一张图里只为表达"它还在、还能被检索到"，不是"它比活块强"。
+   *    压低（默认 0.35）是刻意的：活块匹配得一样好时永远排在前面，
+   *    墓碑只在"没有活块能回答"时才浮上来。
+   *
+   * 真实保留期是 `gistRetainDays`（默认 1095 天），远长于这里的 240 天视窗；
+   * 所以这条线在图上是"一直延伸到右边不出界"，实际它比图上画的活得久得多。
+   */
+  function gistLine(deadAt, p) {
+    if (deadAt === null || deadAt === undefined) return null;
+    const from = +deadAt.toFixed(2);
+    if (!(from < DAYS)) return null;
+    return {
+      type: 'line', label: '梗概墓碑（只剩印象）',
+      data: [{ x: from, y: +p.gw.toFixed(3) }, { x: DAYS, y: +p.gw.toFixed(3) }],
+      borderColor: C.purple, borderWidth: 2, borderDash: [10, 3], pointRadius: 0, tension: 0
+    };
+  }
+
+  const dash = (arr) => arr;
+  let chart1 = null, chart2 = null;
+
+  function buildCharts(p) {
+    const series = [
+      { S: Math.max(1, Math.round(p.hl / 3)), c: C.amber, d: dash([8, 4]), label: '稳定性 S × 1/3' },
+      { S: p.hl, c: C.blue, d: dash([]), label: '当前设置' },
+      { S: p.hl * 2, c: C.teal, d: dash([3, 3]), label: '稳定性 S × 2' }
+    ];
+    const ds = [], marks = [];
+    let firstDeath = null;
+    series.forEach((s) => {
+      const r = forgettingCurve(s.S, p);
+      if (r.dead !== null && (firstDeath === null || r.dead < firstDeath)) firstDeath = r.dead;
+      ds.push({ type: 'line', label: s.label + '（S = ' + s.S + ' 天）', data: r.pts,
+        borderColor: s.c, backgroundColor: s.c, borderWidth: 2, borderDash: s.d, pointRadius: 0, tension: 0 });
+      if (r.dead !== null) marks.push({ type: 'scatter', label: s.label + ' 被淘汰',
+        data: [{ x: r.dead, y: r.pts[r.pts.length - 1].y }],
+        borderColor: s.c, backgroundColor: C.mark, borderWidth: 2, pointRadius: 6, pointStyle: 'rectRot', showLine: false });
+    });
+    const g1 = gistLine(firstDeath, p);
+    if (g1) ds.push(g1);
+    ds.push({ type: 'line', label: '淘汰阈值', data: [{ x: 0, y: p.ms }, { x: DAYS, y: p.ms }],
+      borderColor: C.red, borderWidth: 1.5, borderDash: [6, 4], pointRadius: 0 });
+    if (p.fa > 0 && p.fa <= DAYS) {
+      ds.push({ type: 'line', label: '淘汰闸门', data: [{ x: p.fa, y: 0 }, { x: p.fa, y: 1.15 }],
+        borderColor: C.tick, borderWidth: 1, borderDash: [2, 4], pointRadius: 0 });
+    }
+    const all = ds.concat(marks);
+    if (chart1) { chart1.data.datasets = all; chart1.update(); }
+    else {
+      chart1 = new Chart($('c1canvas'), { type: 'line', data: { datasets: all }, options: chartOpts('距最后一次被想起的天数', 0, 1.15, 0.25) });
+    }
+
+    const cfg = [
+      { N: 7, c: C.blue, d: [] },
+      { N: 30, c: C.teal, d: [8, 4] },
+      { N: 90, c: C.amber, d: [3, 3] },
+      { N: 120, c: C.red, d: [1, 3] }
+    ];
+    const ds2 = [], marks2 = [];
+    let firstDeath2 = null;
+    cfg.forEach((c) => {
+      const r = recallCurve(c.N, p);
+      if (r.dead !== null && (firstDeath2 === null || r.dead < firstDeath2)) firstDeath2 = r.dead;
+      ds2.push({ type: 'line', label: '每 ' + c.N + ' 天被想起', data: r.pts,
+        borderColor: c.c, backgroundColor: c.c, borderWidth: c.N === 7 ? 1.6 : 2, borderDash: c.d, pointRadius: 0, tension: 0 });
+      if (r.dead !== null) marks2.push({ type: 'scatter', label: '每 ' + c.N + ' 天：被淘汰',
+        data: [{ x: r.dead, y: r.pts[r.pts.length - 1].y }],
+        borderColor: c.c, backgroundColor: C.mark, borderWidth: 2, pointRadius: 6, pointStyle: 'rectRot', showLine: false });
+    });
+    const g2 = gistLine(firstDeath2, p);
+    if (g2) ds2.push(g2);
+    ds2.push({ type: 'line', label: '淘汰阈值', data: [{ x: 0, y: p.ms }, { x: DAYS, y: p.ms }],
+      borderColor: C.red, borderWidth: 1.5, borderDash: [6, 4], pointRadius: 0 });
+    if (p.fa > 0 && p.fa <= DAYS) {
+      ds2.push({ type: 'line', label: '淘汰闸门', data: [{ x: p.fa, y: 0 }, { x: p.fa, y: 3.2 }],
+        borderColor: C.tick, borderWidth: 1, borderDash: [2, 4], pointRadius: 0 });
+    }
+    const all2 = ds2.concat(marks2);
+    if (chart2) { chart2.data.datasets = all2; chart2.update(); }
+    else {
+      chart2 = new Chart($('c2canvas'), { type: 'line', data: { datasets: all2 }, options: chartOpts('块创建后的天数', 0, 3.2, 0.5) });
+    }
+  }
+
+  function chartOpts(xTitle, yMin, yMax, yStep) {
+    return {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'nearest', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: function (c) {
+              return c.dataset.label + '：' + c.parsed.y.toFixed(3) + '（第 ' + Math.round(c.parsed.x) + ' 天）';
+            }
+          }
+        }
+      },
+      scales: {
+        x: { type: 'linear', min: 0, max: DAYS,
+          title: { display: true, text: xTitle, color: C.tick, font: { size: 12 } },
+          ticks: { stepSize: 30, color: C.tick, font: { size: 12 } }, grid: { color: C.grid } },
+        y: { min: yMin, max: yMax,
+          title: { display: true, text: '有效权重 effectiveScore', color: C.tick, font: { size: 12 } },
+          ticks: { stepSize: yStep, color: C.tick, font: { size: 12 } }, grid: { color: C.grid } }
+      }
+    };
+  }
+
+  function buildCards(p) {
+    // 从未被想起的块：score=1、S 就是初始稳定性，q 决定形状
+    const below = crossAge(1, p.hl, p);
+    const death = p.fa > 0 ? Math.max(below, p.fa) : null;
+    const bound = survivalBoundary(p);
+    // 同样 8 次命中：每 30 天一次 vs 全挤在同一瞬间
+    const g = intervalGain(30, 8, p);
+
+    $('c1').textContent = below > 999 ? '> 999 天' : Math.round(below) + ' 天';
+    $('c2').textContent = death === null ? '永不删除' : (death > 999 ? '> 999 天' : Math.round(death) + ' 天');
+    $('c3').textContent = bound === Infinity ? '∞' : (bound === 0 ? '任何间隔' : bound + ' 天');
+    const ratio = g.spaced.S / g.dense.S;
+    $('c4').textContent = ratio < 1.05 ? '≈ 1×' : ratio.toFixed(1) + '×';
+  }
+
+  function buildTable(p) {
+    const list = [1, 3, 7, 14, 30, 45, 60, 90, 120, 150, 180, 240, 365];
+    const rows = list.map((N) => {
+      const r = survival(N, p);
+      // 块在第一次命中之前就被删掉时，「首轮谷底 / 稳态」没有意义，别硬凑一个数
+      const alive = r.dead === null;
+      return {
+        N,
+        first: alive ? eff(1, N, p.hl, p.q) : null,
+        steady: alive ? r.steady : null,
+        S: r.S,
+        dead: r.dead
+      };
+    });
+    $('tbody').innerHTML = rows.map((r) => {
+      const outcome = r.dead === null
+        ? '<span class="alive">存活</span>'
+        : '<span class="dead">第 ' + Math.round(r.dead) + ' 天被淘汰</span>';
+      const sTxt = r.S > 9999 ? '> 9999' : Math.round(r.S);
+      const cell = (v) => (v === null ? '—' : v.toFixed(3));
+      return '<tr><td class="num">' + r.N + ' 天</td><td class="num">' + cell(r.first) + '</td>'
+        + '<td class="num">' + cell(r.steady) + '</td>'
+        + '<td class="num">' + sTxt + ' 天</td><td>' + outcome + '</td></tr>';
+    }).join('');
+    const bound = survivalBoundary(p);
+    const alive = rows.filter((r) => r.dead === null).map((r) => r.N);
+    $('tableNote').textContent = p.fa > 0
+      ? '闸门 ' + p.fa + ' 天：块年龄不到这个数，权重再低也不删 —— 这是「跌破阈值」与「真正被删」之间那段缓冲的来源。'
+        + '「稳定性 S」是模拟跑到最后每块自己的 S：间隔越短 S 长得越猛，衰减也就越慢，'
+        + '这正是「天天被提起的事」和「一年才提一次的事」在当前模型下**不再一样**的原因。'
+        + (bound === Infinity
+          ? '当前参数下所有间隔都能存活。'
+          : '二分求得最长可存活间隔 ≈ ' + bound + ' 天：比它短就永远不删，比它长早晚会被删。'
+            + (alive.length ? '（表中间隔 ' + Math.max.apply(null, alive) + ' 天以内均存活）' : ''))
+      : 'forgetAfterDays = 0：关闭淘汰，任何块都不会被删除（权重仍会衰减，只影响排序）。';
+    $('tableNote').textContent += '　被淘汰的块不会彻底消失：它会留一条梗概墓碑（当前排序权重 ×' + p.gw.toFixed(2)
+      + '）—— 细节没了，但「我好像记得有这么回事」还在，命中时还能按 id 区间从原文把整块重建回来（默认保留 1095 天，比这张表的 1200 天视窗还长）。';
+  }
+
+  function render() {
+    const p = readParams();
+    $('hlv').textContent = p.hl;
+    $('hbv').textContent = p.hb.toFixed(2);
+    $('qv').textContent = p.q.toFixed(2);
+    $('gainv').textContent = p.gain.toFixed(2);
+    $('fav').textContent = p.fa;
+    $('msv').textContent = p.ms.toFixed(2);
+    $('gwv').textContent = p.gw.toFixed(2);
+    buildCards(p);
+    buildCharts(p);
+    buildTable(p);
+  }
+
+  ['hl', 'hb', 'q', 'gain', 'fa', 'ms', 'gw'].forEach((id) => {
+    $(id).addEventListener('input', render);
+    $(id).addEventListener('change', render);
+  });
+  render();
+})();
+</script>
+</body>
+</html>

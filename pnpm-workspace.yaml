@@ -1,0 +1,6 @@
+# pnpm 配置（pnpm 10+ 的 workspace 配置就放在这里）
+#
+# 本项目的依赖没有需要编译的：electron 45+ 已改为首次运行时懒下载二进制，
+# 不再有 postinstall。将来加了原生模块（sharp / better-sqlite3 之类），
+# 在下面显式列出，避免 pnpm 的构建脚本白名单把它们跳过。
+onlyBuiltDependencies: []

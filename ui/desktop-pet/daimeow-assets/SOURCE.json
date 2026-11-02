@@ -1,0 +1,81 @@
+{
+  "source": "https://github.com/yubdey/DaiMeow",
+  "commit": "3544f16d861d18a919901f66d161ecc5f4088b4f",
+  "files": [
+    {
+      "file": "drool.png",
+      "bytes": 638,
+      "sha256": "85eb88303260b3483ea8fe434bd85b75c1a11741c613a0f72699057f57311bbc"
+    },
+    {
+      "file": "chip.png",
+      "bytes": 97062,
+      "sha256": "4f5921c3b27e5b0a3a7bcdc264380948bf3a7d659d22ac5abe472b324dc1a72d"
+    },
+    {
+      "file": "chips.png",
+      "bytes": 564070,
+      "sha256": "d102971d9f4f9e97a17623119faab635a9ec30e9fadf322319e4c9fc9d3c7acc"
+    },
+    {
+      "file": "gamepad.png",
+      "bytes": 1009891,
+      "sha256": "f6853370bd6291b4a9e50dcaae77766241fff1269f7fba730fbc73c33e8d0134"
+    },
+    {
+      "file": "hand_left.png",
+      "bytes": 65997,
+      "sha256": "45624a43c5dd654aec1fdd55cae3e5c6c845008e9fbd2a92413fd59b5cdf1530"
+    },
+    {
+      "file": "hand_right.png",
+      "bytes": 66728,
+      "sha256": "377a96218b4f7e53fe28ed6d152589bf1596b2000af04fcf7df3646c2af95dfb"
+    },
+    {
+      "file": "idea_hand.png",
+      "bytes": 48356,
+      "sha256": "61f00846cae561cc26506a5034aba7e5f30858a317f3f48a6a4f3ad98f9d673a"
+    },
+    {
+      "file": "hello.png",
+      "bytes": 969163,
+      "sha256": "6f0cb9cd909bb21e29dfc2ef2f245924228ba06d31952b8adde5608795264e1b"
+    },
+    {
+      "file": "lightbulb.png",
+      "bytes": 886283,
+      "sha256": "30c80386d2fb46efef61e639491b0a5d8eaaef90eabc5ac206400b5e4b34f3f7"
+    },
+    {
+      "file": "pig.png",
+      "bytes": 735833,
+      "sha256": "b497ee734fac53631f8ec0f5407f3bc709c3d9255204e4d0bda3533e527a2b5d"
+    },
+    {
+      "file": "pompom_pink.png",
+      "bytes": 58213,
+      "sha256": "42b9f420cd09b63bd37519847df32b400e51340894f93f2b3f7eb7da394f3e57"
+    },
+    {
+      "file": "pig_sticker.png",
+      "bytes": 729006,
+      "sha256": "779c6df185c8567fd5d6654f2f956e1fe967d6f3cfd71528a915ef0c7f66c66f"
+    },
+    {
+      "file": "pompom_yellow.png",
+      "bytes": 53161,
+      "sha256": "79992c11e11f02d96ec9dea5dc0560d150985358070b4ab828ac58b48e6fad57"
+    },
+    {
+      "file": "question.png",
+      "bytes": 214059,
+      "sha256": "774669dd9894169bca308749d36d3a284850798cdaabbc168fa3ae12b7a414ef"
+    },
+    {
+      "file": "thinking_loading.gif",
+      "bytes": 143504,
+      "sha256": "14b8160bc5f73735250fa755a3ed62934b63be1c7e097dfd0660dbda25091216"
+    }
+  ]
+}

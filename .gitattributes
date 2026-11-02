@@ -1,0 +1,18 @@
+# 统一换行符：仓库内一律 LF，检出时按平台转换。
+# 不加这条，Windows 下每次 git add 都会刷出一屏 CRLF 警告，
+# 且不同平台提交的同一文件会产生无意义的整文件 diff。
+* text=auto eol=lf
+
+# 二进制资源：不做换行转换，也不参与文本 diff
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff2 binary
+*.exe binary
+*.moc3 binary
+
+# 锁文件：diff 噪音大，折叠显示
+pnpm-lock.yaml linguist-generated=true

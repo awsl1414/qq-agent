@@ -1,0 +1,22 @@
+/* 今日用量卡片：与桌宠气泡同一套视觉（白底、圆角、淡阴影），
+   窗口本身 380×84 透明，卡片内缩 4px 给阴影留边。
+   2026-10-24：改为一式两行的一行式用量串（主串 + 搜索次数），
+   数字每 5 秒刷新一次，tabular-nums 防止宽度跳动。 */
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
+body { font: 13px/1.5 "Microsoft YaHei", "Segoe UI", sans-serif; color: #1a2a3a; -webkit-user-select: none; user-select: none; }
+
+.card {
+  position: absolute; inset: 4px; display: flex; flex-direction: column; gap: 2px;
+  padding: 10px 14px; border-radius: 14px;
+  background: rgba(255, 255, 255, .96);
+  box-shadow: 0 8px 24px rgba(16, 34, 51, .18), 0 0 0 1px rgba(120, 150, 175, .18);
+}
+.card::after {
+  content: ""; position: absolute; left: 50%; bottom: -5px; width: 0; height: 0;
+  border-left: 6px solid transparent; border-right: 6px solid transparent;
+  border-top: 6px solid rgba(255, 255, 255, .96); transform: translateX(-50%);
+}
+
+.usage { font-size: 13px; font-weight: 600; letter-spacing: .2px; font-variant-numeric: tabular-nums; }
+.search { font-size: 11px; color: #7b93a6; font-variant-numeric: tabular-nums; }

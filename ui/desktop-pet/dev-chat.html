@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>QQ Agent 开发工单</title>
+  <link rel="stylesheet" href="dev-chat.css">
+</head>
+<body>
+  <section id="panel" class="panel" aria-label="开发工单对话">
+    <header class="hd">
+      <span id="dot" class="dot" aria-hidden="true"></span>
+      <strong class="hd-title">开发工单</strong>
+      <span id="status" class="hd-status">连接中…</span>
+      <button id="new" class="ghost" type="button" title="开一个新工单">新工单</button>
+      <button id="close" class="x" type="button" aria-label="关闭（Esc）" title="关闭（Esc）">×</button>
+    </header>
+
+    <div id="session-bar" class="session-bar">
+      <label class="sr" for="session">工单</label>
+      <select id="session" class="session"></select>
+      <span id="session-meta" class="session-meta"></span>
+    </div>
+
+    <div id="list" class="list" role="log" aria-live="polite">
+      <div id="empty" class="empty">
+        <p class="empty-title">在这里直接和开发工单对话</p>
+        <p class="empty-desc">输入需求 → 回车，会开一个新工单并让开发 agent 直接读改项目。<br>回复会出现在这里；不需要去 QQ 群里发「开发 xxx」。</p>
+      </div>
+    </div>
+
+    <footer class="composer">
+      <textarea id="input" class="input" rows="2" placeholder="描述要做什么…（Enter 发送，Shift+Enter 换行）" maxlength="8000"></textarea>
+      <button id="send" class="send" type="button">发送</button>
+    </footer>
+  </section>
+  <script type="module" src="dev-chat.js"></script>
+</body>
+</html>

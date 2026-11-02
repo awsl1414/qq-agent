@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>洛版 QQ Agent v0.4.9.0</title>
+  <!-- 内容安全策略：控制台只应加载本机资源。
+       script-src 仅 'self'：首屏主题预置走**外链**同步脚本（/theme-boot.js，见下方），
+       既不用内联、也不需要维护 sha256 hash —— 页面多处 innerHTML 拼接，一旦任何
+       一处被注入，'unsafe-inline' 会让 onerror= 等内联代码直接执行，CSP 形同虚设。
+       内联样式仍放行（style-src）：主题/布局大量使用内联 style 属性。
+       script-src 放行 kondius.cn（2026-10-17）：人机验证桥接 10a-captcha.js 要动态
+       加载官网反代托管的阿里云验证码 SDK（kondius.cn 上传端点强制 captchaVerifyParam）；
+       同日放行 o.alicdn.com —— 同一份 SDK 的阿里云官方 CDN，作 kondius 线路抖动时的备用源。
+       frame-src https:（同日）：验证码滑块弹层由 SDK 内部 iframe 承载，需放行 https frame。
+       ⚠️（2026-10-18 修）frame-src 必须同时含 'self'：插件自带页面（表情库 viewer.html、
+       自检面板等）是**同源 http://127.0.0.1:port/plugin-panel/...** 的 iframe，
+       只写 https: 会直接 ERR_BLOCKED_BY_CSP（"查看收藏的表情"打不开的根因）。
+       两份 CSP（本 meta 与 src/app.js 的头）取交集，改一处必须同步另一处。 -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://kondius.cn https://o.alicdn.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; media-src 'self' data: blob:; connect-src 'self' https://kondius.cn; font-src 'self' data:; frame-src 'self' https:; object-src 'none'; base-uri 'none'; form-action 'none'" />
+  <link rel="stylesheet" href="/style.css" />
+  <!-- 桌宠管理页（「桌宠」一级页）的版式。独立文件，不掺进 style.css。 -->
+  <link rel="stylesheet" href="/desktop-pet-panel.css" />
+  <!-- ⚠️（2026-10-17 修 H1）全局错误兜底必须**最先执行**：装在主题预置之前，
+       这样后面 18 个 defer 脚本里任何一个顶层抛异常都能被记录下来并显示出来
+       （否则表现为"界面某块永远空着、屏幕上没有任何线索"）。
+       它也必须是外链而不是内联 —— CSP 是 script-src 'self'（无 unsafe-inline，
+       也没有为它维护 sha256 hash），内联脚本会被直接拒绝执行。
+       文件本身不依赖任何其它文件，详见 ui/error-boot.js 顶部说明。 -->
+  <script src="/error-boot.js"></script>
+  <!-- 主题预置：外链同步脚本（阻塞解析、先于首帧执行）。不放内联是为了 CSP：
+       script-src 'self' 直接覆盖外链，内联则要维护 hash、一改就失效。 -->
+  <script src="/theme-boot.js"></script>
+</head>
+<body>
+  <!-- 背景图层（R40 个性化）：比圆角外壳还低一层（z-index:-2）。
+       只在设置了背景图时由 JS 写入 background-image，否则保持空层（不画、不占渲染）。
+       ⚠️ 它自己带 border-radius —— 否则图片会铺成方角，把 .win-frame 拼出来的
+          圆角外面露出四个直角。它是唯一的静态层（fixed、无内容、不随滚动重画），
+          所以这里的整窗圆角裁剪不会碰到"滚动时重画整窗圆角"的性能问题。 -->
+  <div class="app-bg" id="app-bg" aria-hidden="true"></div>
+
+  <!-- 最底层：圆角外壳（零裁剪）。窗口四角靠这个 fixed 层的 7 层背景拼出来，
+       详见 style.css 的「圆角外壳」注释。放在 body 第一个子元素，
+       z-index:-1 让它落在 .app-shell（含其装饰光晕）之下。 -->
+  <div class="win-frame" aria-hidden="true"></div>
+
+  <!-- 应用外壳：grid 布局层（底色已交给 .win-frame）。
+       透明窗口下 body 自己**不能**有背景色 —— 按 CSS 规范，当 html 背景为
+       transparent 时 body 的背景会被传播到画布、铺满整个窗口矩形。 -->
+  <div class="app-shell">
+  <header id="topbar">
+    <div class="brand">QQ Agent <span class="brand-sub"></span></div>
+
+    <!-- ══════════ 一级入口：5 项平铺（会话 / 用量 / 下载 / 工具 / 设置）══════════
+         点一级 → switchTab(该一级的默认二级页)；当前一级由 syncChrome() 高亮。
+         data-top 是分组键，data-tab 是页签身份。
+
+         ⚠️（2026-10-24）桌宠不再是独立一级入口：它挪进了「工具」组的左栏，
+            与「连接 / 自检」并列（见 14-chrome.js 的 GROUPS，ops.subs 第三项）。
+            顶栏 6 项 → 5 项。桌宠页本体（#view-desktop-pet）没动，tab-pool 里的
+            身份锚点也必须留着 —— switchTab 靠它做 active 清理。 -->
+    <nav id="tabs">
+      <button class="nav-item active" type="button" data-top="sessions" data-tab="sessions" aria-current="page" title="和机器人的对话、群聊记录与记忆">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z" stroke-linejoin="round" /></svg>会话
+      </button>
+      <button class="nav-item" type="button" data-top="usage" data-tab="usage" title="今天跑了多少、花了多少 token">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2" /></svg>用量
+      </button>
+      <button class="nav-item" type="button" data-top="ext" data-tab="skills" title="人设 / 技能 / 插件市场，以及管理已装的东西">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10M8 10l4 4 4-4M5 18h14" stroke-linejoin="round" /></svg>下载
+      </button>
+      <button class="nav-item" type="button" data-top="ops" data-tab="harness" title="自检、协议端连接与运行日志">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7V5.5A2.5 2.5 0 0 1 11.5 3h1A2.5 2.5 0 0 1 15 5.5V7" /><rect x="3" y="7" width="18" height="13" rx="2" /><path d="M3 12.5h18" stroke-linecap="round" /></svg>工具
+      </button>
+      <!-- 壁纸（内置壁纸模块 src/wallpaper）：2026-10-23 晚**收回**「设置 → 外观与数据」，
+           一级导航从 7 项回到 6 项（2026-10-24 桌宠也挪进「工具」左栏，现为 5 项）。
+           收回的直接原因不是"占位置"，而是两层背景互斥却分了两处：
+             · 本地图片 → config.ui.bgImage → #app-bg
+             · 小红车壁纸 → localStorage['wp-console-bg'] → #wp-bg-video/#wp-bg-img
+           而 style.css 里有一条 `html[data-wp='on'] #app-bg { display: none }` ——
+           壁纸一启用，设置里选的本地图被整层隐藏。两个入口分开时，用户在设置里
+           选完图什么都看不到、也没有任何提示，只会以为按钮坏了。
+           现在两者同屏在设置的「界面背景」一节，入口是那节的「打开壁纸库…」按钮。
+           ⚠️ 下面的 .tab-pool 里必须保留 data-tab="wallpaper" 身份锚点：
+              switchTab 的 active 清理与 tabOrder 键集都靠它，删了壁纸页就切不过去。 -->
+      <!-- 桌宠（desktop-pet 插件）：2026-10-24 从一级入口挪进「工具」组左栏
+           （ops.subs 第三项，与「连接 / 自检」并列）。一级入口只剩 5 项。
+           顶栏这颗按钮已删；下面的 tab-pool 里 data-tab="desktop-pet" 身份锚点
+           **必须保留** —— switchTab 的 active 清理与视图查找都靠它。 -->
+      <button class="nav-item" type="button" data-top="settings" data-tab="settings" title="模型密钥、连接 QQ、响应范围、人设等全部配置">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z" /><path d="M19.4 14.5a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.11a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.11a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.11a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.11a1.7 1.7 0 0 0-1.56 1.03z" /></svg>设置
+      </button>
+
+      <!-- 金句勾选模式下「确认金句」出现在导航组末尾（默认隐藏）。 -->
+      <span class="nav-spacer"></span>
+      <button type="button" class="nav-btn hidden" id="quote-confirm-btn">确认金句</button>
+
+      <!-- ══════════ 二级页池（不可见）══════════
+           二级切换现在走左栏 #side-nav（每页一份，照原型）。但 switchTab 的若干
+           逻辑仍按「页面 = 一个 .tab」建模，所以这里保留 9 个 .tab[data-tab]
+           作为**身份锚点**：不显示、不占位，只保证 $$('.tab') 始终能找到全部 9 页。
+           ⚠️ 不要删 —— 删了 switchTab 的 active 清理与 tabOrder 的键集就少了一半。 -->
+      <span class="tab-pool" hidden aria-hidden="true">
+        <button class="tab" type="button" data-tab="sessions"></button>
+        <button class="tab" type="button" data-tab="chats"></button>
+        <button class="tab" type="button" data-tab="memory"></button>
+        <button class="tab" type="button" data-tab="usage"></button>
+        <button class="tab" type="button" data-tab="skills"></button>
+        <button class="tab" type="button" data-tab="plugins"></button>
+        <!-- 桌宠（desktop-pet 插件）：一级入口已撤（2026-10-24 挪进「工具」左栏），
+             但 switchTab 仍按 .tab 契约找身份锚点 —— 删了这里就切不过去。 -->
+        <button class="tab" type="button" data-tab="desktop-pet"></button>
+        <button class="tab" type="button" data-tab="skillmarket"></button>
+        <button class="tab" type="button" data-tab="pluginmarket"></button>
+        <button class="tab" type="button" data-tab="personamarket"></button>
+        <button class="tab" type="button" data-tab="personas"></button>
+        <button class="tab" type="button" data-tab="wallpaper"></button>
+        <button class="tab" type="button" data-tab="harness"></button>
+        <button class="tab" type="button" data-tab="connection"></button>
+        <button class="tab" type="button" data-tab="settings"></button>
+      </span>
+    </nav>
+
+    <!-- 窗口控制：无边框窗口（electron/main.js 里 frame: false）自绘的标题栏按钮。
+         ⚠️ 2026-10-09（r25）去掉这里的 hidden —— 这组按钮现在**常显**：
+           ① 原型 v2 的顶栏在浏览器里也有这三颗（.right-tools > .icon-btn），
+              隐藏它们会让「浏览器 / 预览页」与真机、与原型三方都不一致；
+           ② 可见性不该依赖 desktop.js 成功执行 —— 模块加载慢、脚本报错、
+              渲染进程冻结（见 main.js 的 R44/R46 与看门狗）都会把它停在 hidden，
+              现象就是「这三颗按钮凭空消失」，只剩一个空白的右上角；
+           ③ 首帧到首屏之间还会闪一下。
+         desktop.js 仍然只在有 window.qqaDesktop（即真机壳）时绑定点击 ——
+         浏览器里它是三颗看得见、点不动的按钮，与原型的行为一致。
+         也刻意不放进 #tabs：它是拖拽区的"豁免块"，与导航项分开更清楚。 -->
+    <div class="win-controls" id="win-controls">
+      <button class="win-btn" id="win-min-btn" type="button" title="最小化" aria-label="最小化">
+        <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0.4 5h9.2" /></svg>
+      </button>
+      <button class="win-btn" id="win-max-btn" type="button" title="最大化" aria-label="最大化">
+        <svg class="ico-max" viewBox="0 0 10 10" aria-hidden="true"><rect x="0.6" y="0.6" width="8.8" height="8.8" /></svg>
+        <svg class="ico-restore" viewBox="0 0 10 10" aria-hidden="true">
+          <rect x="0.6" y="2.8" width="6.6" height="6.6" />
+          <path d="M2.8 2.8V0.6h6.6v6.6H7.2" />
+        </svg>
+      </button>
+      <button class="win-btn win-btn-close" id="win-close-btn" type="button" title="关闭（最小化到托盘）" aria-label="关闭">
+        <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0.8 0.8l8.4 8.4M9.2 0.8L0.8 9.2" /></svg>
+      </button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner hidden" role="status" aria-live="polite"></div>
+
+  <div id="loading-overlay" class="loading-overlay">
+    <div class="loading-card">
+      <div class="loading-title">QQ Agent 正在启动</div>
+      <div class="loading-sub" id="loading-status" role="status" aria-live="polite">正在启动机器人服务…</div>
+      <div class="loading-spinner"></div>
+      <!-- 日志默认折起：萌新第一次启动只该看到一句「正在启动机器人服务…」，
+           想排查再点「查看详细日志」展开（展开态只活到本次启动，不落盘）。 -->
+      <button type="button" class="btn btn-small loading-logs-toggle" id="loading-logs-toggle" aria-expanded="false">查看详细日志</button>
+      <pre class="loading-logs" id="loading-logs" hidden></pre>
+    </div>
+  </div>
+
+  <!-- ══════════ 主舞台（照原型 v2）══════════
+       .stage-main = 左栏 + 内容区。左栏是「每页一份」的：
+         · 会话首页 → .side-launch（身份区 + 开始对话 + 会话选择 / 会话设置）
+         · 其余页   → #side-nav（二级导航）+ 该页自己的列表栏（#chat-list / #memory-list /
+                      #settings-sidebar），全部由 app/14-chrome.js 的 syncChrome() 切换。 -->
+  <div class="stage">
+    <div class="stage-main" id="stage-main">
+
+      <aside id="sidebar" class="sidebar">
+        <!-- ── 会话首页左栏：PCL 启动页（PageLaunchLeft）── -->
+        <div class="side-launch" id="side-launch">
+          <div class="idwrap">
+            <div class="idbar">
+              <div class="avwrap">
+                <!-- 头像两层（照原型 .idbar .avatar）：#avatar-default 常显，
+                     登录后 .avatar 加 .logged-in 切到 #sidebar-avatar。
+                     未登录回落成 QQ 官方默认头像，而不是一个字母占位
+                     —— 原型原话：「未登录的时候回落成 QQ 官方那只默认企鹅」。 -->
+                <div class="avatar">
+                  <img id="avatar-default" class="avatar-default" src="/qq-default-avatar.png" alt="QQ 默认头像" />
+                  <img id="sidebar-avatar" alt="QQ 头像" />
+                </div>
+                <button class="idbar-refresh" id="avatar-refresh" type="button" title="刷新状态与头像" aria-label="刷新状态与头像">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1" /><path d="M18.2 3.4V8h-4.6" /></svg>
+                </button>
+              </div>
+              <div class="idbar-name" id="ident-name">未登录</div>
+              <div class="idbar-sub" id="ident-sub"><span class="dot dot-off"></span>未连接 OneBot</div>
+            </div>
+          </div>
+
+          <div class="side-actions">
+            <button class="launch" id="launch-btn" type="button">
+              <span class="launch-title">开始对话</span>
+              <span class="launch-sub" id="launch-sub">还没有会话</span>
+            </button>
+            <div class="mini-row">
+              <button class="mini-btn" id="view-btn" type="button">会话选择</button>
+              <button class="mini-btn" id="cfg-btn" type="button">会话设置</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── 其余页左栏：该页自己的二级导航（内容由 syncChrome 渲染）── -->
+        <nav class="side-nav" id="side-nav" hidden></nav>
+
+        <!-- ── 每页一份的列表栏 ══════════════════════════════════════════
+             这三个原本各自塞在 .view 里（左栏只有它们自己是"半栏"），现在统一提升到
+             左栏，由 syncChrome 按当前页显隐 —— 与原型「左栏是每页一份的」一致。
+             ⚠️ id 与 class(.list-pane) 全部保留：16 个渲染器文件按 id 灌数据，
+                靠 id 与类名定位，搬家不影响。 -->
+        <aside id="chat-list" class="list-pane side-pane" hidden>
+          <div class="list-head muted">消息存档</div>
+          <div id="chat-items"></div>
+        </aside>
+
+        <aside id="memory-list" class="list-pane side-pane" hidden>
+          <div class="list-head muted">记忆</div>
+          <div id="memory-items"></div>
+        </aside>
+
+        <aside id="settings-sidebar" class="settings-sidebar side-pane" hidden></aside>
+
+        <!-- 社区入口：r36 起迁到设置页内容区底部（#view-settings > .settings-foot）——
+             原先挂在左栏底部的一摞大按钮与设置菜单的安静风格不符（用户 r36）。
+             按钮 id 全部不变，10-feedback.js 的绑定零改动。 -->
+      </aside>
+
+      <main id="layout">
+        <!-- 会话首页：PCL 启动页式的空舞台 —— 内容都收进左下角两个按钮，
+             这里只留一张 MyHint（可关）+ 一行指路。真正的会话列表与聊天在
+             #bigpage（全屏页）里，由「会话选择」/「开始对话」进入。 -->
+        <section id="view-sessions" class="view active">
+          <div class="stage-empty">
+            <div class="bs-hint" id="stage-hint">
+              <svg class="bs-hi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8h.01M11 12h1v5h1M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              <span id="stage-hint-text">会话 / 存档 / 记忆 都在左下角的「<b>会话选择</b>」里，会话级设置收进「<b>会话设置</b>」。</span>
+              <button class="bs-hx" id="stage-hint-close" type="button" title="关闭提示" aria-label="关闭提示">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2,0 L0,2 8,10 0,18 2,20 10,12 18,20 20,18 12,10 20,2 18,0 10,8 2,0Z" fill="currentColor" stroke="none" /></svg>
+              </button>
+            </div>
+            <div class="stage-note">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l-6 6 6 6M3 12h13a5 5 0 0 1 5 5v1" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              <span>会话 · 存档 · 记忆 —— 都在左下角的「会话选择」里</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- 存档视图：列表栏已提升到左栏，这里只留详情 -->
+        <section id="view-chats" class="view">
+          <div id="chat-detail" class="detail-pane">
+            <div class="empty-hint">← 选择左侧会话查看消息存档</div>
+          </div>
+        </section>
+
+        <!-- 连接视图（2026-10-23：原 SnowLuma 视图。协议端改由用户自装，本页只报连接状态） -->
+        <section id="view-connection" class="view">
+          <div id="connection-page" class="snowluma-pane"></div>
+        </section>
+
+        <!-- 记忆视图：同上，列表栏在左栏 -->
+        <section id="view-memory" class="view">
+          <div id="memory-detail" class="detail-pane">
+            <div class="empty-hint">← 选择会话查看记忆</div>
+          </div>
+        </section>
+
+        <!-- 用量视图 -->
+        <section id="view-usage" class="view">
+          <!-- 今日用量 / 搜索次数（原顶栏状态胶囊的两项）。
+               ⚠️ 必须放在 #usage-page 之外：那个容器由 renderUsagePage() 用
+               innerHTML 整体重建（骨架+轮询刷新），放进去会被下一次渲染直接抹掉。
+               id 保持原样 → refreshStatus 里那两处 textContent 赋值照旧生效。 -->
+          <div class="usage-strip">
+            <div class="usage-strip-inner">
+              <span id="usage-label" class="muted">今日：-</span>
+              <span class="sep"></span>
+              <span id="search-count-label" class="muted" title="今日联网搜索次数（web_search / web_fetch）">搜索：-</span>
+            </div>
+          </div>
+          <div id="usage-page" class="usage-pane"></div>
+        </section>
+
+        <!-- 技能视图：从设置页独立出来（原先和模型/聊天设置挤在一起，找不到） -->
+        <section id="view-skills" class="view">
+          <div id="skills-page" class="usage-pane"></div>
+        </section>
+
+        <!-- 插件视图：与技能并列的独立页签。
+             两型的区别在"谁决定何时执行"（确定性 vs 模型决定），是使用者最关心的一件事，
+             所以分成两页各自成组 —— 混在一页里既看不出类型，也数不清各有多少。 -->
+        <section id="view-plugins" class="view">
+          <div id="plugins-page" class="usage-pane"></div>
+        </section>
+
+        <!-- 桌宠视图（desktop-pet 插件）：角色库、动作/表情/坐站控制台、屏幕陪伴与生活成就。
+             面板内容全部由 /app/15-desktop-pet.js 渲染 —— 与技能/插件页同一套
+             「容器在本页、内容由脚本填」的约定。 -->
+        <section id="view-desktop-pet" class="view">
+          <div id="desktop-pet-page" class="usage-pane"></div>
+        </section>
+
+        <!-- 市场视图（r87）：应用内直接浏览/搜索/筛选市场条目并一键安装。
+             ⚠️ 此前「添加技能」只有一个「看看技能市场」按钮 → 跳到外链网页 + 回来贴口令，
+                绝大多数用户卡在这一步（不知道有什么可装、也不会走口令流程）。
+                这里把官网市场列表搬进应用内（后端 /api/market/list 代理，绕开 CORS）。
+             ⚠️ #view-skillmarket 与 #view-pluginmarket 是**两个独立视图**，
+                因为 switchTab 按 `view-<name>` 找容器、tab-pool 也要有对应 data-tab 锚点。
+                两者共用同一份渲染逻辑（16-market.js），只是 kind 不同。 -->
+        <section id="view-skillmarket" class="view">
+          <div id="skillmarket-page" class="market-page"></div>
+        </section>
+
+        <section id="view-pluginmarket" class="view">
+          <div id="pluginmarket-page" class="market-page"></div>
+        </section>
+
+        <!-- 人设市场视图（r113）：第三种市场。人设是**文本**不是代码 ——
+             没有 zip、没有安装口令，落到 config.customPersonas，装完还要切一次才生效。
+             所以它是**独立视图 + 独立脚本**（17-persona-market.js），刻意不复用
+             16-market.js 的 loadMarket / installFromMarket —— 那套每一处都假定
+             "东西是代码"，硬合会让它长满 if (kind==='persona') 分支。 -->
+        <section id="view-personamarket" class="view">
+          <div id="personamarket-page" class="market-page"></div>
+        </section>
+
+        <!-- 已安装的人设（2026-10-22）：技能 / 插件在「已安装」段各有一页，人设是
+             同一类东西却没有 —— 市场页只能给市场条目打「已应用」徽标，装完之后
+             看不见装了什么、也切不走删不掉。这一页补上那个缺口。
+             ⚠️ 容器刻意用 .usage-pane（与 #view-skills / #view-plugins 同款），
+                而不是 .market-page：插件页是 .usage-pane + .usage-wrap(940px 居中)，
+                市场页没有宽度上限、内容铺满 1184px。混用会让同一套 .mcard 在两种
+                宽度下呈现成两个样子（卡片 305px vs 380px、左边距 116px vs 14px）。 -->
+        <section id="view-personas" class="view">
+          <div id="personas-page" class="usage-pane"></div>
+        </section>
+
+        <!-- 壁纸视图：现在只是 #wallpaper-page 的**停靠点**，不是给人看的页面。
+             后端走内置壁纸模块的能力中介（/api/wallpaper/*），
+             内容由 app/14-wallpaper.js 渲染进 #wallpaper-page。
+
+             ⚠️（2026-10-24）主入口改成**弹窗**：设置 → 外观与数据 → 界面背景 →
+                「🎨 打开壁纸库…」→ 14-wallpaper.js 的 wpOpenLibrary()。
+                打开时 #wallpaper-page 整个节点被搬进 .model-modal-body（同一个节点
+                换宿主，监听器原样带走，loadWallpaperPage 不用改），关闭时挂在
+                overlay 的 qa-close 上搬回来。
+                所以这个 section 平时是空的、也永远不会被 switchTab 激活。
+                **留着不是历史包袱**：搬家需要一个落点，删了节点就无处安放 ——
+                弹窗一关，页面本体跟着 overlay 一起被 remove()。
+             容器仍用 .settings-pane（990 居中 + 玻璃卡片 + 22/26 内边距）：
+             弹窗态由 .wp-lib-pane 把这层壳卸掉，停靠态保持整页观感。 -->
+        <section id="view-wallpaper" class="view">
+          <div id="wallpaper-page" class="settings-pane"></div>
+        </section>
+
+        <!-- harness 视图（排障工作台，self-doctor 插件的前端）。
+             ⚠️ 页面容器 id 由 app/13-doctor.js 整体重建，别把需要在页签切换后
+                幸存的状态（输入框内容等）直接写在 innerHTML 里 —— 用模块级变量存。 -->
+        <section id="view-harness" class="view">
+          <div id="harness-page" class="usage-pane"></div>
+        </section>
+
+        <!-- 设置视图：分区菜单（#settings-sidebar）与社区入口已提升到左栏 -->
+        <section id="view-settings" class="view">
+          <div id="settings-form" class="settings-pane"></div>
+          <!-- 社区入口（r36 自设置左栏迁来）：内容区底部一行安静的小字链接。
+               ID 与原先完全一致（quote/feedback/skill-market/plugin-market/
+               persona-plaza/open-site），事件绑定在 10-feedback.js，零改动。 -->
+          <footer class="settings-foot" id="settings-foot">
+            <span class="sf-title">社区</span>
+            <button class="sf-link" id="quote-btn" type="button" title="把机器人的精彩发言收录到金句墙">金句上传</button>
+            <span class="sf-sep" aria-hidden="true">·</span>
+            <button class="sf-link" id="feedback-btn" type="button" title="向作者反馈意见和建议">意见收集</button>
+            <span class="sf-sep" aria-hidden="true">·</span>
+            <button class="sf-link" id="skill-market-btn" type="button" title="打开 Skill 市场">Skill 市场</button>
+            <span class="sf-sep" aria-hidden="true">·</span>
+            <button class="sf-link" id="plugin-market-btn" type="button" title="打开插件市场">插件市场</button>
+            <span class="sf-sep" aria-hidden="true">·</span>
+            <button class="sf-link" id="persona-plaza-btn" type="button" title="打开人设广场">人设广场</button>
+            <span class="sf-sep" aria-hidden="true">·</span>
+            <button class="sf-link sf-link-hot" id="open-site-btn" type="button" title="打开 QQ Agent 网站">打开网站 ↗</button>
+          </footer>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ══════════ 全屏页（照原型 v2 的 .bigpage）══════════
+       两个模式共用一条 PCL 风格的标题条（← 返回 + 标题 + 面包屑 + 窗口按钮）：
+         · mode-chat  「会话选择」→ 左＝会话列表（#session-list），右＝状态条 + 消息流（#session-detail）
+         · mode-setup 「会话设置」→ 左＝当前会话 + 分区入口，右＝该分区的设置表单
+       ⚠️ #session-list / #session-detail 是整块从 #view-sessions 搬进来的，id 与
+          class（.list-pane / .detail-pane）未变 —— 02-sse-sessions.js 灌数据，
+          全部照旧工作。 -->
+  <div class="bigpage" id="bigpage" hidden>
+    <div class="bp-head">
+      <button class="bp-back" id="bp-back" type="button" title="返回（Esc）" aria-label="返回">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      </button>
+      <span class="bp-title" id="bp-title">会话</span>
+      <span class="bp-crumb" id="bp-crumb"></span>
+      <div class="bp-win">
+        <button class="bp-min" id="bp-min" type="button" title="最小化" aria-label="最小化">
+          <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0.4 5h9.2" /></svg>
+        </button>
+        <button class="bp-max" id="bp-max" type="button" title="最大化" aria-label="最大化">
+          <svg viewBox="0 0 10 10" aria-hidden="true"><rect x="0.6" y="0.6" width="8.8" height="8.8" /></svg>
+        </button>
+        <button class="bp-x" id="bp-x" type="button" title="关闭本页（返回）" aria-label="关闭本页">
+          <!-- ⚠️ 与主顶栏 #win-close-btn 的 svg **逐字符相同**（viewBox 0 0 10 10 + 细线圆头 path）。
+               原先这里是 viewBox 0 0 20 20 的「粗 × 轮廓」path（fill 被 CSS 的 `.bp-win svg
+               { fill:none }` 覆盖成描边），渲染出来比主顶栏粗一号、线端还是方角 ——
+               与「同款」不符，用户 r28 报过位置/形状不一致。别改回去。 -->
+          <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0.8 0.8l8.4 8.4M9.2 0.8L0.8 9.2" /></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="bp-body">
+      <!-- ── 模式一：会话（列表 + 聊天）── -->
+      <div class="bp-mode bp-mode-chat" id="bp-mode-chat">
+        <aside id="session-list" class="list-pane">
+          <div class="list-head muted">
+            <div class="lh-row">
+              <span id="session-count"></span>
+              <button type="button" class="list-head-btn" id="session-broadcast-btn" title="给选中的群/私聊批量发送一条消息">群发</button>
+              <button type="button" class="list-head-btn" id="session-clear-btn" title="清空全部已结束的会话记录（保留运行中/等待中的）">清空</button>
+            </div>
+            <!-- OneBot 连接状态 + 当前模型 + 就绪圆点 / 暂停
+                 —— 原顶栏「状态胶囊」的全部内容（2026-09-19 迁入；主题按钮 2026-09-20 移除）。
+                 随列表头一起吸顶：连接与模型决定「消息收不收得到 / 谁来回复」，
+                 就绪圆点指出 QQ / 协议端 / OneBot / 配置四步卡在哪，都是看会话时最需要的上下文。
+                 id 全部未变 → 状态更新、就绪圆点点击跳转、暂停按钮照旧生效。 -->
+            <div class="session-status">
+              <div class="ss-row">
+                <span id="onebot-dot" class="dot dot-off" title="OneBot 连接状态"></span>
+                <span id="onebot-label" class="muted">OneBot 未连接</span>
+              </div>
+              <div class="ss-row">
+                <span id="model-label" class="muted">模型：-</span>
+              </div>
+              <div class="ss-row ss-actions">
+                <!-- 就绪进度指示器：4 圆点 = QQ运行 / QQ连接组件运行 / QQ连接 / 配置完成。
+                     2026-10-18：每个点包一层 .rdot-item —— 未就绪时在旁边补一个红色缩写
+                     （中文短词，如 ⚠QQ / ⚠连接 / ⚠配置），不用悬停也知道缺哪一项；全部就绪时
+                     标签为空，仍是最简洁的四个点。 -->
+                <span id="readiness-dots" class="readiness-dots" title="就绪进度：点击跳转到对应设置">
+                  <span class="rdot-item" data-target="connection" title="QQ 没启动"><span class="rdot"></span><b class="rdot-t"></b></span>
+                  <span class="rdot-item" data-target="connection" title="协议端（SnowLuma / NapCat）没启动"><span class="rdot"></span><b class="rdot-t"></b></span>
+                  <span class="rdot-item" data-target="connection" title="机器人没连上"><span class="rdot"></span><b class="rdot-t"></b></span>
+                  <span class="rdot-item" data-target="settings" title="配置未完成"><span class="rdot"></span><b class="rdot-t"></b></span>
+                </span>
+                <span class="ss-spacer"></span>
+                <button id="pause-btn" type="button" class="btn btn-small" title="暂停后机器人不再处理任何消息，随时可恢复">暂停</button>
+              </div>
+            </div>
+          </div>
+          <div id="session-items"></div>
+          <div id="session-more" class="list-more muted"></div>
+        </aside>
+
+        <div id="session-detail" class="detail-pane">
+          <div class="empty-hint">← 选择左侧会话查看完整过程</div>
+        </div>
+      </div>
+
+      <!-- ── 模式二：会话设置（会话选择 | 该会话的专属设置）──
+           左栏 = 可配置的会话清单（白名单 ∪ 会话列表），右栏 = 选中会话的按会话设置。
+           ⚠️ 2026-10-09（r33）：这里原先放的是**借来的** #settings-form（从 #view-settings
+              appendChild 搬进来、只显示全局前三个分区）—— 于是它和导航栏「设置」是同一份
+              内容，用户报"二者重复"。现在改成由 14-chrome.js 的 renderSetupPane() 渲染
+              **只属于这一个会话**的内容，全局设置页留在原地、两页互不干扰。 -->
+      <div class="bp-mode bp-mode-setup" id="bp-mode-setup" hidden>
+        <aside class="bp-left" id="bp-setup-left"></aside>
+        <section class="bp-right">
+          <div class="bp-scroll" id="bp-setup-scroll"></div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- r107：留出来的这一层什么也不放（后续特性备用）。 -->
+  </div>
+  <!-- /.app-shell -->
+
+  <!-- 自定义气泡提示：必须先于业务脚本 —— 窗口是 transparent 的，Windows 原生
+       tooltip 会渲染成淡黄色色块（且常留残影），所以全局接管 [title]，见 tooltip.js。
+       这两个都是 module，仍排在 app.js（module）之前；后面的 defer 普通脚本
+       与 module 共享同一条按文档顺序的延迟队列，所以整体顺序不变。 -->
+  <script type="module" src="/tooltip.js"></script>
+  <script type="module" src="/desktop.js"></script>
+
+  <!-- M9 拆分：ESM 桥（vendor 模块 → window）先执行；其后 12 段普通脚本按 defer 顺序执行，
+       module 与 defer 共享同一条按文档顺序的延迟队列，保证桥先于 00-core.js。 -->
+  <script type="module" src="/app.js"></script>
+  <script defer src="/app/00-core.js"></script>
+  <script defer src="/app/00-preview.js"></script>
+  <script defer src="/app/01-boot.js"></script>
+  <script defer src="/app/02-sse-sessions.js"></script>
+  <script defer src="/app/03-connection.js"></script>
+  <script defer src="/app/04-archive-usage.js"></script>
+  <script defer src="/app/05-memory-settings.js"></script>
+  <script defer src="/app/06-settings-render.js"></script>
+  <script defer src="/app/07-settings-events.js"></script>
+  <script defer src="/app/08-modals.js"></script>
+  <script defer src="/app/09-dialogs.js"></script>
+  <script defer src="/app/09-community.js"></script>
+  <script defer src="/app/10-feedback.js"></script>
+  <script defer src="/app/10a-captcha.js"></script>
+  <!-- 桌宠管理页控制器（经典脚本，靠 00-core 提供的全局 api()/state/switchTab）。
+       必须排在 00-core 之后、11-init 之前：init 的首次 switchTab 之后才轮到它被调用。 -->
+  <script defer src="/app/15-desktop-pet.js"></script>
+  <script defer src="/app/11-init.js"></script>
+  <!-- harness 页（self-doctor 插件的前端）：自检系统 + 对话审查两个模块。
+       独立成段、放最后：它只被 switchTab('harness') 调 loadHarnessPage()，
+       与其它页无先后依赖，排在末尾不会影响既有初始化顺序。 -->
+  <script defer src="/app/13-doctor.js"></script>
+  <!-- 新信息架构（照原型 v2）：一级 5 项导航 / 左栏每页一份 / 全屏页。
+       放在最后：它包裹 switchTab（00-core.js）并把 DOM 结构补齐 —— 两者都是
+       「后加载才稳」的依赖。 -->
+  <script defer src="/app/14-chrome.js"></script>
+  <!-- 全屏「会话选择」页的左栏 / 右栏 chrome（照原型 v2 .bigpage.mode-chat）。
+       排在 14-chrome 之后：它包裹 02-sse-sessions.js 的 renderSessionList /
+       renderSessionDetail 两个**全局函数**（同 14-chrome 包裹 switchTab 的做法），
+       并在 14-chrome 把 DOM 结构补齐之后再挂自己的观察器。 -->
+  <script defer src="/app/15-chat-chrome.js"></script>
+  <script defer src="/app/16-market.js"></script>
+  <!-- r113：人设市场。必须排在 16-market.js **之后** ——
+       本文件的 personaToast 复用它的 marketToast（视觉要与技能/插件市场一致），
+       顺序反了会在首次提示时退化成自绘的兜底版（样式近似但不同源）。 -->
+  <script defer src="/app/17-persona-market.js"></script>
+  <!-- 启动引导（OOBE）：自包含轮询 state.config 后自行判断是否展示，
+       不与启动链耦合（config 拿不到就不弹，交给横幅/就绪圆点）。 -->
+  <script defer src="/app/18-onboarding.js"></script>
+  <!-- 已安装的人设页。必须排在 17-persona-market.js **之后** ——
+       它复用那边的 personaToast / personaFmtLen / openPersonaPreview（预览浮层是
+       那边创建的全局单例），顺序反了会在首次点击时抛 undefined。 -->
+  <!-- 莫奈取色的调色算子（Material Color Utilities 打包版）。必须在 14-wallpaper.js
+       之前：壁纸页会读全局 md3，缺失时降级成饱和度加权直方图的粗取色。 -->
+  <script defer src="/app/vendor-md3.js"></script>
+  <script defer src="/app/14-wallpaper.js"></script>
+  <script defer src="/app/19-personas.js"></script>
+  <!-- 全界面透明（玻璃层）：把「一条滑条管全部界面」接到 applyUiCustom 上。
+       必须排在最后 —— 它要包 00-core.js 里定义的 applyUiCustom，
+       早于那边就会包空（脚本内部有重试兜底，但顺序对最省事）。 -->
+  <script defer src="/app/20-glass.js"></script>
+</body>
+</html>

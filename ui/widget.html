@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QQ Agent 悬浮窗</title>
+  <!-- CSP 与 ui/index.html 同口径（src/app.js 的静态服务还会以 HTTP 头再下发一份，
+       两份取交集）。这里放行内联样式（style-src 'unsafe-inline'）—— 小窗刻意不引
+       /style.css：主样式 8.8k 行是为整个控制台准备的，一张小卡片用不上，
+       每次开窗全量拉一遍纯浪费。脚本必须是外链（script-src 没有 unsafe-inline）。 -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
+  <style>
+    /* 主题变量（深色为默认；主题由 JS 按后端 config.ui.theme 切 data-theme）。
+       颜色与主界面 style.css 的 dark/light 两套变量保持同一族色值。 */
+    :root {
+      --card-top: #1e2532;                 /* 卡片顶部（渐变亮端） */
+      --card-bg: #141821;                  /* 卡片底部（渐变暗端） */
+      /* 同两色的 rgb 通道 + alpha：主进程按 widget.opacity 调 alpha 实现
+         背景不透明度（30~100%，默认档 50%）。这里是首帧的初值 —— 取 0.5
+         与默认档一致：透明窗口刚开时不会先闪一下不透明深色卡。
+         transparent 关掉时 alpha<1 会叠在 mica 毛玻璃背板上（见 main.js
+         createWidgetWindow），得到了磨砂效果。 */
+      --card-top-rgb: 30, 37, 50;
+      --card-bg-rgb: 20, 24, 33;
+      --card-alpha: 0.5;
+      --fg: #e8ecf3;
+      --dim: #8b9bb4;
+      --line: rgba(255, 255, 255, 0.08);
+      --ok: #3fce7a;
+      --warn: #ffb454;
+      --bad: #e5484d;
+      --off: #6b7686;
+      --track: rgba(255, 255, 255, 0.1);
+      --glow-ok: rgba(63, 206, 122, 0.22);
+      --glow-warn: rgba(255, 180, 84, 0.2);
+      --glow-bad: rgba(229, 72, 77, 0.2);
+      /* 卡片圆角只有一个来源（与 electron/main.js createWidgetWindow 对齐）：
+         · 默认（真透明，html 上没类）→ DWM 不参与分层窗口的圆角，页面画 12px；
+         · 不透明 / 毛玻璃（html.wd）→ 圆角由 Win11 DWM 裁，页面必须画直角。
+           页面再画 12px 圆弧会跟 DWM 的 8px 圆弧对不上，两弧之间露出一片窗口底色
+           —— 用户反馈的"角上一块黑"就是它。
+         ⚠️ 默认值取"页面画圆角"而不是直角：配置是页面起来后异步拉的，若默认直角，
+         真透明档在首帧会先闪一下方角。反过来则不会 —— 不透明档里 DWM 的 8px 裁切
+         比页面的 12px 更紧，多画的那点圆弧直接被裁掉，看起来完全一样。 */
+      --wcard-radius: 12px;
+      /* 描边也要跟着圆角来源走：DWM 档下页面是直角矩形，1px 描边沿着方形边缘画，
+         会被 DWM 的 8px 圆弧从四角切掉半截（边缘线走到角上突然断掉，比没有还难看）。
+         所以 DWM 档干脆不画描边 —— 边缘交给 DWM 的裁切 + 系统阴影。 */
+      --wcard-border: 1px solid var(--line);
+    }
+    /* widget.js 每次拉到 /api/config 后按 widget.transparent **取反**挂/摘这个类 */
+    html.wd { --wcard-radius: 0px; --wcard-border: 0px solid transparent; }
+    html[data-theme="light"] {
+      --card-top: #ffffff;
+      --card-bg: #f4f6fa;
+      --card-top-rgb: 255, 255, 255;
+      --card-bg-rgb: 244, 246, 250;
+      --fg: #1a1f2b;
+      --dim: #66718a;
+      --line: rgba(0, 0, 0, 0.09);
+      --ok: #1f9d55;
+      --warn: #b97a1e;
+      --bad: #c93a3f;
+      --off: #98a1ad;
+      --track: rgba(0, 0, 0, 0.08);
+      --glow-ok: rgba(31, 157, 85, 0.18);
+      --glow-warn: rgba(185, 122, 30, 0.16);
+      --glow-bad: rgba(201, 58, 63, 0.16);
+    }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: transparent;          /* 透明模式下让桌面透出来；卡片自己画底 */
+      color: var(--fg);
+      font: 13px/1.45 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+      overflow: hidden;                  /* 小窗不出现滚动条 */
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    /* 整卡可拖（主进程无边框窗口，没有标题栏可抓）。
+       副作用：卡片内不能选中文字 —— 状态卡片没有这个需求，可接受。 */
+    .wcard {
+      -webkit-app-region: drag;
+      position: relative;        /* 自绘菜单 absolute inset:0 的基准（否则会以视口为基准） */
+      box-sizing: border-box;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 1.6%;
+      padding: 4.5% 5.5%;
+      background: linear-gradient(165deg, rgba(var(--card-top-rgb), var(--card-alpha)), rgba(var(--card-bg-rgb), var(--card-alpha)) 62%);
+      border: var(--wcard-border);
+      border-radius: var(--wcard-radius);
+      /* 这里原有一条 box-shadow，**画不出来**：卡片 height:100% 铺满窗口，
+         body 又是 overflow:hidden，28px 的外阴影全被裁掉，纯属死代码。
+         窗口的立体感在不透明档由 DWM 的窗口阴影提供（见 main.js）；
+         真透明档是分层窗口，DWM 一般不给阴影，要留阴影得给窗口留内边距 ——
+         那会把卡片整体缩小一圈，不值当。别把这条加回来。
+         ⚠️ backdrop-filter 在 Windows 的透明窗口上**糊不到桌面**（Chromium 拿不到
+         窗口背后的像素），只能糊页面内部的东西。真想要"磨砂透明"，用不透明档 +
+         acrylic 背板（见 main.js），不要指望这一行。 */
+      backdrop-filter: blur(10px);      /* 只糊得到页面内部；桌面见上方说明 */
+    }
+    /* ── 头部：状态点 + 标题 + 模型名 ── */
+    .whead {
+      display: flex;
+      align-items: center;
+      gap: 2.6%;
+      min-width: 0;
+      padding-bottom: 2.6%;
+      border-bottom: 1px solid var(--line);
+    }
+    .wdot {
+      flex: none;
+      width: 2.4%; min-width: 7px; max-width: 9px;
+      aspect-ratio: 1;
+      border-radius: 50%;
+      background: var(--off);
+    }
+    .wdot.ok   { background: var(--ok);   box-shadow: 0 0 0 3px var(--glow-ok);   animation: breathe 2.6s ease-in-out infinite; }
+    .wdot.wait { background: var(--warn); box-shadow: 0 0 0 3px var(--glow-warn); }
+    .wdot.bad  { background: var(--bad);  box-shadow: 0 0 0 3px var(--glow-bad); }
+    /* 在线指示缓慢呼吸（"活着"的感觉）。系统要求减少动效时关掉。 */
+    @keyframes breathe {
+      0%, 100% { box-shadow: 0 0 0 3px var(--glow-ok); }
+      50%      { box-shadow: 0 0 0 5px transparent; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .wdot.ok { animation: none; }
+      .wbar i { transition: none; }
+    }
+    .wtitle {
+      font-size: clamp(11px, 4.4vw, 14.5px);
+      font-weight: 650;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .wmodel {
+      margin-left: auto;                 /* 推到最右：当前模型名，一眼知道在跑谁 */
+      font-size: clamp(8px, 2.9vw, 11px);
+      color: var(--dim);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 46%;
+      min-width: 0;
+    }
+    /* ── 指标区：两列 + 中缝细线 ── */
+    .wgrid {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      min-height: 0;
+    }
+    .wcol {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-evenly;
+      gap: 1.2%;
+      min-width: 0;
+    }
+    .wcol + .wcol { border-left: 1px solid var(--line); padding-left: 7%; }
+    .wcell { display: flex; flex-direction: column; min-width: 0; }
+    .wcell b {
+      font-size: clamp(13px, 7vw, 21px);
+      font-weight: 680;
+      line-height: 1.12;
+      font-variant-numeric: tabular-nums;   /* 数字等宽，轮询刷新时不跳动 */
+      white-space: nowrap;
+    }
+    .wcell b.na {                            /* 未计价等"没有值"的弱化显示 */
+      color: var(--dim);
+      font-size: clamp(11px, 4.6vw, 15px);
+      font-weight: 600;
+    }
+    .wcell span {
+      font-size: clamp(9px, 3.2vw, 11.5px);
+      color: var(--dim);
+      white-space: nowrap;
+    }
+    .wcline { display: flex; align-items: baseline; gap: 6%; min-width: 0; }
+    .wbar {
+      height: 3px;
+      border-radius: 2px;
+      background: var(--track);
+      margin-top: 4%;
+      overflow: hidden;
+    }
+    .wbar i {
+      display: block;
+      height: 100%;
+      width: 0;
+      border-radius: 2px;
+      background: var(--off);
+      transition: width 0.45s ease;
+    }
+    .wbar i.hi  { background: var(--ok); }
+    .wbar i.mid { background: var(--warn); }
+    .wbar i.lo  { background: var(--bad); }
+    /* ── 底部：搜索次数 / 附加状态 / 更新时间 ── */
+    .wfoot {
+      display: flex;
+      align-items: center;
+      gap: 3%;
+      font-size: clamp(9px, 3.1vw, 11.5px);
+      color: var(--dim);
+      white-space: nowrap;
+      overflow: hidden;
+      border-top: 1px solid var(--line);
+      padding-top: 2.6%;
+    }
+    .wfoot .grow { margin-left: auto; }
+    .wfoot .warn { color: var(--warn); }
+    /* ── 右键菜单：卡片内自绘（原生菜单在 Windows 上改不了样式）──
+       整块盖在卡片上，行高按小窗高度压到最紧；尺寸更小的档位（s）会滚动。 */
+    .wmenu {
+      position: absolute;
+      inset: 0;
+      z-index: 5;
+      -webkit-app-region: no-drag;   /* 菜单要能点，不能整块都在拖拽区里 */
+      background: rgba(var(--card-bg-rgb), 0.96);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-sizing: border-box;
+      padding: 5px 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      overflow: auto;
+    }
+    .wmenu[hidden] { display: none; }
+    .wrow {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex: none;
+      height: clamp(15px, 8.6vh, 19px);
+      padding: 0 5px;
+      border-radius: 5px;
+      font-size: clamp(9px, 3.1vw, 11.5px);
+      color: var(--fg);
+      cursor: default;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    .wrow:hover { background: rgba(127, 127, 127, 0.16); }
+    .wrow .wtick {
+      flex: none;
+      width: 11px;
+      text-align: center;
+      color: var(--ok);
+      opacity: 0;
+    }
+    .wrow.on .wtick { opacity: 1; }
+    .wrow .wlab { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .wrow.danger { color: var(--bad); }
+    .wseg { display: flex; gap: 2px; margin-left: auto; }
+    .wseg button {
+      font: inherit;
+      font-size: clamp(8.5px, 2.8vw, 10.5px);
+      line-height: 1;
+      padding: 2px 5px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: transparent;
+      color: var(--dim);
+      cursor: default;
+    }
+    .wseg button.cur {
+      background: var(--ok);
+      border-color: transparent;
+      color: var(--card-bg);
+    }
+    .wmenu input[type="range"] {
+      flex: 1;
+      min-width: 40px;
+      height: 12px;
+      margin: 0;
+      -webkit-app-region: no-drag;
+    }
+    .wopaval { flex: none; min-width: 30px; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+    .whint { color: var(--dim); font-size: clamp(8.5px, 2.7vw, 10.5px); padding: 0 5px 2px; flex: none; }
+    .whint[hidden] { display: none; }
+    .wmenu.off .wrow, .wmenu.off .wseg button { opacity: .45; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <div class="wcard" id="wcard">
+    <!-- 右键菜单（自绘，默认隐藏）。动作全部经 window.qqaWidget 桥回主进程；
+         桥不存在时整块置灰并给出提示（设置页/托盘菜单仍可调）。 -->
+    <div class="wmenu" id="w-menu" hidden>
+      <div class="whint" id="w-menu-hint" hidden>菜单不可用：请重启 QQ Agent</div>
+      <div class="wrow" data-cmd="open-console"><span class="wlab">打开主界面</span></div>
+      <div class="wrow" data-toggle="alwaysOnTop"><span class="wtick">✓</span><span class="wlab">总是置顶</span></div>
+      <div class="wrow" data-toggle="clickThrough"><span class="wtick">✓</span><span class="wlab">鼠标穿透</span></div>
+      <div class="wrow" data-toggle="edgeHide"><span class="wtick">✓</span><span class="wlab">贴边自动收起</span></div>
+      <div class="wrow">
+        <span class="wlab" style="flex:none">尺寸</span>
+        <span class="wseg">
+          <button type="button" data-size="s">小</button>
+          <button type="button" data-size="m">中</button>
+          <button type="button" data-size="l">大</button>
+        </span>
+      </div>
+      <div class="wrow">
+        <span class="wlab" style="flex:none">不透明度</span>
+        <input type="range" id="w-menu-opa" min="30" max="100" step="1" />
+        <span class="wopaval" id="w-menu-opa-val">100%</span>
+      </div>
+      <div class="wrow danger" data-cmd="close"><span class="wlab">关闭悬浮窗</span></div>
+    </div>
+    <div class="whead">
+      <span class="wdot" id="w-dot"></span>
+      <span class="wtitle" id="w-title">连接中…</span>
+      <span class="wmodel" id="w-model" hidden></span>
+    </div>
+    <div class="wgrid">
+      <div class="wcol">
+        <div class="wcell"><b id="w-runs">–</b><span>今日调用</span></div>
+        <div class="wcell"><b id="w-tokens">–</b><span>总 Token</span></div>
+      </div>
+      <div class="wcol">
+        <div class="wcell"><b id="w-cost">–</b><span>估算成本</span></div>
+        <div class="wcell">
+          <div class="wcline"><b id="w-hit">–</b><span>缓存命中</span></div>
+          <div class="wbar"><i id="w-hit-bar"></i></div>
+        </div>
+      </div>
+    </div>
+    <div class="wfoot" id="w-foot">
+      <span id="w-search">正在读取状态…</span>
+      <span id="w-extra" class="warn" hidden></span>
+      <span class="grow"></span>
+      <span id="w-time" hidden></span>
+    </div>
+  </div>
+  <script src="/app/widget.js"></script>
+</body>
+</html>

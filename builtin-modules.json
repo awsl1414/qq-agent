@@ -1,0 +1,259 @@
+{
+  "version": 2,
+  "_comment": "随应用分发的内置模块基线（整目录逐文件 sha1，隐藏项与 .forge-origin.json 除外）。第三方安装的模块不在此列 → 走 plugin-loader.js 的 checkPluginTrust 能力闸。⚠️ 改了 resources/app/plugins|skills 下任何文件后必须重算本文件（按 sha1(字节).slice(0,16) 逐文件重写）。",
+  "modules": [
+    {
+      "id": "account-pool",
+      "dir": "account-pool",
+      "kind": "plugin",
+      "entry": "index.js",
+      "files": {
+        "index.js": "b3c52252ae71f441",
+        "plugin.json": "75d526dd6156bc57"
+      }
+    },
+    {
+      "id": "ban-state",
+      "dir": "ban-state",
+      "kind": "plugin",
+      "entry": "index.js",
+      "files": {
+        "index.js": "75cf74ae277586cc",
+        "plugin.json": "70721cd634c44f91"
+      }
+    },
+    {
+      "id": "cache-guard",
+      "dir": "cache-guard",
+      "kind": "plugin",
+      "entry": "index.js",
+      "files": {
+        "index.js": "f05a9633b45f9688",
+        "plugin.json": "7c68c2da72766749"
+      }
+    },
+    {
+      "id": "mem-layered",
+      "dir": "mem-layered",
+      "kind": "plugin",
+      "entry": "index.js",
+      "files": {
+        "README.md": "c3839a9598e7b6b2",
+        "docs/human-like-memory.html": "9e9e2945b823c854",
+        "index.js": "601918753b2ca94a",
+        "lib/archive.js": "c2624125c80fd642",
+        "lib/budget.js": "e5a0b81efa94ae50",
+        "lib/cards.js": "05020b8cdea7e6a0",
+        "lib/conflict.js": "b348e1eea33b9b61",
+        "lib/consolidate.js": "52a9d9e629c87557",
+        "lib/crossturn.js": "8d935389ea61f224",
+        "lib/env.js": "4f84553caf87c6ac",
+        "lib/gist.js": "2cc0ea5b58eb964b",
+        "lib/inject.js": "707c8c427cf1e7f9",
+        "lib/peek.js": "41d55a805056f4a3",
+        "lib/pending.js": "998e5e2d0c8258c3",
+        "lib/recall.js": "6a76f256c75dfdd7",
+        "lib/stats.js": "5025c7d249725af8",
+        "lib/store.js": "30a6f11e3e68b5c3",
+        "lib/util.js": "14be37b2a6694893",
+        "plugin.json": "b262840db6ab352f",
+        "tools/bench-soak.mjs": "007daefdfb9b72f4",
+        "tools/bench-tokens.mjs": "c901bfdd71dfa79d",
+        "tools/bench-unindex.mjs": "cc14456a480cd6bf",
+        "tools/curve-sim.html": "79f5d1e40d67e515",
+        "tools/repro-gist-hits.mjs": "75c10a882edd44ec",
+        "tools/repro-rollup-overwrite.mjs": "44ffd0f052d84c26",
+        "tools/selftest.mjs": "95b215dda1cac73b"
+      }
+    },
+    {
+      "id": "image-compat",
+      "dir": "image-compat",
+      "kind": "plugin",
+      "entry": "index.js",
+      "files": {
+        "index.js": "5b442fc6c496e4cf",
+        "plugin.json": "45e22ff63453959e"
+      }
+    },
+    {
+      "id": "media-download",
+      "dir": "media-download",
+      "kind": "plugin",
+      "entry": "index.js",
+      "files": {
+        "bili.js": "89fe9164ece68cb6",
+        "douyin.js": "e0d5b89584d87b36",
+        "index.js": "434402d8822704d1",
+        "media-common.js": "9283ff65e5e56f26",
+        "plugin.json": "656a6bfb3cd3f666"
+      }
+    },
+    {
+      "id": "owner-identity",
+      "dir": "owner-identity",
+      "kind": "plugin",
+      "entry": "index.js",
+      "files": {
+        "index.js": "a2ac0104b28ab451",
+        "plugin.json": "54bdbdc178b66949"
+      }
+    },
+    {
+      "id": "speaker-identity",
+      "dir": "speaker-identity",
+      "kind": "plugin",
+      "entry": "index.js",
+      "files": {
+        "index.js": "43aa53c11ee4dea9",
+        "plugin.json": "308939c4098267ef"
+      }
+    },
+    {
+      "id": "speech-to-text",
+      "dir": "speech-to-text",
+      "kind": "plugin",
+      "entry": "index.js",
+      "files": {
+        "index.js": "89e6d779b26243a0",
+        "plugin.json": "2c23269b7861f1fe"
+      }
+    },
+    {
+      "id": "thinking-adapters",
+      "dir": "thinking-adapters",
+      "kind": "plugin",
+      "entry": "index.js",
+      "files": {
+        "dialects.js": "4327c868aec0e154",
+        "index.js": "3401d1e2742a7024",
+        "plugin.json": "854664e0d1849918"
+      }
+    },
+    {
+      "id": "video-frames",
+      "dir": "video-frames",
+      "kind": "plugin",
+      "entry": "index.js",
+      "files": {
+        "frames.js": "0f395e406c31b358",
+        "index.js": "fc940154bc0c9de4",
+        "plugin.json": "2214fbac910caff7"
+      }
+    },
+    {
+      "id": "sticker",
+      "dir": "sticker",
+      "kind": "plugin",
+      "entry": "index.js",
+      "files": {
+        "index.js": "8651b89cc415e091",
+        "lib/manager.js": "9025835fd4ed577c",
+        "lib/stickers.js": "18444f37c06eaf3f",
+        "panel/viewer.css": "4ffe9c4a9bc124fc",
+        "panel/viewer.html": "b0a83ac7b3f89f2e",
+        "panel/viewer.js": "55d4c1697c48389f",
+        "plugin.json": "ff0bc231df152f63"
+      }
+    },
+    {
+      "id": "calculator",
+      "dir": "calculator",
+      "kind": "skill",
+      "entry": "index.js",
+      "files": {
+        "index.js": "7f7baa2fa0fbd1bf",
+        "skill.json": "f844614ff1857931"
+      }
+    },
+    {
+      "id": "help-board",
+      "dir": "help-board",
+      "kind": "skill",
+      "entry": "index.js",
+      "files": {
+        "index.js": "f1a2619662b46eba",
+        "skill.json": "68763c37eeca8788"
+      }
+    },
+    {
+      "id": "image-generate",
+      "dir": "image-generate",
+      "kind": "skill",
+      "entry": "index.js",
+      "files": {
+        "index.js": "16f7f54b2c1dbcc8",
+        "skill.json": "fa14b53bfa732a7c"
+      }
+    },
+    {
+      "id": "keyword-reply",
+      "dir": "keyword-reply",
+      "kind": "skill",
+      "entry": "index.js",
+      "files": {
+        "index.js": "024853ac9ba103cb",
+        "skill.json": "3f5c4b2ccfb59319"
+      }
+    },
+    {
+      "id": "knowledge-memes",
+      "dir": "knowledge-memes",
+      "kind": "skill",
+      "entry": "index.js",
+      "files": {
+        "index.js": "a433a5decf08e910",
+        "memes.js": "78a1e90e9345e3d6",
+        "skill.json": "5a27eae8425792b9"
+      }
+    },
+    {
+      "id": "memory-recall",
+      "dir": "memory-recall",
+      "kind": "skill",
+      "entry": "index.js",
+      "files": {
+        "index.js": "7e899b2cd98ba3b0",
+        "skill.json": "2f56eae55c9ab232"
+      }
+    },
+    {
+      "id": "random-image",
+      "dir": "random-image",
+      "kind": "skill",
+      "entry": "index.js",
+      "files": {
+        "config.js": "d1244be36ab8136a",
+        "downloader.js": "73e1c332e7473edc",
+        "filters.js": "74077af51d655770",
+        "index.js": "d8d97f8fb9bade4e",
+        "pixiv.js": "7ba194ee4fb490d9",
+        "setu.js": "e21da4af60d7569c",
+        "skill.json": "0cc082eeed97508f"
+      }
+    },
+    {
+      "id": "schedule",
+      "dir": "schedule",
+      "kind": "skill",
+      "entry": "index.js",
+      "files": {
+        "index.js": "1e0f6f838568d63c",
+        "skill.json": "a9d4208cbe5e9adf"
+      }
+    },
+    {
+      "id": "desktop-pet",
+      "dir": "desktop-pet",
+      "kind": "plugin",
+      "entry": "index.js",
+      "files": {
+        "README.md": "368faac85706cf0c",
+        "index.js": "096e4a6feab9873a",
+        "lib/model-store.js": "8129a02962683f9c",
+        "lib/service.js": "54b385b52cbaf541",
+        "plugin.json": "e763a5cdc36478f8"
+      }
+    }
+  ]
+}

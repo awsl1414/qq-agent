@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>QQ Agent 桌宠</title>
+  <link rel="stylesheet" href="pet.css">
+  <link rel="stylesheet" href="daimeow-effects.css">
+</head>
+<body>
+  <main id="pet" tabindex="-1" aria-label="QQ Agent 桌宠，点击互动，按住拖动，右键打开菜单">
+    <div id="stage">
+    <canvas id="model" aria-label="Live2D 角色"></canvas>
+    <div id="daimeow-props" class="pet-effects" aria-hidden="true"></div>
+    <div id="placeholder" class="placeholder">
+      <div class="orbit" aria-hidden="true"><span class="eye"></span><span class="eye"></span></div>
+      <strong id="placeholder-title">待导入 Live2D 模型</strong>
+      <p id="placeholder-detail">右键打开桌宠控制台<br>导入你拥有使用权的角色模型</p>
+      <span class="placeholder-tag">桌宠占位 · 可拖动</span>
+    </div>
+    <button id="observe" type="button" title="识别当前屏幕并生成回复">看看屏幕</button>
+    <div id="status" class="status" hidden></div>
+    </div>
+  </main>
+  <script src="vendor/pixi.min.js"></script>
+  <script src="vendor/unsafe-eval.min.js"></script>
+  <script src="vendor/live2dcubismcore.min.js"></script>
+  <script src="vendor/cubism4.min.js"></script>
+  <script type="module" src="pet.js"></script>
+</body>
+</html>

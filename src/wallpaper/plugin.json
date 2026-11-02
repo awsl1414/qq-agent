@@ -1,0 +1,99 @@
+{
+  "id": "wallpaper",
+  "name": "控制台壁纸（小红车）",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "category": "utility",
+  "author": "本地",
+  "description": "把 Wallpaper Engine（小红车）壁纸库搬进控制台当界面背景（毛玻璃 + 莫奈取色）。默认只是软件自带功能（壁纸页 + 背景跟随），不进对话；要用 QQ 聊天换/控壁纸得单独打开「聊天里可控制壁纸」。内置 core 模块，不可禁用；改动需重启应用。",
+  "enabledByDefault": true,
+  "capabilities": [
+    "wallpaper.library",
+    "wallpaper.file",
+    "wallpaper.state.get",
+    "wallpaper.state.set",
+    "wallpaper.import.start",
+    "wallpaper.import.status",
+    "wallpaper.import.redo",
+    "wallpaper.theme-sync",
+    "wallpaper.apply"
+  ],
+  "requires": [],
+  "settings": {
+    "wallpaperEngineDir": "",
+    "follow": true,
+    "allowMature": false,
+    "intervalSec": 8,
+    "softenSmall": true,
+    "whitelist": "",
+    "executable": "",
+    "sendPreview": true,
+    "previewRating": "safe",
+    "maxList": 30,
+    "cacheSeconds": 45,
+    "llmControl": false
+  },
+  "configSchema": {
+    "wallpaperEngineDir": {
+      "type": "string",
+      "label": "Wallpaper Engine 目录（控制台壁纸库）",
+      "description": "wallpaper_engine 安装根目录（里面要有 wallpaper64.exe）。留空自动检测（注册表 + 常见 Steam 路径）；检测不到才需要手填。"
+    },
+    "executable": {
+      "type": "string",
+      "label": "Wallpaper Engine 路径（桌面壁纸）",
+      "description": "留空自动探测（注册表 + Steam 库目录 + 常见安装位置）。自动找不到时再填：wallpaper64.exe 的完整路径，或它的安装目录。"
+    },
+    "whitelist": {
+      "type": "string",
+      "label": "壁纸管家白名单 QQ 号",
+      "description": "允许在聊天里控制控制台壁纸的 QQ 号，多个用空格或逗号分隔。留空 = 所有人都不可用（功能上锁，直到填入至少一个 QQ 号）。桌面壁纸（小红车）不受此限。"
+    },
+    "follow": {
+      "type": "boolean",
+      "label": "跟随小红车当前壁纸",
+      "description": "开：小红车换了壁纸，控制台背景跟着换（每 intervalSec 秒看一眼）。关：什么都不做。"
+    },
+    "allowMature": {
+      "type": "boolean",
+      "label": "允许成人向壁纸当背景",
+      "description": "关（默认）时，Mature/Questionable 的壁纸不会成为界面背景——这个窗口随时可能被人看到。"
+    },
+    "intervalSec": {
+      "type": "number",
+      "label": "检查间隔（秒）",
+      "description": "多久看一次小红车当前壁纸，5~120。只是读一个 JSON，开销很小。"
+    },
+    "softenSmall": {
+      "type": "boolean",
+      "label": "小图柔化",
+      "description": "预览图宽度不足 720px 时做一次柔化，当氛围底图用；关掉就是原图直接拉伸（会糊成块）。"
+    },
+    "sendPreview": {
+      "type": "boolean",
+      "label": "换完发预览图",
+      "description": "把壁纸工程的 preview.gif/jpg 发到当前聊天，群里能直接看到换成了什么。预览图超过 12MB 时自动跳过。"
+    },
+    "previewRating": {
+      "type": "enum",
+      "label": "预览图尺度",
+      "description": "safe（默认）只给 Everyone 的壁纸发预览，成人向（Mature/Questionable）的只换不发；all = 全部发。发错图可能导致封号，谨慎放开。",
+      "values": ["safe", "all"]
+    },
+    "maxList": {
+      "type": "number",
+      "label": "列表条数上限",
+      "description": "wallpaper__wallpaper_list 一次最多返回几条（5~60）。库很大时调小可以省 token。"
+    },
+    "cacheSeconds": {
+      "type": "number",
+      "label": "壁纸库缓存秒数",
+      "description": "扫描创意工坊目录的结果缓存多久（5~600）。新订阅的壁纸最多等这么久才会出现在列表里。"
+    },
+    "llmControl": {
+      "type": "boolean",
+      "label": "聊天里可控制壁纸（对话工具）",
+      "description": "关（默认）：壁纸只是控制台功能，模型完全看不见壁纸工具，零 token 成本。开：注册 8 个壁纸工具 + 2 段提示词，模型可以按聊天指令换/控壁纸，代价是每次 LLM 调用固定约 1358 tok（提示词 1021 字符 + 8 个工具定义）。改完要重启应用才生效。"
+    }
+  }
+}

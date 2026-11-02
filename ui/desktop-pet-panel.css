@@ -1,0 +1,310 @@
+/* 桌面伙伴管理面板。继承控制台主题令牌，不影响透明桌宠窗口。
+
+   ⚠️ 2026-10-24 整页重设计。旧版引用的一整套令牌（--tx / --tx2 / --bd / --bg0..3 /
+   --ac / --ac-soft / --r-sm..lg / --ok / --warn / --err / --raise-1 …）在令牌扁平化时
+   已全部改名或删除（现在是 --fg / --fg-dim / --line / --layer-* / --accent / --green …）。
+   var() 取不到值 → 声明在计算值阶段失效（IACVT）→ 边框、圆角、背景、徽标配色**整页丢失**，
+   只剩继承来的字色 —— 这就是"这页跟整体风格不搭"的真实原因：不是画风不同，是样式没生效。
+
+   现在的做法：
+   - 外壳与通用件直接复用全站设计语言（.snowluma-page-card / .sl-* / .btn / .field / .hint），
+     与「连接」「自检」页同宽同款，不再私有一套按钮输入框；
+   - 页内部件（角色卡 / 状态瓦片 / 动作表 / 成就 / 场景条 / 保存条）按同一套令牌重写，
+     全部活在当前变量上，两个主题都成立。 */
+
+/* ── 外壳 ──────────────────────────────────────────────────────────────
+   桌面伙伴页没有外层内容列，这张卡就是内容列本身（与「连接」页同宽同款）。
+   .snowluma-page-card 自带 940 居中 / 14px 圆角 / flex-column gap，这里只补间距微调。 */
+.dp-wrap { gap: 16px; }
+
+/* 页头右侧操作组 */
+.dp-head-tools { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ── 页内导航：分段选择器，滚动时吸顶 ────────────────────────────────── */
+.dp-nav {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; gap: 4px; padding: 4px;
+  border: 1px solid var(--line-str); border-radius: 10px;
+  background: var(--layer-3);
+}
+.dp-nav button {
+  flex: 1; min-width: 0; border: 0; border-radius: 7px;
+  background: transparent; color: var(--fg-dim);
+  font: inherit; font-size: 12.5px; line-height: 1.4; padding: 7px 10px;
+  cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: background .15s, color .15s;
+}
+.dp-nav button:hover { color: var(--fg); background: var(--hover); }
+.dp-nav button.is-active { background: var(--accent-soft); color: var(--accent-hi); font-weight: 600; }
+.dp-nav button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ── 分区（sl-section 上补滚动锚点：吸顶导航会遮标题，留出净空） ────────── */
+.dp-card { scroll-margin-top: 64px; }
+
+/* ── 状态条 ────────────────────────────────────────────────────────────
+   一行四段：插件 / 桌面窗口 / 当前角色 / 桌宠。标签淡、值亮，段间发丝线。
+   为什么不是 .sl-tiles 的四张卡片：四个几乎等重的绿框并排，既像四张"成功提示"，
+   又把页面顶部堆成一坨、跟下面的分区面板抢层级；正常状态也不该重复分区里已有的信息。
+   所以收敛成一条安静的横条 —— 只有出问题时才在下面追加一行 .dp-status-note。 */
+.dp-status {
+  display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 0 18px;
+  min-height: 44px; padding: 9px 14px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--layer-2);
+}
+.dp-seg { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+.dp-seg + .dp-seg { padding-left: 18px; border-left: 1px solid var(--line); }
+.dp-seg-k { font-size: 11.5px; color: var(--fg-mute); white-space: nowrap; }
+.dp-seg-v { font-size: 12.5px; font-weight: 600; color: var(--fg); white-space: nowrap; }
+.dp-seg:not(.is-on) .dp-seg-v { color: var(--fg-dim); font-weight: 500; }
+/* 当前角色：名字长度不可控，给个上限就截断（完整值挂 title），别把整条挤换行 */
+.dp-seg-grow .dp-seg-v { max-width: 380px; overflow: hidden; text-overflow: ellipsis; }
+/* 降级说明：跨整行、橙色、与上面四段用一条发丝线隔开 */
+.dp-status-note {
+  flex-basis: 100%; margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: 11.5px; line-height: 1.7; color: var(--orange);
+}
+
+/* 面板内容区：.sl-panel 只有 head，body 在这里 */
+.dp-panel-body { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 12px; }
+
+/* 面板头里的小徽标（角色数 / 自动观察状态） */
+.dp-count-badge {
+  padding: 2px 9px; border-radius: 999px;
+  border: 1px solid var(--line-str); background: var(--layer-3);
+  color: var(--fg-dim); font-size: 11px; font-weight: 400; white-space: nowrap;
+}
+.dp-count-badge.ok {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 40%, transparent);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+}
+
+/* 分区内的四级小标题（表情列表 / 最近一句…） */
+.dp-sub-title { margin: 2px 0 0; font-size: 12px; font-weight: 600; color: var(--fg-dim); letter-spacing: .3px; }
+
+/* ── 表单 ────────────────────────────────────────────────────────────── */
+.dp-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; }
+.dp-field-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+/* label 包 input 的旧结构保留（JS 靠它渲染动作绑定下拉），控件样式与 .field 对齐 */
+.dp-field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; }
+.dp-field > span { color: var(--fg); font-weight: 500; }
+.dp-field select, .dp-field input:not([type=checkbox]):not([type=range]), .dp-field textarea {
+  box-sizing: border-box; width: 100%; min-width: 0;
+  background: var(--inset-bg); border: 1px solid var(--border); color: var(--text);
+  border-radius: 7px; padding: 8px 12px; font: inherit; font-size: 12.5px;
+  box-shadow: var(--inset-edge);
+}
+.dp-field select { height: 34px; padding: 0 10px; }
+.dp-field input:not([type=checkbox]):not([type=range]) { height: 34px; padding: 0 12px; }
+.dp-field textarea { resize: vertical; min-height: 84px; line-height: 1.65; }
+.dp-field :focus-visible { outline: none; box-shadow: var(--inset-edge), 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+.dp-field output { color: var(--accent-hi); font-variant-numeric: tabular-nums; }
+
+/* 滑杆：凹槽轨 + 强调色填充（填充比例由 dpUpdateOutputs 写 --dp-range-fill） */
+.dp-range-field input[type=range] {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 22px; margin: 0; padding: 0;
+  background: transparent; cursor: pointer; --dp-range-fill: 0%;
+}
+.dp-range-field input[type=range]::-webkit-slider-runnable-track {
+  height: 5px; border-radius: 99px;
+  background: linear-gradient(to right, var(--accent) 0 var(--dp-range-fill), var(--line-str) var(--dp-range-fill) 100%);
+}
+.dp-range-field input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 13px; height: 13px; margin-top: -4px;
+  border: 2px solid var(--layer-2); border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 1px var(--accent);
+  transition: box-shadow .15s;
+}
+.dp-range-field input[type=range]:hover::-webkit-slider-thumb,
+.dp-range-field input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--accent-soft); }
+.dp-range-field input[type=range]::-moz-range-track { height: 5px; border-radius: 99px; background: var(--line-str); }
+.dp-range-field input[type=range]::-moz-range-progress { height: 5px; border-radius: 99px; background: var(--accent); }
+.dp-range-field input[type=range]::-moz-range-thumb { width: 11px; height: 11px; border: 2px solid var(--layer-2); border-radius: 50%; background: var(--accent); }
+
+/* 开关横行：页内所有"打勾才启用"的选项一律画成滑动开关（全站 input.sw，
+   见 style.css「开关（switch）」一节），和设置页 .checkbox-row 同一摆法：开关在左、文字在右。
+   ⚠️ 这里**不要**再给 .dp-check input / .dp-table input[type=checkbox] 写 width/height ——
+   .dp-check input 是 0,1,1 与本文件后加载的顺序合起来会压过 input.sw，
+   .dp-table input[type=checkbox] 更是 0,2,1 直接赢，两者都会把 40×22 的轨道压回 15px 方块。
+   外观统一交给 input.sw，这里只管间距。 */
+.dp-checks { display: flex; flex-wrap: wrap; gap: 12px 26px; }
+.dp-check { display: inline-flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--fg); cursor: pointer; }
+.dp-check input.sw, .dp-table input.sw { margin: 0; }
+
+/* ── 提示条 / 反馈条 ─────────────────────────────────────────────────── */
+.dp-muted { color: var(--fg-mute); font-size: 12px; }
+.dp-inline-note {
+  padding: 10px 12px; background: var(--field-bg);
+  border: 1px solid var(--line); border-radius: 8px;
+  color: var(--fg-dim); font-size: 12px; line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+.dp-inline-note.warn {
+  color: var(--orange);
+  border-color: color-mix(in srgb, var(--orange) 40%, var(--line));
+  background: color-mix(in srgb, var(--orange) 10%, var(--field-bg));
+}
+.dp-alert {
+  padding: 10px 12px; border-radius: 8px;
+  background: var(--accent-soft); color: var(--accent-hi);
+  font-size: 12px; line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.dp-alert.err { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
+.dp-alert:empty { display: none; }
+
+/* ── 角色库 ──────────────────────────────────────────────────────────── */
+.dp-model-library { display: grid; grid-template-columns: repeat(auto-fill, minmax(218px, 1fr)); gap: 12px; }
+.dp-model-card {
+  min-width: 0; overflow: hidden;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--field-bg);
+  transition: border-color .18s;
+}
+.dp-model-card.is-current { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.dp-model-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* 预览台：底部一圈强调色光晕当"展台灯"，加载失败时露出占位剪影 */
+.dp-model-visual {
+  position: relative; display: grid; place-items: center;
+  height: 208px; overflow: hidden;
+  background: radial-gradient(ellipse at 50% 88%, var(--accent-soft), transparent 70%), var(--layer-2);
+}
+.dp-model-visual::after {
+  content: ''; position: absolute; bottom: 10px;
+  width: 74px; height: 8px; border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  filter: blur(3px);
+}
+.dp-model-state {
+  position: absolute; z-index: 2; top: 10px; left: 10px;
+  padding: 2px 9px; border-radius: 999px;
+  background: var(--layer-3); border: 1px solid var(--line-str);
+  color: var(--fg-dim); font-size: 10.5px; white-space: nowrap;
+}
+.dp-model-state.ok {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 40%, transparent);
+  background: color-mix(in srgb, var(--green) 12%, var(--layer-3));
+}
+.dp-model-placeholder { display: flex; flex-direction: column; align-items: center; gap: 4px; color: var(--fg-mute); font-size: 12px; }
+.dp-model-placeholder svg { width: 62px; height: 72px; margin-bottom: 6px; stroke: var(--fg-mute); stroke-width: 2; stroke-linecap: round; opacity: .8; }
+.dp-model-placeholder small { font-size: 10.5px; }
+.dp-model-visual.has-preview .dp-model-placeholder { visibility: hidden; }
+.dp-model-image {
+  position: absolute; z-index: 1; inset: 14px 12px 12px;
+  width: calc(100% - 24px); height: calc(100% - 26px);
+  object-fit: contain; object-position: center bottom;
+}
+.dp-model-info { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.dp-model-info h5 { margin: 0; font-size: 13px; font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dp-model-info p { margin: 0; font-size: 11.5px; color: var(--fg-dim); }
+.dp-model-info p span { margin: 0 4px; color: var(--fg-mute); }
+.dp-model-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 9px; }
+.dp-model-footer .dp-model-meta { font-size: 11px; color: var(--fg-mute); white-space: nowrap; }
+.dp-model-footer .btn { flex-shrink: 0; }
+/* 添加角色卡：与角色卡等高（grid 默认拉伸），虚线框 + 悬停染强调色 */
+.dp-model-add {
+  min-height: 268px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  border: 1px dashed var(--line-str); border-radius: 12px;
+  background: transparent; color: var(--fg-dim); font: inherit; cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.dp-model-add > span { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--layer-2); color: var(--fg-dim); font-size: 22px; font-weight: 300; }
+.dp-model-add strong { font-size: 12.5px; font-weight: 600; }
+.dp-model-add small { font-size: 11px; color: var(--fg-mute); }
+.dp-model-add:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-hi); }
+.dp-model-add:disabled { cursor: not-allowed; opacity: .45; }
+.dp-model-add:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.dp-library-empty { grid-column: 1 / -1; padding: 28px 14px; border: 1px dashed var(--line-str); border-radius: 12px; text-align: center; color: var(--fg-dim); font-size: 12px; line-height: 1.8; }
+.dp-library-empty p { margin: 6px 0 14px; }
+
+/* 表情按钮一排（自动换行） */
+.dp-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* ── 动作表 ──────────────────────────────────────────────────────────── */
+.dp-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+.dp-table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
+.dp-table th { color: var(--fg-mute); background: var(--field-bg); font-weight: 500; white-space: nowrap; }
+.dp-table th, .dp-table td { border-bottom: 1px solid var(--line); padding: 9px 12px; }
+.dp-table tr:last-child td { border-bottom: 0; }
+.dp-table td:first-child { min-width: 140px; overflow-wrap: anywhere; }
+.dp-table input[type=number] {
+  width: 72px; height: 28px; padding: 0 8px;
+  background: var(--inset-bg); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text); font: inherit; font-size: 12px;
+}
+.dp-empty { color: var(--fg-mute); text-align: center; padding: 20px 14px; font-size: 12px; line-height: 1.8; }
+
+/* ── 统计瓦片 / 回复 / 历史 / 场景 / 成就 ─────────────────────────────── */
+.dp-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.dp-stat { padding: 11px 13px; border-radius: 10px; background: var(--field-bg); border: 1px solid var(--line); min-width: 0; }
+.dp-stat span { font-size: 11px; color: var(--fg-mute); }
+.dp-stat strong { display: block; margin-top: 4px; font-size: 19px; font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+
+.dp-reply {
+  background: var(--field-bg); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+  border-radius: 8px; padding: 12px 14px;
+  font-size: 12.5px; line-height: 1.8; color: var(--fg);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+.dp-details > summary { cursor: pointer; font-size: 12px; color: var(--fg-dim); padding: 4px 0; user-select: none; }
+.dp-details > summary:hover { color: var(--fg); }
+.dp-history { max-height: 260px; overflow-y: auto; margin-top: 8px; scrollbar-width: thin; scrollbar-color: var(--line-str) transparent; }
+.dp-history-item { border-top: 1px solid var(--line); padding: 10px 0; font-size: 12px; line-height: 1.7; }
+.dp-history-item p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dp-history-meta { color: var(--fg-mute); font-size: 11px; }
+.dp-history::-webkit-scrollbar { width: 5px; }
+.dp-history::-webkit-scrollbar-track { background: transparent; }
+.dp-history::-webkit-scrollbar-thumb { background: var(--line-str); border-radius: 99px; }
+
+.dp-scene { display: grid; gap: 10px; }
+.dp-scene-row { display: grid; grid-template-columns: 76px minmax(0, 1fr) 112px; align-items: center; gap: 12px; font-size: 12px; color: var(--fg); }
+.dp-scene-row > span:last-child { color: var(--fg-mute); font-size: 11.5px; text-align: right; white-space: nowrap; }
+.dp-progress { height: 6px; background: var(--line-str); border-radius: 99px; overflow: hidden; }
+.dp-progress > i { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+
+.dp-achievements { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.dp-achievement { border: 1px solid var(--line); border-radius: 10px; padding: 13px 14px; background: var(--field-bg); min-width: 0; }
+.dp-achievement.unlocked { border-color: color-mix(in srgb, var(--green) 40%, var(--line)); }
+.dp-achievement strong { font-size: 12.5px; color: var(--fg); }
+.dp-achievement p { min-height: 32px; margin: 6px 0 10px; color: var(--fg-dim); font-size: 11px; line-height: 1.6; }
+.dp-achievement .dp-muted { display: block; margin-top: 7px; font-size: 11px; }
+
+/* ── 未保存提醒条：吸底 ───────────────────────────────────────────────── */
+.dp-savebar {
+  position: sticky; bottom: 0; z-index: 6;
+  padding: 10px 14px;
+  border: 1px solid var(--line-str); border-radius: 10px;
+  background: var(--layer-3);
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  box-shadow: var(--lift-lg);
+}
+.dp-savebar[hidden], .dp-wrap [hidden] { display: none !important; }
+.dp-savebar span { font-size: 12px; color: var(--orange); }
+.dp-savebar-tools { display: flex; gap: 8px; }
+
+/* 焦点环：页内控件统一走强调色 */
+.dp-wrap :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ── 窄屏 ────────────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .dp-field-grid.three, .dp-achievements { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .dp-nav { position: static; }
+  .dp-card { scroll-margin-top: 12px; }
+  .dp-field-grid, .dp-field-grid.three, .dp-achievements, .dp-stats { grid-template-columns: 1fr; }
+  .dp-model-library { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dp-model-visual { height: 176px; }
+  .dp-model-add { min-height: 240px; }
+  .dp-panel-body { padding: 12px 13px 14px; }
+}
+@media (max-width: 380px) {
+  .dp-model-library { grid-template-columns: 1fr; }
+}

@@ -1,0 +1,112 @@
+# ══════════════════════════════════════════════════════════════════════════
+# QQ Agent · .gitignore
+#
+# 判定原则：**只有「程序需要、且随版本演进」的东西才入库**。
+# 运行时产生的用户数据一律不入库 —— 里面是真实群聊、记忆、API Key、登录态。
+#
+# 核对方式：
+#   git status --ignored --porcelain     看哪些被挡掉了
+#   git check-ignore -v <路径>           看某条规则由哪一行命中
+# ══════════════════════════════════════════════════════════════════════════
+
+# ── 依赖 ──────────────────────────────────────────────────────────────────
+node_modules/
+.pnpm-store/
+
+# 本项目只用 pnpm（见 .npmrc）。其它包管理器的锁文件混进来会误导贡献者
+package-lock.json
+yarn.lock
+bun.lockb
+
+
+# ── 运行时数据（用户资产，绝不入库）──────────────────────────────────────
+# data/ 与多实例的 data-2/、data-3/…（见 src/profile.js 的 profileSuffix）。
+# 开发模式下 electron/main.js 的 resolveDataDir() 直接把 DATA_DIR 指到项目内
+# 的 data/，所以 clone 下来跑一次就会在这里生成一整套：
+#   config.json（含 API Key）      messages/       memory/        memory-v2/
+#   sessions/                      usage-ledger/   usage-*.json   telemetry*.json
+#   logs/                          image-cache/    video-cache/   wallpaper-static/
+#   plugin-data/                   import-backups/ exports/       import-bundles/
+#   ui/（背景图）                  window-state.json  qq-agent.lock
+#   cache-warm-prefix.json  price-feed-cache.json  cloud-global-blocklist.json
+#   session-index-cache.json  reminders.json  console-port
+data/
+data-*/
+
+# 便携 QQ（约 1.5 GB，由应用内的「启动便携 QQ」流程生成）与它的隔离用户目录
+runtime/qq-portable/
+runtime/qq-portable-data/
+
+# 随包 ffmpeg 已下线（2026-11-03）：改为「设置 → 媒体工具」按需下载到
+# data/runtime/ffmpeg/。这条忽略规则保留，防止旧构建产物被误提交。
+runtime/ffmpeg.exe
+
+# 构建 / 打包产物
+dist/
+
+
+# ── 凭据 ──────────────────────────────────────────────────────────────────
+# community.key：云端屏蔽名单的写密钥（src/community.js），只有管理员本机有
+community.key
+
+# account.json 正常在 data/ 里；这里兜底防它被挪到根目录
+account.json
+
+.env
+.env.*
+!.env.example
+
+
+# ── 运行时写到仓库根目录的东西 ────────────────────────────────────────────
+# ⚠️ 项目根的 prices.json **不是**运行时产物 —— 它是内置价格表，必须入库。
+#    （远程价表是 https://kondius.cn/qq-agent/model-prices.json，只缓存进 data/）
+
+# 开发工单的沙箱（src/harness/dev/index.js 的 SANDBOX_NAME）。
+# 默认落在 <appRoot>/../../dev-sandbox —— 正常是仓库外面；但 QQ_AGENT_DEV_SANDBOX
+# 指进来、或目录层级变化时会落进仓库，这里兜住。
+dev-sandbox/
+
+# 扩展锻造台 / 自动修复落到 plugins/、skills/ 的产物。
+# .forge-origin.json 记录「这台机器上它从哪来」，属于本机状态：
+# 跟着包走会让接收端误以为模块是从别处升级来的（见 src/bundle.js:49）。
+**/.forge-origin.json
+
+
+# ── 日志与临时文件 ────────────────────────────────────────────────────────
+# data/logs/ 已被上面的 data/ 覆盖；这里兜住被重定向到别处的日志
+logs/
+*.log
+
+*.tmp
+*.bak
+*.orig
+*.rej
+*~
+
+
+# ── 测试 / 覆盖率产物 ─────────────────────────────────────────────────────
+coverage/
+.nyc_output/
+test-results/
+
+
+# ── 编辑器 / 操作系统 ─────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+
+# ── 本地 AI / 分析工具缓存 ────────────────────────────────────────────────
+# graphify 的知识图谱输出（实测 5.6 MB / 105 个文件），可随时重建
+graphify-out/
+
+# Claude Code：.claude/rules/ 是团队共享的项目规范，必须入库。
+# 只排除个人配置（权限白名单、本地设置），它们因人而异，提交会互相覆盖。
+.claude/settings.local.json
+.claude/settings.local.md
+.claude/CLAUDE.local.md

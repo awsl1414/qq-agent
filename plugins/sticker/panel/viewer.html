@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>表情库</title>
+<!--
+  表情库查看器 —— 由 plugin.json 的 configSchema 里
+  { "type": "action", "panel": "panel/viewer.html" } 声明，
+  宿主设置弹窗渲染出按钮，点开就是这一页（宿主把它只读挂在 /plugin-panel/sticker/ 下）。
+
+  两条约束来自宿主给插件页面的 CSP（见 src/app.js 的 /plugin-panel/ 分支）：
+    · script-src 'self' —— 内联 <script> 和 onclick= 一律不执行，脚本必须外链；
+    · default-src 'self' —— 资源只能用同源相对路径（viewer.css / viewer.js 就在隔壁）。
+
+  主题不在这里预置：viewer.js 在 <head> 里同步执行，先于 <body> 出现就把
+  data-theme 定好，所以不会闪屏，也就不需要再多一个 boot 脚本。
+-->
+<link rel="stylesheet" href="viewer.css">
+<script src="viewer.js"></script>
+</head>
+<body>
+  <header class="hd">
+    <div class="hd__top">
+      <h1 class="hd__title">表情库</h1>
+      <div class="hd__stats" id="stats"></div>
+      <div class="hd__spacer"></div>
+      <button class="btn btn--ico" type="button" id="reload" title="重新读取快照" aria-label="重新读取快照">↻</button>
+    </div>
+    <div class="hd__ctl">
+      <input class="inp" type="search" id="q" placeholder="搜索 id / 备注 / 标签 / 场景…" autocomplete="off" spellcheck="false">
+      <div class="chips" id="filters"></div>
+      <select class="inp inp--sel" id="sort" title="排序">
+        <option value="id">按 id</option>
+        <option value="updated">按最近更新</option>
+        <option value="used">按用得最多</option>
+        <option value="annotated">备注优先</option>
+      </select>
+    </div>
+  </header>
+
+  <main class="main" id="main"></main>
+
+  <footer class="ft" id="foot"></footer>
+
+  <div class="ov" id="ov" hidden>
+    <div class="ov__mask" id="ov-mask"></div>
+    <section class="ov__card" role="dialog" aria-modal="true" aria-label="表情详情">
+      <button class="ov__x" type="button" id="ov-x" title="关闭（Esc）">×</button>
+      <div class="ov__img"><img id="ov-img" alt=""></div>
+      <div class="ov__meta" id="ov-meta"></div>
+      <!-- 编辑区（2026-10-18）：面板本身是只读静态页，用户点「保存」时通过
+           postMessage 请宿主转发一次 sticker__note 工具调用（宿主有白名单+
+           来源校验，见 ui/app/06-settings-render.js 的 openPluginPanel 与
+           src/routes.js 的 /api/plugin-tool）。 -->
+      <div class="ov__edit" id="ov-edit">
+        <div class="ov__edit-row">
+          <label class="ov__edit-lb" for="ov-note">备注</label>
+          <input class="inp" id="ov-note" type="text" maxlength="200" placeholder="给这张表情起个名字 / 写清它的意思">
+        </div>
+        <div class="ov__edit-row">
+          <label class="ov__edit-lb" for="ov-tags">标签</label>
+          <input class="inp" id="ov-tags" type="text" maxlength="200" placeholder="逗号分隔，例如：嘲讽, 开心">
+        </div>
+        <div class="ov__edit-row">
+          <label class="ov__edit-lb" for="ov-usage">场景</label>
+          <input class="inp" id="ov-usage" type="text" maxlength="200" placeholder="适合什么时候用（可不填）">
+        </div>
+        <div class="ov__edit-foot">
+          <button class="btn" type="button" id="ov-save">保存</button>
+          <span class="ov__edit-hint" id="ov-save-hint"></span>
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

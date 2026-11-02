@@ -1,0 +1,353 @@
+{
+  "id": "mem-layered",
+  "name": "记忆系统",
+  "version": "1.7.1",
+  "apiVersion": 1,
+  "category": "knowledge",
+  "description": "按会话分片的长时记忆：后台增量巩固、BM25 检索、人类化记忆强度（间隔依赖增益 + 每块自己的稳定性 S + Weibull 衰减 + 自发恢复 + 被动≠主动计权）、共激活联想（一起被想起的块结缘，检索时激活向邻居扩散）、梗概墓碑（淘汰只烂细节、留下「我好像记得有这么回事」，命中时按 id 区间从原文重建）、多线索检索（按「在场的人」与当下时段加权）、每轮自动注入相关旧事、睡眠重演（挑「该复习了」的旧事突然带出一句）、按天回读原文。另带待办提醒（有工具入口）、跨轮防复读、语义卡（写入即去噪）、跨会话旁听（默认关）与成本护栏（日级+会话级）。若检测到其它记忆引擎也在提供同名能力，会自检并提醒你避免两套记忆同时注入、模型检索却查到旧数据。",
+  "author": "local",
+  "enabledByDefault": true,
+  "capabilities": [
+    "memory.search",
+    "memory.archive",
+    "memory.status",
+    "memory.rebuild"
+  ],
+  "requires": [],
+  "permissions": [],
+  "settings": {
+    "enabled": true,
+    "consolidateIntervalMin": 10,
+    "consolidateBatchMax": 20000,
+    "rollupAfterDays": 7,
+    "forgetAfterDays": 120,
+    "minForgetScore": 0.25,
+    "maxSnippetsPerBlock": 120,
+    "maxVocabPerChat": 100000,
+    "dfCutoffRatio": 0.7,
+    "hitBoost": 1.15,
+    "decayHalfLifeDays": 45,
+    "decayShape": 0.7,
+    "stabilityGain": 1.0,
+    "stabilityMax": 3650,
+    "autoRecall": true,
+    "autoRecallBudget": 220,
+    "autoRecallTopBlocks": 2,
+    "autoRecallCooldownMin": 30,
+    "recallRowWidth": 0,
+    "injectTotalMax": 400,
+    "minTriggerChars": 6,
+    "observeTools": true,
+    "pendingTodos": true,
+    "crossTurn": true,
+    "crossTurnTtlMin": 90,
+    "crossTurnMaxChars": 200,
+    "semanticCards": true,
+    "cardsCrossChat": false,
+    "maxCards": 500,
+    "cardIdleDays": 90,
+    "crossChatPeek": false,
+    "crossChatPeekMinutes": 12,
+    "crossChatPeekChats": 2,
+    "crossChatPeekChars": 180,
+    "crossChatPeekAllow": "",
+    "budgetGuard": true,
+    "dayPromptMax": 800000,
+    "chatPromptMax": 200000,
+    "warnOnConflict": true,
+    "conflictWarnCooldownMin": 1440,
+    "gistEnabled": true,
+    "gistMaxPerChat": 400,
+    "gistRetainDays": 1095,
+    "gistReviveMaxMb": 24,
+    "gistWeight": 0.35,
+    "peopleBoost": 1.3,
+    "diversityLambda": 0.3,
+    "autoRecallMinRel": 0.25,
+    "staleSnippetSkip": true,
+    "linkBoost": 0.15,
+    "linkLearn": true,
+    "reminiscenceAmp": 0.12,
+    "todBoost": 1.1,
+    "sleepReplay": true,
+    "replayCooldownDays": 3
+  },
+  "configSchema": {
+    "enabled": {
+      "type": "boolean",
+      "label": "启用本记忆引擎",
+      "description": "关掉后不再巩固、不再注入，检索工具会显示「依赖未就绪」。已生成的块与索引留在磁盘上不会删。"
+    },
+    "consolidateIntervalMin": {
+      "type": "number",
+      "label": "巩固间隔（分钟）",
+      "description": "后台把新消息压成小时块的间隔，默认 10。只在有新增消息时才写盘。"
+    },
+    "consolidateBatchMax": {
+      "type": "number",
+      "label": "单次巩固读入的消息上限",
+      "description": "一次巩固最多从会话文件末尾读入多少条消息，默认 20000。会话文件特别大时调低可以缩短单次巩固的耗时。"
+    },
+    "rollupAfterDays": {
+      "type": "number",
+      "label": "小时块合并成日块（天后）",
+      "description": "超过这个天数的小时块会被合并成「日块」，只保留权重最高的一批碎片，索引随之收缩。默认 7。"
+    },
+    "forgetAfterDays": {
+      "type": "number",
+      "label": "日块淘汰（天后）",
+      "description": "超过这个天数、且长期没被检索命中的日块会从索引摘除并删除块文件（原始聊天记录不动，仍可用归档回读）。默认 120。0 = 不淘汰。"
+    },
+    "minForgetScore": {
+      "type": "number",
+      "label": "淘汰权重阈值",
+      "description": "块的有效权重低于这个值、且够老，才会被淘汰。默认 0.25。调高 = 忘得更快，调低 = 留得更久。"
+    },
+    "maxSnippetsPerBlock": {
+      "type": "number",
+      "label": "单块碎片上限",
+      "description": "一个块最多保留多少条消息碎片，超出时按权重丢弃最低的。默认 120。"
+    },
+    "maxVocabPerChat": {
+      "type": "number",
+      "label": "单词表上限",
+      "description": "每个会话的倒排词表上限，超出后按词频与长度淘汰。默认 100000。不要调低于 30000：中文分词会同时产出单字与相邻二字词，一个几千条消息的群就能产生 2~3 万个词，上限太小会把高频实词（如「照片」「显卡」）整体剃掉，检索直接失明。"
+    },
+    "dfCutoffRatio": {
+      "type": "number",
+      "label": "高频词剪枝阈值",
+      "description": "出现在超过这个比例的块里的词会被移出索引。只剪单字，且仅在块数 ≥2000 时生效（块太少时 df/n 恒接近 1，按比例剪等于把词表剃光）。默认 0.7；填 1 = 不剪。"
+    },
+    "hitBoost": {
+      "type": "number",
+      "label": "命中加权",
+      "description": "命中增益的基准值。注意实际增益是**间隔依赖**的：间隔越久增益越接近这个值甚至更大，同一轮里被反复命中则几乎不加（间隔重复效应）。默认 1.15，上限 2.0。"
+    },
+    "decayHalfLifeDays": {
+      "type": "number",
+      "label": "初始遗忘半衰期（天）",
+      "description": "新块的初始稳定性 S，以及老块的回落值。块权重按「距上次命中」的时间衰减，默认 45 天。每被成功想起一次，这块的稳定性会自己变长（见下面的稳定性增长），所以这个值只管「还没被想起过的新块」。"
+    },
+    "decayShape": {
+      "type": "number",
+      "label": "遗忘曲线形状",
+      "description": "衰减用 0.5^((t/S)^q)，这就是 q。默认 0.7：早期掉得快、后面拖一条长尾，接近人类保持率的实测形状。填 1 就退回纯指数（旧行为）。范围 0.1~1。"
+    },
+    "stabilityGain": {
+      "type": "number",
+      "label": "稳定性增长系数",
+      "description": "每次成功回忆，块的稳定性 S 增加约「系数 × 间隔」。默认 1.0，即大约增加 1.4 倍间隔。填 0 = 稳定性永不增长（等于退回全局半衰期）。范围 0~5。"
+    },
+    "stabilityMax": {
+      "type": "number",
+      "label": "稳定性上限（天）",
+      "description": "单块稳定性 S 的上限，防止「长期被反复想起」的块变成永不淘汰。默认 3650 天（10 年）。范围 45~36500。"
+    },
+    "autoRecall": {
+      "type": "boolean",
+      "label": "每轮自动想起旧事",
+      "description": "用本轮触发消息自动检索一次长时记忆，命中才注入（很短）。这是本记忆系统与旧版记忆引擎最核心的差别：不指望模型主动调用检索工具。"
+    },
+    "autoRecallBudget": {
+      "type": "number",
+      "label": "自动注入预算（字符）",
+      "description": "每轮自动注入的字符上限，默认 220。超预算就少注入几条。"
+    },
+    "autoRecallTopBlocks": {
+      "type": "number",
+      "label": "自动注入最多几个块",
+      "description": "默认 2。每个块只取最相关的 1~2 条碎片。"
+    },
+    "autoRecallCooldownMin": {
+      "type": "number",
+      "label": "同一块重复注入冷却（分钟）",
+      "description": "同一个块在这段时间内不会被重复自动注入，避免复读。默认 30。"
+    },
+    "recallRowWidth": {
+      "type": "number",
+      "label": "自动回忆行宽（字符）",
+      "description": "0 = 按预算把行宽自动摊到每一行（默认，同样的字符覆盖更多条旧事）；> 0 = 钉死行宽，不再随预算伸缩。范围 20~400。"
+    },
+    "injectTotalMax": {
+      "type": "number",
+      "label": "单轮注入总上限（字符）",
+      "description": "所有记忆注入段（待办/跨轮/重演/旧事/语义卡/旁听）的总字符硬上限。超了就从低优先级开始整段丢弃。0 = 不限。默认 400。"
+    },
+    "minTriggerChars": {
+      "type": "number",
+      "label": "触发文本最短长度",
+      "description": "触发消息太短（如「哈哈」「在吗」）就不检索，省 CPU 也少噪声。默认 6。"
+    },
+    "observeTools": {
+      "type": "boolean",
+      "label": "记录检索工具使用情况",
+      "description": "统计模型主动调用 memory_search / memory_archive / memory_todo 的次数，可在记忆状态里查看。"
+    },
+    "pendingTodos": {
+      "type": "boolean",
+      "label": "待办提醒",
+      "description": "模型说「记着明天问一下」时记下来，到期自动消失。本记忆系统同时提供 memory_todo 工具作为入口 —— 旧版记忆引擎通常没有独立入口。"
+    },
+    "crossTurn": {
+      "type": "boolean",
+      "label": "跨轮工作记忆",
+      "description": "记住上一轮发了什么、提过哪件旧事，避免连续两轮复读同一句。默认 90 分钟内有效。"
+    },
+    "crossTurnTtlMin": {
+      "type": "number",
+      "label": "跨轮记忆有效期（分钟）",
+      "description": "超过这段时间的跨轮记录不再注入，文件也会被清理。默认 90。"
+    },
+    "crossTurnMaxChars": {
+      "type": "number",
+      "label": "跨轮记录长度上限（字符）",
+      "description": "上一轮回复最多截取多少字符存进跨轮档案。默认 200；调小能让这段更短更省 token。"
+    },
+    "semanticCards": {
+      "type": "boolean",
+      "label": "语义卡",
+      "description": "本地启发式从聊天里抽「约好/计划/雷点」这类长期常识，命中才注入。垃圾在写入时就丢掉，不会攒到事后再清理。"
+    },
+    "cardsCrossChat": {
+      "type": "boolean",
+      "label": "语义卡跨会话通用",
+      "description": "默认关：A 群抽到的卡只注入 A 群。打开后卡片全库通用 —— 多个互不相识的群共用一个机器人时，这是串味来源。"
+    },
+    "maxCards": {
+      "type": "number",
+      "label": "卡片库上限（张）",
+      "description": "超过这个数量时按最近出现时间保留最新的。默认 500。"
+    },
+    "cardIdleDays": {
+      "type": "number",
+      "label": "卡片闲置淘汰（天）",
+      "description": "超过这么久没被抽到、也没被注入命中的卡片会被清掉。默认 90。调太小会让卡片库隔天就被清空。"
+    },
+    "crossChatPeek": {
+      "type": "boolean",
+      "label": "跨会话旁听",
+      "description": "默认关。打开后处理本会话时，会顺带把其它会话最近十几分钟在聊什么（话题词/人/尾句）注入提示词。旧版记忆引擎通常默认开着 —— 那等于把别的群内容写进本群提示词，所以这里默认关。"
+    },
+    "crossChatPeekMinutes": {
+      "type": "number",
+      "label": "旁听时间窗（分钟）",
+      "description": "只看其它会话最近这么多分钟的消息。默认 12。"
+    },
+    "crossChatPeekChats": {
+      "type": "number",
+      "label": "旁听最多几个会话",
+      "description": "一次最多旁听几个其它会话（按话题密度排序取前几个）。默认 2。"
+    },
+    "crossChatPeekChars": {
+      "type": "number",
+      "label": "旁听段落长度上限（字符）",
+      "description": "旁听那一段注入的字符上限。默认 180。"
+    },
+    "crossChatPeekAllow": {
+      "type": "string",
+      "label": "只旁听这些会话（白名单）",
+      "description": "留空 = 不限。填了以后只旁听列出的会话，用逗号或空格分隔，形如 group:123, private:456。"
+    },
+    "budgetGuard": {
+      "type": "boolean",
+      "label": "成本护栏",
+      "description": "本地统计 prompt 用量，接近或超过阈值时分级砍掉可选注入（语义卡/旁听 → 跨轮/自动回忆）。不调模型、不额外花钱。"
+    },
+    "dayPromptMax": {
+      "type": "number",
+      "label": "日 prompt 上限（token）",
+      "description": "当日累计超过这个值的 85% 开始砍可选注入，超过 100% 只留待办。0 = 不限。默认 800000。"
+    },
+    "chatPromptMax": {
+      "type": "number",
+      "label": "单会话 prompt 上限（token）",
+      "description": "同上，按单个会话统计。旧版记忆引擎通常只判日级，本记忆系统日级与会话级都判。0 = 不限。默认 200000。"
+    },
+    "warnOnConflict": {
+      "type": "boolean",
+      "label": "检测到其它记忆引擎冲突时提醒我",
+      "description": "⚠️ 若本记忆系统与其它记忆引擎同时提供 memory.search / memory.archive 等同名能力，会：① 每轮各塞一份记忆（内容重复、token 翻倍）；② 宿主自带的检索工具只认排在前面的那个提供者，模型可能查到旧数据；③ 两边各跑一份后台巩固。开启本项后，启用时会打一条日志，并只在私聊里隔一段时间提醒你一次（群聊里绝不提醒，免得当众念你的设置）。关掉它只是不再提醒，冲突本身依旧存在。"
+    },
+    "conflictWarnCooldownMin": {
+      "type": "number",
+      "label": "冲突提醒冷却（分钟）",
+      "description": "同一条冲突提醒最短间隔，默认 1440（一天一次）。冷却记在插件自己的存储里，重启 / 热重载不会重新计时。填 0 无效（最小 5 分钟）。"
+    },
+    "gistEnabled": {
+      "type": "boolean",
+      "label": "梗概墓碑（细节可以忘，印象要留）",
+      "description": "块被淘汰时不再「一刀两断」，而是先压一条几十字的要旨（谁 + 主题词 + 大意）存起来。之后检索如果只匹配到这条要旨，就从原始聊天记录按 id 区间把那一段重建回来 —— 对应人类记忆里的「模糊痕迹理论」与「节省效应」。默认开。关掉后淘汰就是真的删除（原文仍在，可用归档回读）。"
+    },
+    "gistMaxPerChat": {
+      "type": "number",
+      "label": "每会话墓碑上限（条）",
+      "description": "一个会话最多保留多少条墓碑，超出后从最老的开始丢（墓碑也要会忘）。默认 400。一条墓碑只有几十字节，400 条也就几十 KB 量级。"
+    },
+    "gistRetainDays": {
+      "type": "number",
+      "label": "墓碑保留期（天）",
+      "description": "墓碑是「最后一点痕迹」，但终归也要没。超过这个天数没被用到的墓碑会被清掉。默认 1095（3 年）。"
+    },
+    "gistReviveMaxMb": {
+      "type": "number",
+      "label": "墓碑重建时允许读的会话文件上限（MB）",
+      "description": "从墓碑重建整块要读一次该会话的原始文件（JSON 解析是同步的）。超过这个体积就**只给要旨、不重建**，免得在 5 秒的钩子预算里把这一轮对话拖垮。默认 24。范围 0.01~512。"
+    },
+    "gistWeight": {
+      "type": "number",
+      "label": "墓碑候选权重（相对活块）",
+      "description": "墓碑参与检索排序时的权重倍率，默认 0.35。压低是刻意的：活块匹配得一样好时永远排在前面，只有活块都答不上来，墓碑才浮上来提醒「有这么回事」。范围 0.05~1。"
+    },
+    "peopleBoost": {
+      "type": "number",
+      "label": "「在场的人」线索加权",
+      "description": "认知心理学的编码特异性：提取线索与编码线索越像越容易想起来。触发消息里在场的人，与某个块里在场的人有交集时，该块加权。默认 1.3，填 1 = 关闭。按 uid 匹配，所以对方改了昵称也照样认得（只算别人，机器人自己不算）。"
+    },
+    "diversityLambda": {
+      "type": "number",
+      "label": "检索结果多样性（干扰理论）",
+      "description": "人的记忆里**相似的记忆会互相干扰**：想起一件就会压住另一件，能回忆起来的往往是同一件事的几个侧面。工程上不处理的话，自动注入的前几条常常是相邻小时的同一段对话 —— 看着像想起两件，其实是一件。这个值是贪心 MMR 的 λ：每条结果按「(1-λ)×相关度 − λ×与已选条目的内容重叠度」挑选。默认 0.3，填 0 = 关闭（退回纯按分数取前 N）。重叠度按块关键词算，不读块文件。"
+    },
+    "autoRecallMinRel": {
+      "type": "number",
+      "label": "相关度早停阈值",
+      "description": "自动注入专用。候选块的归一化相关度低于「本轮最高分 × 这个比例」就直接丢掉，不占名额。默认 0.25：一个只有最高块四分之一相关的旧事，对模型回答的帮助很小，却会实打实吃掉一行字符。填 0 = 关闭。⚠️ 只作用于自动注入；模型主动调 memory.search 时**不**裁剪（那是它明确要翻一下，宁多勿少）。"
+    },
+    "staleSnippetSkip": {
+      "type": "boolean",
+      "label": "碎片级跨轮去重",
+      "description": "默认开。连续讨论同一件事时，本轮「相关旧事」常常和上一轮注入的原话是同一批 —— 块级冷却抓不到（同一句话 rollup 进日块后 chunkId 就变了）。开启后按消息 mid 判身份，上轮给过的原话不再重复注入；若候选全是旧话，这一段整个省掉。关掉会退回只看块 id，token 用量明显上升。"
+    },
+    "linkBoost": {
+      "type": "number",
+      "label": "共激活联想强度",
+      "description": "人的记忆里「当时一起想到的事」会互相成为线索（Hebb：一起激活的连在一起）。开启后，同一轮检索里一起被想起的块会结缘；之后检索时，与 top 命中结缘的块会借到一点光——甚至字面不相关但「当时一起想到」的块也会被带出来（排名永远在真命中之后）。这是加权强度，默认 0.15，填 0 = 完全关闭。结缘本身可以用下面的「记录共激活」单独关掉。"
+    },
+    "linkLearn": {
+      "type": "boolean",
+      "label": "记录共激活（结缘）",
+      "description": "默认开。只有模型**主动检索**（memory_search）才结缘——每轮自动注入是「被看到」不是「一起想到」，那条路径刻意不结缘，否则又会形成「越常出现越容易被一起带出」的正反馈。关掉后不再产生新的链接，已有链接仍参与加权（直到块被淘汰）。"
+    },
+    "reminiscenceAmp": {
+      "type": "number",
+      "label": "自发恢复幅度",
+      "description": "人的保持率不是单调下降的：忘得死死的记忆搁置一阵后会「突然又有点想起来」（痕迹复苏）。开启后，块进入深忘区（距上次命中 > 3 倍半衰期）后会在纯衰减之上叠一个自己也随时间衰减的小回升，形状是「沉下去 → 弹一下 → 归于没有」。默认 0.12，填 0 = 关闭（严格单调衰减）。⚠️ 回升幅度按淘汰阈值的 40% 自动封顶——弹得再高也终会落到淘汰线以下，库只进不出的情况不会发生。"
+    },
+    "todBoost": {
+      "type": "number",
+      "label": "时段情境加权",
+      "description": "编码特异性的另一条线索：同一时段发生的事，在当下这个时段更容易被提取（晚上更容易想起晚上的事）。块的发生时段与当下时段一致时加权，默认 1.1，填 1 = 关闭。与问句里显式提到「晚上」是两回事——那边是查询线索，这边是无声的提取情境。"
+    },
+    "sleepReplay": {
+      "type": "boolean",
+      "label": "睡眠重演",
+      "description": "默认开。人的睡眠会重放「还没忘干净、但也快忘了」的记忆（间隔重复），于是某天你会突然想起一件早不在眼前的事。开启后，插件按最优难度区间（距上次命中 ≈ 该块半衰期、有效权重 0.5~0.95）挑一块旧事，在下次激活时以【突然想起】带出一句——不看你问什么，只看它该复习了。一次最多一块、字符预算另算（自动注入预算的 60%），护栏降档时自动停播，与「相关旧事」共用冷却去重。"
+    },
+    "replayCooldownDays": {
+      "type": "number",
+      "label": "重演冷却（天）",
+      "description": "同一块两次「睡眠重演」的最短间隔，默认 3 天。防止最优区间里的老熟人天天被带出来。范围 0.5~30。"
+    }
+  },
+  "prompt": null
+}
