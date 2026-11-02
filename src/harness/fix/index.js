@@ -37,6 +37,10 @@ import {
 import { runProtocolGate, runVerifyPlan, VERIFIERS, VERIFIER_IDS } from './checks.js';
 import { buildProposePrompt, parseProposal, applyHunks } from './prompt.js';
 import { buildEvidencePack, packToMarkdown, buildDocx, buildReportPrompt, parseReport, grepLogs } from './doc.js';
+// 数据目录的唯一真源（与 forge / dev / doctor 同源）。原来写 `QQ_AGENT_DATA_DIR || '.'`，
+// 该 env 只有 electron/main.js 会设 —— headless（node src/server.js）下回落进程 cwd，
+// 工单会写进 <仓库根>/plugin-data/self-fix/，而 UI 读 data/ 下的真目录。
+import { DATA_DIR } from '../../config.js';
 
 const DEFAULTS = {
   fixEnabled: false,
@@ -253,7 +257,7 @@ export function setup(api) {
   log = api.log;
   askCapability = api.capability || (() => undefined);
 
-  root = path.join(String(process.env.QQ_AGENT_DATA_DIR || '').trim() || '.', 'plugin-data', 'self-fix');
+  root = path.join(DATA_DIR, 'plugin-data', 'self-fix');
   // <DATA_DIR> = root 往上两级（root=<DATA>/plugin-data/self-fix）
   dataRoot = path.dirname(path.dirname(root));
   // appRoot：本文件位于 <appRoot>/src/harness/fix/index.js

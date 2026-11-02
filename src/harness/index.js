@@ -19,6 +19,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSkillApi } from '../plugin-loader.js';
 import { SKILL_API_VERSION } from '../skills/manifest.js';
+// 数据目录唯一真源。注入给模块的 dataRoot 曾写成 `QQ_AGENT_DATA_DIR || '.'`，
+// 而该 env 只有 electron/main.js 会设 —— headless 下会变成进程 cwd。
+import { DATA_DIR } from '../config.js';
 
 import * as doctor from './doctor/index.js';
 import * as fix from './fix/index.js';
@@ -112,7 +115,7 @@ export function registerHarness({ skillManager, log = console.log } = {}) {
         // 路径由宿主注入：内置模块的 import.meta 层级和插件期不同，
         // 各自反推 appRoot 一定会算错（src/harness/<mod> → src → app 才是根）
         appRoot: APP_ROOT,
-        dataRoot: path.join(String(process.env.QQ_AGENT_DATA_DIR || '').trim() || '.'),
+        dataRoot: DATA_DIR,
         core: true
       };
       if (!bootstrapped && typeof mod.setup === 'function') mod.setup(api);

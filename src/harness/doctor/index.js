@@ -53,6 +53,13 @@ import { DOCTOR_TOOLS, LIMITS as TOOL_LIMITS } from './doctor-tools.js';
 // 为什么必须读它：loadSkillDir 在"已有旧实例"时失败会静默沿用旧版本（只写
 // errors 不打日志），磁盘视角与会话视角都看不出 —— 2026-10-07 conversation-memory 的现场。
 import { skillManager } from '../../skills/manager.js';
+// 数据目录的唯一真源（与 forge / dev / cache-guard 同源）。
+// ⚠️ 原来写 `QQ_AGENT_DATA_DIR || '.'` —— 只有 electron/main.js 会设那个 env，
+//    `node src/server.js` 从不设，于是回落**进程 cwd**：在仓库根跑 headless，
+//    last-report.json / acked.json 就写进 <仓库根>/plugin-data/，仓库多出一坨未跟踪文件，
+//    而 UI 读的是 data/ 下的真目录 → 自检报告"存了但看不到"。config.js 的 DATA_DIR
+//    按模块位置锚定，不看 cwd，多实例 profile（data-2）也一并正确。
+import { DATA_DIR } from '../../config.js';
 
 const DEFAULTS = {
   scanWindowSessions: 400,
@@ -415,7 +422,7 @@ export function checkLoadStatus() {
 function checkRuntimePlane() {
   const issues = [];
   const c = cfg();
-  const dir = path.join(String(process.env.QQ_AGENT_DATA_DIR || '').trim() || '.', 'sessions');
+  const dir = path.join(DATA_DIR, 'sessions');
   const files = listDirSafe(dir).filter((e) => e.isFile() && e.name.endsWith('.json')).map((e) => e.name);
   if (!files.length) return { issues, scanned: 0, note: '没有会话留档' };
 
@@ -719,7 +726,7 @@ export function setup(api) {
   askCapability = api.capability || (() => undefined);
 
   // 数据目录（只读检查，写只写自己的 plugin-data）
-  dataRoot = path.join(String(process.env.QQ_AGENT_DATA_DIR || '').trim() || '.', 'plugin-data', 'self-doctor');
+  dataRoot = path.join(DATA_DIR, 'plugin-data', 'self-doctor');
   // <DATA> 根：sessions / cache-warm-prefix.json 在这一层（dataRoot 的上两级）
   dataRootDir = path.resolve(dataRoot, '..', '..');
   // app 根：本文件位于 <appRoot>/src/harness/doctor/index.js

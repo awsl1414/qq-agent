@@ -1,0 +1,44 @@
+# git-untracked: files propagated from the main worktree to other worktrees.
+# See https://github.com/linyows/git-untracked
+#
+# 只同步「新 worktree 需要、又无法由 git 或 pnpm 重新生成」的本机文件。
+# 判定标准：缺了它，worktree 里的 `pnpm test` / `pnpm start` 会直接失败。
+version: 1
+# debug: true       # log to $GIT_COMMON_DIR/git-untracked.log
+defaults:
+  conflict: skip    # skip | overwrite | backup
+  link: relative    # relative | absolute
+rules:
+  # API Key / 模型配置。没有它，worktree 里的应用起不来（就绪度体检卡在 Base URL）。
+  # 各 worktree 跑起来后会各自改写这份副本，所以必须是 skip：覆盖会冲掉
+  # 某个 worktree 上改过的配置。
+  # ⚠️ 副本与原实例是同一个 QQ 号，同机同时跑会出现双份回复；要并行跑请设
+  #    QQ_AGENT_PROFILE（见 src/profile.js）。
+  - path: data/config.json
+    action: copy
+
+  # Claude Code 的个人设置（启用的插件）。AO / Orca 托管的 worktree 自带一份
+  # hooks 配置，skip 会让它保持原样，不会被这里覆盖。
+  - path: .claude/settings.local.json
+    action: copy
+
+# ── 本机（Windows）不可用或不该同步的，故意不启用 ──────────────────────
+#
+# node_modules/ —— pnpm 在 Windows 上把每个依赖做成 junction，而 git-untracked
+#   用 filepath.WalkDir 展开时把 junction 当成未知类型直接跳过（不报错），
+#   复制出来顶层缺依赖，跑起来是 MODULE_NOT_FOUND。
+#   正确做法是每个 worktree 各自 `pnpm install`：本地 store 已缓存 1.1GB，
+#   靠硬链接落地，比整树复制快，也不会复制出坏树。
+# - path: node_modules/
+#   action: clone
+#
+# link 动作本机不可用：没有 SeCreateSymbolicLinkPrivilege（未开开发者模式、
+#   非管理员），os.Symlink 报 "A required privilege is not held by the client"。
+#
+# 以下一律不同步：
+#   data/ 除 config.json 外的一切 —— logs、各类 cache、qq-agent.lock、
+#     window-state、console-port 都是运行态，搬过去只会制造脏状态
+#     （立场见 src/bundle.js 的「包里永远没有什么」）。
+#   skills/**/.forge-origin.json —— 记录「这台机器上它从哪来」，
+#     跟着走会让接收端误以为模块是从别处升级来的。
+#   graphify-out/ —— 可随时重建的知识图谱输出。

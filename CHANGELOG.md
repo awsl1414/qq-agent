@@ -4,6 +4,20 @@
 
 ---
 
+## 未发布
+
+### 修复
+
+- **headless 启动会在仓库根生成 `plugin-data/`**：`QQ_AGENT_DATA_DIR` 只有桌面端入口会设置，
+  `node src/server.js` 从不设置，而自检 / 自动修复 / 工具上下文三处用的是
+  `QQ_AGENT_DATA_DIR || '.'`，env 为空时回落到**进程 cwd**。在仓库根跑 headless 时，
+  自检报告与修复工单就写进了 `<仓库根>/plugin-data/`，而界面读的是 `data/` 下的真目录 ——
+  表现为「自检报告存了但看不到」，同时仓库多出一坨未跟踪文件。三处统一改走 `src/config.js`
+  导出的 `DATA_DIR`（按模块位置锚定，不看 cwd，多实例 profile 也一并正确），与
+  forge / dev / cache-guard 的既有做法一致。
+
+---
+
 ## 0.4.9.1 · ffmpeg 改为按需下载（2026-11-03，需重启）
 
 ### 变更：ffmpeg 不再随包分发
