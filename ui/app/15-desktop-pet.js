@@ -392,7 +392,11 @@ function dpLoadPreviews() {
       record = { objectUrl: '', promise: null };
       dpPreviewCache.set(url, record);
       record.promise = (async () => {
-        const response = await fetch(url, { headers: { 'x-console-token': CONSOLE_MARKER }, signal: controller.signal, credentials: 'same-origin' });
+        // 这里能带请求头（fetch），所以用 x-console-token 而不是 withToken()。
+        // ⚠️ 必须是 CONSOLE_AUTH_TOKEN || CONSOLE_MARKER：CONSOLE_MARKER 只是
+        //    Electron 下由主进程换成真凭据的占位符；浏览器/headless 里没人替换它，
+        //    配置了 server.token 时只发 marker 会恒 401（预览图全部消失）。
+        const response = await fetch(url, { headers: { 'x-console-token': CONSOLE_AUTH_TOKEN || CONSOLE_MARKER }, signal: controller.signal, credentials: 'same-origin' });
         if (!response.ok || !/^image\/png(?:;|$)/i.test(response.headers.get('content-type') || '')) throw new Error('角色预览暂不可用');
         const blob = await response.blob();
         if (blob.size > 512 * 1024 || controller.signal.aborted) throw new Error('角色预览无效');

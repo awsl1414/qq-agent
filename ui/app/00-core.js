@@ -462,6 +462,8 @@ const CONSOLE_MARKER = 'qq-agent-console';
 // Browser/headless users may open the console with ?token=<server.token>.
 // Cache it for this tab, then remove it from the address bar; Electron replaces the marker
 // with its process-private renderer credential in the main-process request interceptor.
+// ⚠️ 浏览器原生发起的加载（EventSource / CSS url() / <img src>）附加不了请求头，
+//    必须走下面的 withToken() 换成 ?token=，不要各自拼。
 const CONSOLE_AUTH_TOKEN = (() => {
   try {
     const url = new URL(window.location.href);
@@ -475,6 +477,32 @@ const CONSOLE_AUTH_TOKEN = (() => {
     try { return sessionStorage.getItem('qqa-console-token') || ''; } catch { return ''; }
   } catch { return ''; }
 })();
+
+/**
+ * 给「浏览器原生发起」的请求 URL 补上控制台令牌（?token=）。
+ *
+ * 为什么需要统一出口：api() 走 fetch，能带 x-console-token 头；但 EventSource、
+ * CSS 的 url()、<img src>、<video src> 都是浏览器自己发的请求，附加不了自定义头。
+ * 后端 authorize() 同时接受 ?token=，所以这些路径只能把令牌写进查询串。
+ * 曾经 token 传递只散落在 api() 与 02-sse-sessions.js 两处，每新增一处原生加载
+ * 就必然遗漏一次（配置 server.token 后表现为该资源恒 401、静默失效）。
+ * 新增任何原生加载路径都从这里过，不要自己拼 `?token=`。
+ *
+ * @param {string} url 相对路径（/api/...）；外部绝对 URL 原样返回
+ * @returns {string}
+ */
+function withToken(url) {
+  const raw = String(url ?? '');
+  if (!CONSOLE_AUTH_TOKEN) return raw;
+  // 只处理站内相对路径：外链（http(s)://…、//…、data:）不该带上本机令牌
+  if (!raw.startsWith('/') || raw.startsWith('//')) return raw;
+  // 有 #hash 时令牌要插在 hash 之前，否则会被当成片段内容（不发给服务端）
+  const hashAt = raw.indexOf('#');
+  const head = hashAt >= 0 ? raw.slice(0, hashAt) : raw;
+  const tail = hashAt >= 0 ? raw.slice(hashAt) : '';
+  const sep = head.includes('?') ? '&' : '?';
+  return `${head}${sep}token=${encodeURIComponent(CONSOLE_AUTH_TOKEN)}${tail}`;
+}
 
 /* ══════════════════════════════════════════════════════════════
    主题（明/暗/系统/？）
@@ -616,7 +644,7 @@ function applyUiCustom(ui, opts) {
       const fit = String(u.bgFit || 'cover');
       // 暗化不靠 backdrop-filter（软件渲染的帧率杀手），直接叠一层黑纱
       const veil = dim > 0 ? `linear-gradient(rgba(0,0,0,${dim}), rgba(0,0,0,${dim})), ` : '';
-      bgEl.style.backgroundImage = `${veil}url("/api/ui-bg?v=${encodeURIComponent(name)}")`;
+      bgEl.style.backgroundImage = `${veil}url("${withToken(`/api/ui-bg?v=${encodeURIComponent(name)}`)}")`;
       if (fit === 'repeat') {
         bgEl.style.backgroundSize = 'auto';
         bgEl.style.backgroundRepeat = 'repeat';

@@ -16,8 +16,9 @@
 //
 // 后端：/api/wallpaper/list 与 /api/wallpaper/file（src/routes.js 的能力中介 →
 // 内置模块 src/wallpaper/core.js）。媒体 URL 必须带 token 查询参数 —— <img>/<video> 标签
-// 发不了自定义请求头，而 /api/* 的鉴权同时接受 ?token=（值与 api() 的
-// CONSOLE_MARKER 同源）。
+// 发不了自定义请求头，而 /api/* 的鉴权同时接受 ?token=。统一由 00-core.js 的
+// withToken() 拼（它取的是 CONSOLE_AUTH_TOKEN，不是 CONSOLE_MARKER —— 后者只是
+// Electron 下被主进程换成真凭据的占位符，浏览器里没人认）。
 'use strict';
 
 // ── 本页模块状态（经典脚本，全局名一律 wp 前缀防撞）──────────────────────
@@ -35,8 +36,9 @@ function wpCfgSave(cfg) {
   wpPushState(cfg);   // 同步给后端（机器人技能/多窗口一致性），失败静默
 }
 function wpMediaUrl(id, kind) {
-  const t = typeof CONSOLE_MARKER === 'string' ? `&token=${encodeURIComponent(CONSOLE_MARKER)}` : '';
-  return `/api/wallpaper/file?id=${encodeURIComponent(id)}&kind=${kind === 'preview' ? 'preview' : 'media'}${t}`;
+  // 媒体 URL 走 <img>/<video>/CSS url() 这类原生加载，带不了请求头，
+  // 统一交给 00-core.js 的 withToken() 拼 ?token=。
+  return withToken(`/api/wallpaper/file?id=${encodeURIComponent(id)}&kind=${kind === 'preview' ? 'preview' : 'media'}`);
 }
 
 // ── 莫奈取色 + 智能取景（canvas 像素分析，纯前端，零后端依赖）──────────
@@ -655,7 +657,9 @@ function wpCfgSaveLocal(cfg) {
 // SSE：机器人换壁纸的实时通道（无 SSE 环境退化为不跟随，无副作用）
 if (typeof EventSource !== 'undefined') {
   try {
-    const wpEs = new EventSource('/api/events');
+    // EventSource 发不了自定义头，令牌必须走 withToken() 的 ?token=；
+    // 漏了它配置 server.token 后这条连接恒 401，wallpaper-changed 永远收不到。
+    const wpEs = new EventSource(withToken('/api/events'));
     wpEs.addEventListener('wallpaper-changed', () => wpPullState());
   } catch { /* 静默 */ }
 }

@@ -12,9 +12,9 @@ function connectSSE() {
   if (state.preview) return;
   // 已有一条健康的连接就别再叠了
   if (sseConn && sseConn.readyState !== EventSource.CLOSED) return;
-  const eventUrl = CONSOLE_AUTH_TOKEN
-    ? `/api/events?token=${encodeURIComponent(CONSOLE_AUTH_TOKEN)}`
-    : '/api/events';
+  // EventSource 发不了自定义头：令牌只能走 withToken() 拼成 ?token=。
+  // 统一走这个出口，避免以后新增原生加载路径时再各拼一份。
+  const eventUrl = withToken('/api/events');
   const es = new EventSource(eventUrl);
   // R112：把连接记进单例，供 reconnectSSE 关闭重建
   sseConn = es;
