@@ -70,6 +70,28 @@ async function cachedFfmpegHealth(exe) {
 }
 
 /**
+ * 用系统文件管理器打开一个目录。
+ *
+ * 为什么必须按平台分派：三个平台的"打开目录"不是同一个命令 —— Windows 是
+ * explorer.exe、macOS 是 open、Linux 桌面是 xdg-open。原先写死 explorer.exe，
+ * 在 macOS / Linux 上 spawn 会直接 ENOENT（或在 Linux 上撞到不存在的命令），
+ * 用户看到的是"点了没反应"。
+ *
+ * 固定路径参数（导出目录 / DATA_DIR），不接受任何用户输入 —— 没有命令注入面。
+ */
+function openDirNative(dir) {
+  const opener = process.platform === 'darwin' ? 'open'
+    : process.platform === 'win32' ? 'explorer.exe' : 'xdg-open';
+  // spawn 是异步的：命令不存在时错误走 'error' 事件而不是抛错。不挂监听器会
+  // 变成未处理的 error 事件把进程带崩；这里只记日志，调用方仍按已发起处理。
+  const child = spawn(opener, [dir], { detached: true, stdio: 'ignore' });
+  child.on('error', (e) => {
+    logger.warn('routes', `打开目录失败（${opener}）：${String(e?.message ?? e)}`);
+  });
+  child.unref();
+}
+
+/**
  * 构建路由表。
  * @param {object} deps 依赖注入
  */
@@ -2168,7 +2190,7 @@ export function createRoutes(deps) {
       handler: async ({ res, json }) => {
         try {
           const dir = listBundleOptions().exportsDir;
-          spawn('explorer.exe', [dir], { detached: true, stdio: 'ignore' }).unref();
+          openDirNative(dir);
           return json(res, 200, { ok: true, dir });
         } catch (error) {
           return json(res, 500, { ok: false, error: String(error?.message ?? error) });
@@ -2322,7 +2344,7 @@ export function createRoutes(deps) {
       method: 'POST', pattern: '/api/open-data-dir',
       handler: async ({ res, json }) => {
         try {
-          spawn('explorer.exe', [DATA_DIR], { detached: true, stdio: 'ignore' }).unref();
+          openDirNative(DATA_DIR);
           return json(res, 200, { ok: true, dir: DATA_DIR });
         } catch (error) {
           return json(res, 500, { ok: false, error: String(error?.message ?? error) });
@@ -4747,19 +4769,27 @@ export function createRoutes(deps) {
       method: 'GET', pattern: '/api/ffmpeg/status',
       handler: async ({ res, json }) => {
         try {
-          const { resolveFfmpeg, listFfmpegSources, managedBinDir, FFMPEG_VERSION, FFMPEG_ASSETS } = await import('./ffmpeg-resolve.js');
+          const {
+            resolveFfmpeg, listFfmpegSources, managedBinDir, FFMPEG_VERSION, FFMPEG_ASSETS,
+            canAutoInstall, installGuideFor, platformAssets
+          } = await import('./ffmpeg-resolve.js');
           const { resolveDownloadRoute } = await import('./ffmpeg-setup.js');
           const r = await resolveFfmpeg();
           const cfg = getConfig();
           // 预演一次下载通道（镜像 / 代理直连），让 UI 能提前说清"这次会怎么下"。
           // 探测失败当直连处理，不让它拖慢状态接口。
+          // 预演的是 Windows 的 7z 资产 —— 镜像 / 代理通道只对 GyanD 的 GitHub
+          // Release 成立；Linux 的 riedl 资产自带完整 URL，不经过这条通道。
+          // 所以非 win32 上这个字段只作参考，UI 不该拿它渲染下载源说明。
           let route = { url: '', proxy: '', reason: '' };
-          try {
-            route = await resolveDownloadRoute(FFMPEG_ASSETS['7z'].name, {
-              mirror: cfg?.media?.downloadMirror || 'yylx',
-              customMirror: cfg?.media?.customMirror || ''
-            });
-          } catch { /* ignore */ }
+          if (process.platform === 'win32') {
+            try {
+              route = await resolveDownloadRoute(FFMPEG_ASSETS.win32['7z'].name, {
+                mirror: cfg?.media?.downloadMirror || 'yylx',
+                customMirror: cfg?.media?.customMirror || ''
+              });
+            } catch { /* ignore */ }
+          }
           // 本机实际可用的全部 ffmpeg（按组归类），供「优先使用」下拉展示。
           // 探测失败只影响这一块，不影响上面的主状态。
           let candidates = [];
@@ -4786,6 +4816,14 @@ export function createRoutes(deps) {
             managedDir: managedBinDir(),
             candidates,
             health,
+            // 平台信息：UI 据此决定「下载并安装」按钮是否出现、以及不支持时
+            // 改展示什么命令。判断放在后端，是因为资产表的形态在 win32 / linux
+            // 之间并不一致，界面不该理解这两种结构。
+            platform: process.platform,
+            arch: process.arch,
+            canAutoInstall: canAutoInstall(),
+            installGuide: installGuideFor(),
+            hasPlatformAssets: platformAssets() !== null,
             downloadVersion: FFMPEG_VERSION,
             downloadProxy: route.proxy,
             downloadChannel: route.reason,

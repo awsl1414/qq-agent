@@ -3312,16 +3312,31 @@ function renderToolsSection(c) {
  * 按需下载到 data/runtime/ffmpeg/bin/。它只服务四项：大图压缩、GIF 转视频、
  * 视频抽帧、动态壁纸导入 —— 没下载时这四项各自降级，不影响启动与纯文字聊天。
  *
- * 页面结构：状态条 → 未安装时的说明 → 下载/进度 → 下载源 → 手动路径。
+ * 页面结构：状态条 → 安装指引（按平台） → 未安装时的说明 → 下载/进度 → 下载源 → 手动路径。
  * 状态是异步拉的（GET /api/ffmpeg/status），首帧先渲染占位，
  * bindSettingsEvents 里的 ffmpegRefresh() 拉到后**只更新这块文字与按钮态**，
  * 不重建表单（与「连接 QQ」的 qbRefresh 同一套做法）。
+ *
+ * 平台差异（2026-11-03）：ffmpeg 从"只有 Windows 能程序内下载"扩到全平台后，
+ * 同一个区块在不同系统上该给的东西完全不同 —— macOS 没有可靠的免编译二进制，
+ * 给 brew 命令；Linux 首选发行版包管理器，下载只是兜底。这些数据都来自
+ * /api/ffmpeg/status 的 installGuide / canAutoInstall，本函数是纯同步渲染，
+ * 拿不到 → 安装指引区首帧保持 hidden 占位，由 paint() 异步注入。
+ *
+ * ⚠️ 高级折叠区里那四节（下载 / 下载源 / Token / 删除）只能靠标题上的
+ *    `.ffmpeg-dl-only` 整卡隐藏，不能只藏外层 `#ffmpeg-adv`：settingsCards()
+ *    按**顶层** <h3> 切卡，切分点落在折叠区中间，外层 div 会被 </section>
+ *    提前闭合，于是四个小节各自成了独立卡片。
+ * ⚠️ 本模板内不要写含 `<h3` 字样的 HTML 注释 —— settingsCards() 的切分正则
+ *    不认注释边界，会把注释里的文本切成一张空卡片。
  */
 function renderMediaSection(c) {
   const m = c.media || {};
   const mirror = String(m.downloadMirror || 'yylx');
   const source = String(m.ffmpegSource || '');
   const tokenHint = m.hasGithubAccessToken ? '已保存（不显示）' : '';
+  // 平台相关的文案在首帧无从得知（状态是异步拉的），先用 Windows 口径渲染，
+  // paint() 拿到 platform 后会把两处文案与 macOS 要隐藏的区块一起修正。
   return `
     <h3 id="settings-media">ffmpeg（视频与图片处理）</h3>
     <!-- 状态条：已安装时只陈述事实，不摆一个大按钮；未安装时才出现主行动按钮。
@@ -3332,6 +3347,10 @@ function renderMediaSection(c) {
       <button class="btn btn-small btn-primary" id="ffmpeg-download-btn" hidden disabled>下载并安装</button>
       <span class="sl-hint" id="ffmpeg-progress-hint"></span>
     </div>
+    <!-- 安装指引（按平台）：内容依赖 /api/ffmpeg/status，首帧只能是空占位。
+         paint() 拿到 installGuide 后才填内容并取消 hidden；Windows 上
+         installGuide 为 null，这块永远不出现（Windows 的安装路径就是下面的下载按钮）。 -->
+    <div id="ffmpeg-install-guide" style="margin-bottom:14px" hidden></div>
     <div class="hint" style="margin-bottom:14px">
       ffmpeg 是一个外部工具，负责四项功能：<b>大图压缩</b>（群友发的大图先缩到模型能接受的尺寸）、
       <b>GIF 转视频</b>、<b>视频抽帧</b>（让只能看图的模型也能理解视频）、<b>动态壁纸导入</b>。
@@ -3347,7 +3366,7 @@ function renderMediaSection(c) {
       <div class="checkbox-row"><input type="radio" name="cfg-ffmpeg-source" id="cfg-ffmpeg-source-managed" value="managed" ${source === 'managed' ? 'checked' : ''} />
         <label for="cfg-ffmpeg-source-managed">优先用「下载并安装」装的那份</label></div>
       <div class="checkbox-row"><input type="radio" name="cfg-ffmpeg-source" id="cfg-ffmpeg-source-system" value="system" ${source === 'system' ? 'checked' : ''} />
-        <label for="cfg-ffmpeg-source-system">优先用系统里自己装的（PATH / winget）</label></div>
+        <label for="cfg-ffmpeg-source-system" id="cfg-ffmpeg-source-system-label">优先用系统里自己装的（PATH / winget）</label></div>
       <div class="checkbox-row"><input type="radio" name="cfg-ffmpeg-source" id="cfg-ffmpeg-source-manual" value="manual" ${source === 'manual' ? 'checked' : ''} />
         <label for="cfg-ffmpeg-source-manual">优先用下面手填的路径</label></div>
       <div class="hint" id="cfg-ffmpeg-source-hint">正在扫描本机可用的 ffmpeg…</div>
@@ -3361,19 +3380,20 @@ function renderMediaSection(c) {
         <input type="text" id="cfg-ffmpeg-path" value="${esc(m.ffmpegPath || '')}" placeholder="留空 = 自动探测（下载的 / 系统 PATH）" autocomplete="off" style="flex:1" />
         <button class="btn btn-small" type="button" id="cfg-ffmpeg-test">测试</button>
       </div>
-      <div class="hint" id="cfg-ffmpeg-test-hint">自己装过 ffmpeg 的话，把 ffmpeg.exe 的完整路径填这里，会优先使用它。</div>
+      <div class="hint" id="cfg-ffmpeg-path-hint">自己装过 ffmpeg 的话，把 ffmpeg.exe 的完整路径填这里，会优先使用它。</div>
+      <div class="hint" id="cfg-ffmpeg-test-hint"></div>
     </div>
 
     <button class="btn btn-small" type="button" id="ffmpeg-adv-toggle" aria-expanded="false" aria-controls="ffmpeg-adv">高级：下载与安装设置</button>
     <div id="ffmpeg-adv" class="fold-sub folded"><div class="fold-sub-inner">
-      <h3>下载</h3>
+      <h3 class="ffmpeg-dl-only">下载</h3>
       <div class="field">
         <button class="btn btn-small" type="button" id="ffmpeg-download-btn-adv" disabled>下载并安装</button>
         <span class="hint" id="ffmpeg-download-hint" style="margin-left:8px"></span>
         <div class="hint" style="margin-top:6px">下载到数据目录，不写系统 PATH；装完立即生效，不必重启。</div>
       </div>
 
-      <h3>下载源</h3>
+      <h3 class="ffmpeg-dl-only">下载源</h3>
       <div class="field">
         <label>从哪里下载</label>
         <div class="checkbox-row"><input type="radio" name="cfg-ffmpeg-mirror" id="cfg-ffmpeg-mirror-yylx" value="yylx" ${mirror === 'yylx' ? 'checked' : ''} />
@@ -3395,7 +3415,7 @@ function renderMediaSection(c) {
         </div>
       </div>
 
-      <h3>GitHub Token（可选）</h3>
+      <h3 class="ffmpeg-dl-only">GitHub Token（可选）</h3>
       <div class="field">
         <label for="cfg-ffmpeg-ghtoken">访问令牌</label>
         <div style="display:flex;gap:8px">
@@ -3405,7 +3425,7 @@ function renderMediaSection(c) {
         <div class="hint">用于代理节点是共享出口 IP 时绕开 GitHub 的按 IP 限流（未认证 60 次/小时，带 Token 5000 次/小时）。只发给 GitHub 自己的主机，<b>不会</b>发给下载镜像站。</div>
       </div>
 
-      <h3>已下载的文件</h3>
+      <h3 class="ffmpeg-dl-only">已下载的文件</h3>
       <div class="field">
         <button class="btn btn-small" type="button" id="cfg-ffmpeg-remove" disabled>删除已下载的 ffmpeg</button>
         <span class="hint" id="cfg-ffmpeg-remove-hint" style="margin-left:8px"></span>

@@ -6,7 +6,7 @@
 // 四项用得上，纯文字聊天的用户白付这份体积。现在改为设置页「媒体工具」按需
 // 下载到 data/runtime/ffmpeg/bin/，不下载也不影响启动与其它功能（各处都降级）。
 //
-// ── 为什么 7z 优先、zip 兜底 ──────────────────────────────────────────
+// ── 为什么 Windows 上 7z 优先、zip 兜底 ───────────────────────────────
 // 同一个 9.0.2 版本：7z 33.8MB，zip 109.5MB，差 3.2 倍。两者都用 Windows
 // 自带的 System32\tar.exe（bsdtar / libarchive）解压 —— Node 标准库解不了 7z。
 // 极老系统上 bsdtar 可能没有 lzma 支持，所以解压失败时自动改下 zip 重试一次；
@@ -17,22 +17,33 @@
 //    "This does not look like a tar archive"）。这条坑很容易在测试机上踩到，
 //    因为开发机往往正好装了 Git。
 //
+// ── Linux 为什么不用 tar ──────────────────────────────────────────────
+// Linux 的资产是 riedl 的 zip，每个包解出来就是单个无扩展名的 ffmpeg /
+// ffprobe。这里**不能**复用 tar：Linux 上的 `tar` 绝大多数是 GNU tar，它
+// 根本不认识 zip 格式（`--include` 是 bsdtar 的选项，GNU tar 用 `--wildcards`
+// ——换参数也解决不了「格式不支持」）；而 bsdtar 在多数发行版里不是默认安装。
+// 所以 Linux 分支直接用 Node 的 zlib 读 zip 中央目录并解出目标条目，不依赖
+// 任何外部解压工具。
+//
 // ── 安全 ──────────────────────────────────────────────────────────────
 //   · 下载走 safe-fetch（DNS 校验 / IP 固定 / 逐跳重定向校验），不裸 fetch
 //   · 校验值写死在 ffmpeg-resolve.js，不依赖 GitHub API（API 限流、挂掉、
 //     镜像站被投毒都改不了这里的一个字节）
-//   · 只解压 */bin/ffmpeg.exe 与 */bin/ffprobe.exe 两个条目，其余不落地
+//   · Windows 只解压 */bin/ffmpeg.exe 与 */bin/ffprobe.exe 两个条目；
+//     Linux 只解出 zip 里唯一的那个 ffmpeg / ffprobe，其余不落地
 //   · 装完必须真跑 -version 通过才算成功；失败回滚，不留半套
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import { inflateRawSync } from 'node:zlib';
 import { execFile, execFileSync } from 'node:child_process';
 import { getConfig } from './config.js';
 import { safeFetchBinaryToFile } from './safe-fetch.js';
 import {
-  FFMPEG_VERSION, FFMPEG_ASSETS, managedBinDir, exeName,
-  resolveFfmpeg, invalidateFfmpegCache, probeFfmpeg
+  FFMPEG_VERSION, managedBinDir, exeName,
+  resolveFfmpeg, invalidateFfmpegCache, probeFfmpeg,
+  canAutoInstall, platformAssets
 } from './ffmpeg-resolve.js';
 
 // ── 代理 ──────────────────────────────────────────────────────────────
@@ -172,7 +183,15 @@ export async function resolveDownloadRoute(assetName, { mirror = DEFAULT_MIRROR,
   };
 }
 
-/** 官方资源地址（前缀由用户选的镜像拼在前面）。 */
+/**
+ * Windows 资产的官方地址（前缀由用户选的镜像拼在前面）。
+ *
+ * **只服务 win32。** 这里拼的是 GyanD 的 GitHub Release 地址，镜像前缀也是
+ * 按「前缀 + 完整 GitHub 地址」的形态设计的。Linux 的 riedl 资产自带完整
+ * `url`（带构建时间戳目录，没有稳定别名），既不能加镜像前缀，也不该让用户
+ * 选的下载源影响它 —— 传进来只会拼出一个 404 地址。Linux 分支直接用资产里
+ * 的 `url`，见 installLinux。
+ */
 export function assetUrl(assetName, { mirror = DEFAULT_MIRROR, customMirror = '' } = {}) {
   const official = `https://github.com/GyanD/codexffmpeg/releases/download/${FFMPEG_VERSION}/${assetName}`;
   const prefix = mirror === 'custom' ? String(customMirror || '').trim() : (MIRRORS[mirror] ?? MIRRORS[DEFAULT_MIRROR]);
@@ -251,7 +270,9 @@ export function sha256OfFile(file) {
  *
  * 只认系统自带的 bsdtar（libarchive）。GNU tar 读不了 7z/zip，而 Git for
  * Windows 会把自己的 GNU tar 放进 PATH —— 所以不能用裸名，必须写死 System32。
- * 非 Windows 平台退回裸名（Linux/macOS 的 bsdtar 通常就在 PATH 里）。
+ *
+ * 非 Windows 平台返回裸名，但当前只有 Windows 安装路径会调用它：Linux 的
+ * zip 由 extractSingleZipEntry 处理（Linux 的 `tar` 通常是 GNU tar，解不了 zip）。
  */
 export function tarPath() {
   if (process.platform === 'win32') {
@@ -261,6 +282,15 @@ export function tarPath() {
   }
   return 'tar';
 }
+
+// ── 下载与验证参数 ────────────────────────────────────────────────────
+/** 单个压缩包的大小上限。safeFetchBinaryToFile 在 bytes >= limit 时抛错，所以
+ *  要用「已知大小 + 余量」而不是恰好等于文件大小，否则「正好下完」会被误杀。 */
+const DOWNLOAD_SLACK_BYTES = 16 * 1024 * 1024;
+/** 单次下载的网络空闲超时。镜像站偶发卡住时靠它失败退出，而不是挂到天荒地老。 */
+const DOWNLOAD_TIMEOUT_MS = 60000;
+/** 验证解压出来的 ffmpeg 能跑起来的超时。 */
+const PROBE_TIMEOUT_MS = 15000;
 
 function run(cmd, args, timeoutMs = 180000) {
   return new Promise((resolve, reject) => {
@@ -276,11 +306,14 @@ function run(cmd, args, timeoutMs = 180000) {
 }
 
 /**
- * 解压出 ffmpeg.exe / ffprobe.exe。
+ * 解压出 ffmpeg.exe / ffprobe.exe（Windows 包）。
  *
  * 用 --include 做选择性解压：包里还有 doc/、presets/、ffplay.exe 等，
  * 全解出来既慢又多写盘。bsdtar 的 --include 是 glob 匹配完整条目名，
  * 包内路径固定形如 `ffmpeg-9.0.2-essentials_build/bin/ffmpeg.exe`。
+ *
+ * 这里的前提是「Windows 包内一定有 bin/ 目录」。Linux 包不是这个结构，
+ * 也不走 tar（见文件头的「Linux 为什么不用 tar」），由 extractSingleZipEntry 处理。
  */
 async function extractBinaries(pkgFile, destDir) {
   const tar = tarPath();
@@ -292,19 +325,99 @@ async function extractBinaries(pkgFile, destDir) {
   await run(tar, args);
   // bsdtar 把包内目录结构原样铺开，产物在 <destDir>/<包名>/bin/ 下
   const found = { ffmpeg: null, ffprobe: null };
-  const walk = (dir, depth = 0) => {
-    if (depth > 3) return;
-    let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      const p = path.join(dir, e.name);
-      if (e.isDirectory()) { walk(p, depth + 1); continue; }
-      if (e.name === exeName('ffmpeg')) found.ffmpeg = found.ffmpeg || p;
-      if (e.name === exeName('ffprobe')) found.ffprobe = found.ffprobe || p;
-    }
-  };
-  walk(destDir);
+  walk(destDir, found);
   return found;
+}
+
+/**
+ * 递归找目标文件名。两种包结构都适用，所以 Windows（<包名>/bin/xxx.exe）
+ * 与 Linux（zip 根就是单个 ffmpeg）共用同一段。
+ *
+ * 深度上限是为了挡住畸形包把整棵临时目录树走穿；真实包最多两层。
+ */
+function walk(dir, found, depth = 0) {
+  if (depth > 3) return;
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) { walk(p, found, depth + 1); continue; }
+    if (e.name === exeName('ffmpeg')) found.ffmpeg = found.ffmpeg || p;
+    if (e.name === exeName('ffprobe')) found.ffprobe = found.ffprobe || p;
+  }
+}
+
+// 单文件解压上限。riedl 的 ffmpeg 解压后约 91MB，留一倍余量；这个值同时
+// 兜住「zip 中央目录被篡改成超大 uncompressed size」的膨胀攻击。
+const EXTRACT_MAX_FILE_BYTES = 256 * 1024 * 1024;
+// EOCD 固定 22 字节，末尾可能跟最多 64KB 注释。只在这段里找，不整文件扫。
+const ZIP_EOCD_SIZE = 22;
+const ZIP_COMMENT_MAX_BYTES = 65536;
+const ZIP_SIG_EOCD = 0x06054b50;
+const ZIP_SIG_CENTRAL = 0x02014b50;
+const ZIP_SIG_LOCAL = 0x04034b50;
+
+/**
+ * 从 zip 里解出唯一的目标文件，写到 destDir/<baseName>。
+ *
+ * 为什么自己读 zip 而不调 unzip/tar：Linux 上 `tar` 通常是 GNU tar，不支持
+ * zip；`unzip` 也不保证存在（最小容器里经常没有）。Node 的 zlib 足够处理
+ * riedl 用的 store/deflate 两种压缩方式，且不引入运行时依赖。
+ *
+ * 只认「包内恰好一个文件且名字等于 baseName」：riedl 的包就是单条目 zip，
+ * 多条目或名字对不上说明下载到了别的东西，直接失败而不是猜。
+ *
+ * @param {string} zipFile
+ * @param {string} destDir
+ * @param {string} baseName  期望的条目名（'ffmpeg' / 'ffprobe'）
+ * @returns {string} 解出的文件路径
+ */
+function extractSingleZipEntry(zipFile, destDir, baseName) {
+  const buf = fs.readFileSync(zipFile);
+  // ── 定位 EOCD ──
+  let eocd = -1;
+  const scanFrom = Math.max(0, buf.length - ZIP_EOCD_SIZE - ZIP_COMMENT_MAX_BYTES);
+  for (let i = buf.length - ZIP_EOCD_SIZE; i >= scanFrom; i--) {
+    if (buf.readUInt32LE(i) === ZIP_SIG_EOCD) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('不是有效的 zip 文件（找不到中央目录结尾）');
+  const count = buf.readUInt16LE(eocd + 10);
+  if (count !== 1) throw new Error(`zip 里应有且只有 1 个文件，实际 ${count} 个`);
+  let ptr = buf.readUInt32LE(eocd + 16);
+  if (buf.readUInt32LE(ptr) !== ZIP_SIG_CENTRAL) throw new Error('zip 中央目录损坏');
+
+  const method = buf.readUInt16LE(ptr + 10);
+  const compSize = buf.readUInt32LE(ptr + 20);
+  const uncompSize = buf.readUInt32LE(ptr + 24);
+  const nameLen = buf.readUInt16LE(ptr + 28);
+  const extraLen = buf.readUInt16LE(ptr + 30);
+  const commentLen = buf.readUInt16LE(ptr + 32);
+  const localOff = buf.readUInt32LE(ptr + 42);
+  const name = buf.toString('utf8', ptr + 46, ptr + 46 + nameLen);
+
+  if (name !== baseName) throw new Error(`zip 里的文件是 ${name}，期望 ${baseName}`);
+  if (uncompSize > EXTRACT_MAX_FILE_BYTES) {
+    throw new Error(`解压后体积异常（${uncompSize} 字节），超过上限`);
+  }
+  if (buf.readUInt32LE(localOff) !== ZIP_SIG_LOCAL) throw new Error('zip 本地头损坏');
+  const lNameLen = buf.readUInt16LE(localOff + 26);
+  const lExtraLen = buf.readUInt16LE(localOff + 28);
+  const dataStart = localOff + 30 + lNameLen + lExtraLen;
+  const raw = buf.subarray(dataStart, dataStart + compSize);
+  let data;
+  if (method === 0) data = Buffer.from(raw);
+  // maxOutputLength 必须给：中央目录里的 uncompSize 是包自报的，可造假。
+  else if (method === 8) data = inflateRawSync(raw, { maxOutputLength: EXTRACT_MAX_FILE_BYTES });
+  else throw new Error(`不支持的压缩方式（method=${method}）`);
+
+  const dest = path.join(destDir, baseName);
+  fs.mkdirSync(destDir, { recursive: true });
+  fs.writeFileSync(dest, data);
+  // 必须**在这里**给执行位，不能等到 installBinaries：调用方紧接着要 spawn
+  // 这个文件跑 -version 做验证，没有执行位会直接 EACCES，把一次正常安装判成
+  // "解压出来的 ffmpeg 无法运行"。zip 条目本身不携带执行位。
+  fs.chmodSync(dest, 0o755);
+  return dest;
 }
 
 // ── 任务状态（内存态，UI 每秒轮询）──────────────────────────────────────
@@ -354,18 +467,29 @@ function succeed() {
 /**
  * 下载并安装 ffmpeg。
  *
- * 返回 { ok, error?, path?, version?, source? }。失败不会抛 —— 调用方是
+ * 返回 { ok, error?, code?, path?, version?, source? }。失败不会抛 —— 调用方是
  * HTTP 路由，抛错会变成 500 且 UI 拿不到分步原因。
+ *
+ * `code` 用于区分失败类别：'use_package_manager' 表示该平台不支持程序内
+ * 下载（macOS），UI 应改为展示包管理器命令，而不是当成下载失败去重试。
  *
  * @param {{ mirror?: string, customMirror?: string }} [opts]
  */
 export async function downloadAndInstallFfmpeg(opts = {}) {
+  // 平台门禁必须排在「已有任务在跑」之前：macOS 上永远不会有任务在跑，
+  // 先判平台能让用户直接看到"该怎么做"，而不是先收到一句无关的并发提示。
+  if (!canAutoInstall()) {
+    return { ok: false, code: 'use_package_manager', error: 'macOS 请用 Homebrew 安装 ffmpeg：brew install ffmpeg（设置页「媒体工具」里有可复制的命令）' };
+  }
   if (state.running) return { ok: false, error: '已经有一个下载任务在跑，等它结束再试' };
 
   const cfg = getConfig();
   const mirror = String(opts.mirror || cfg?.media?.downloadMirror || DEFAULT_MIRROR);
   const customMirror = String(opts.customMirror ?? cfg?.media?.customMirror ?? '');
-  if (mirror === 'custom' && !isValidMirrorPrefix(customMirror)) {
+  // 镜像 / 自定义源只对 Windows 的 GyanD 资产有意义（Linux 的 riedl 地址自带
+  // 完整 URL），所以 Linux 上不拿它拦人 —— 否则一个写坏的自定义源会让本来
+  // 跟它无关的 Linux 下载也启动不了。
+  if (process.platform === 'win32' && mirror === 'custom' && !isValidMirrorPrefix(customMirror)) {
     return { ok: false, error: '自定义下载源格式不对，应形如 https://git.yylx.win/' };
   }
 
@@ -384,18 +508,12 @@ export async function downloadAndInstallFfmpeg(opts = {}) {
 async function runInstall({ work, mirror, customMirror }) {
   const cleanup = () => { try { fs.rmSync(work, { recursive: true, force: true }); } catch { /* ignore */ } };
   try {
-    // ① 先试 7z（体积只有 zip 的三分之一）
-    let installed = await tryInstallFormat('7z', { work, mirror, customMirror });
-    // ② 7z 失败 → 换 zip 再来一次（老版本 bsdtar 可能没有 lzma）
-    if (!installed.ok) {
-      state.step = '7z 解压失败，改用 zip 重试';
-      state.received = 0;
-      state.total = 0;
-      installed = await tryInstallFormat('zip', { work, mirror, customMirror });
-    }
+    const installed = process.platform === 'linux'
+      ? await installLinux({ work })
+      : await installWindows({ work, mirror, customMirror });
     if (!installed.ok) return fail(installed.error || '安装失败');
 
-    // ③ 装完重新解析一次，确认新装的这份真的能被用上
+    // 装完重新解析一次，确认新装的这份真的能被用上
     invalidateFfmpegCache();
     const resolved = await resolveFfmpeg({ force: true });
     if (!resolved.ok) return fail('安装完成但无法运行，请手动指定 ffmpeg 路径');
@@ -408,9 +526,93 @@ async function runInstall({ work, mirror, customMirror }) {
   }
 }
 
+/** Windows：先试 7z（体积只有 zip 的三分之一），失败再换 zip（老版本 bsdtar 可能没有 lzma）。 */
+async function installWindows({ work, mirror, customMirror }) {
+  let installed = await tryInstallFormat('7z', { work, mirror, customMirror });
+  if (!installed.ok) {
+    state.step = '7z 解压失败，改用 zip 重试';
+    state.received = 0;
+    state.total = 0;
+    installed = await tryInstallFormat('zip', { work, mirror, customMirror });
+  }
+  return installed;
+}
+
+/**
+ * Linux：ffmpeg 与 ffprobe 是两个独立 zip，必须分两次下载。
+ *
+ * 不复用 tryInstallFormat 的原因：那里的资产是「同一份内容的两种压缩格式」，
+ * 这里是「两个不同的文件」，进度、失败语义（任一失败即整体失败）都不同。
+ *
+ * 为什么只下 zip 不试 7z：riedl 只提供 zip，且 Linux 上的 GNU tar 解不了
+ * 7z（bsdtar 未必安装）。解压用 extractSingleZipEntry，不依赖外部工具。
+ */
+async function installLinux({ work }) {
+  const assets = platformAssets('linux');
+  if (!assets) return { ok: false, error: `Linux ${process.arch} 没有可用的下载资产` };
+
+  // 两个文件各自下载 + 校验 + 解压，产物先集中在 out-linux/ 下
+  const outDir = path.join(work, 'out-linux');
+  fs.mkdirSync(outDir, { recursive: true });
+  // 代理只解析一次：两个包同源，没必要每轮重读配置 / 注册表
+  const proxy = await resolveDownloadProxy();
+  state.channel = proxy ? `经代理 ${proxy} 直连 riedl` : '直连 riedl';
+  const parts = [['ffmpeg', assets.ffmpeg], ['ffprobe', assets.ffprobe]];
+  const found = { ffmpeg: null, ffprobe: null, version: '' };
+  for (let i = 0; i < parts.length; i++) {
+    const [kind, asset] = parts[i];
+    const label = `第 ${i + 1}/${parts.length} 个文件（${kind}）`;
+    const pkg = path.join(work, `${kind}.zip`);
+
+    try {
+      // ── 下载 ──
+      const mb = Math.round(asset.bytes / 1048576);
+      state.step = `下载 ${label}，约 ${mb}MB`;
+      state.received = 0;
+      state.total = asset.bytes;
+      // riedl 的 URL 是完整地址，不走镜像前缀，也没有 GitHub Token 可带
+      await safeFetchBinaryToFile(asset.url, pkg, asset.bytes + DOWNLOAD_SLACK_BYTES, {
+        timeoutMs: DOWNLOAD_TIMEOUT_MS,
+        proxy,
+        onProgress: (received, declared) => {
+          state.received = received;
+          if (declared > 0) state.total = declared;
+        }
+      });
+
+      // ── 校验 ──
+      state.step = `校验 ${label}`;
+      const actual = await sha256OfFile(pkg);
+      if (actual !== asset.sha256) {
+        return {
+          ok: false,
+          error: `${kind} 下载文件校验失败（SHA-256 不匹配）。可能是下载源返回了错误内容，稍后再试。\n期望 ${asset.sha256}\n实际 ${actual}`
+        };
+      }
+
+      // ── 解压（单条目 zip，直接解出目标文件）──
+      state.step = `解压 ${label}`;
+      const exe = extractSingleZipEntry(pkg, outDir, kind);
+
+      // ── 验证（先跑一遍，通过才落盘）──
+      state.step = `验证 ${label}`;
+      const v = await probeFfmpeg(exe, PROBE_TIMEOUT_MS);
+      if (!v.ok) return { ok: false, error: `${kind} 解压出来无法运行（可能缺少系统组件或架构不匹配）` };
+      found[kind] = exe;
+      if (kind === 'ffmpeg') found.version = v.raw;
+    } catch (e) {
+      return { ok: false, error: `${kind} 安装失败：${String(e?.message ?? e)}` };
+    }
+  }
+
+  // ffprobe 在 Linux 上是**必需**的：它是单独下载的，缺了说明流程本身出了问题，
+  // 不能像 Windows 那样"旧包没有就跳过"。
+  return installBinaries(found);
+}
+
 /** 下载 + 校验 + 解压 + 落盘某一个格式。失败返回 { ok:false, error }，不抛。 */
 async function tryInstallFormat(fmt, { work, mirror, customMirror }) {
-  const asset = FFMPEG_ASSETS[fmt];
+  const asset = platformAssets('win32')?.[fmt];
   if (!asset) return { ok: false, error: `未知格式 ${fmt}` };
   const pkg = path.join(work, asset.name);
 
@@ -430,7 +632,7 @@ async function tryInstallFormat(fmt, { work, mirror, customMirror }) {
     // 上限给 200MB：safeFetchBinaryToFile 在 bytes >= limit 时抛错，
     // 传恰好等于文件大小会误杀「正好下完」的正常情况。
     await safeFetchBinaryToFile(route.url, pkg, 200 * 1024 * 1024, {
-      timeoutMs: 60000,
+      timeoutMs: DOWNLOAD_TIMEOUT_MS,
       proxy: route.proxy,
       headersForHost,
       onProgress: (received, declared) => {
@@ -459,36 +661,59 @@ async function tryInstallFormat(fmt, { work, mirror, customMirror }) {
 
     // ── 验证（先跑一遍，通过才落盘）──
     state.step = '验证可执行文件';
-    const v = await probeFfmpeg(found.ffmpeg, 15000);
+    const v = await probeFfmpeg(found.ffmpeg, PROBE_TIMEOUT_MS);
     if (!v.ok) return { ok: false, error: '解压出来的 ffmpeg 无法运行（可能缺少系统组件）' };
 
-    // ── 原子安装 ──
-    state.step = '安装';
-    const destDir = managedBinDir();
-    const parent = path.dirname(destDir);
-    fs.mkdirSync(parent, { recursive: true });
-    const staging = `${destDir}.new-${process.pid}-${Date.now().toString(36)}`;
-    fs.mkdirSync(staging, { recursive: true });
-    fs.copyFileSync(found.ffmpeg, path.join(staging, exeName('ffmpeg')));
-    if (found.ffprobe) fs.copyFileSync(found.ffprobe, path.join(staging, exeName('ffprobe')));
-
-    // 旧目录先挪开，成功后删除；失败则挪回 —— 不能让用户从"能用"变成"没有"
-    const backup = `${destDir}.old-${process.pid}-${Date.now().toString(36)}`;
-    let hadOld = false;
-    try {
-      if (fs.existsSync(destDir)) { fs.renameSync(destDir, backup); hadOld = true; }
-      fs.renameSync(staging, destDir);
-    } catch (e) {
-      try { if (fs.existsSync(staging)) fs.rmSync(staging, { recursive: true, force: true }); } catch { /* ignore */ }
-      if (hadOld) { try { fs.renameSync(backup, destDir); } catch { /* ignore */ } }
-      return { ok: false, error: `安装失败（无法写入 ${destDir}）：${e?.message ?? e}` };
-    }
-    if (hadOld) { try { fs.rmSync(backup, { recursive: true, force: true }); } catch { /* ignore */ } }
-
-    return { ok: true, version: v.raw };
+    // Windows 上 ffprobe 可能不存在（旧包只有 ffmpeg），是可选项；
+    // Linux 的必需性在 installLinux 里已保证。
+    return installBinaries({ ...found, version: v.raw });
   } catch (e) {
     return { ok: false, error: String(e?.message ?? e) };
   }
+}
+
+/**
+ * 原子安装：staging 目录 → rename 到 managedBinDir。
+ *
+ * 两个平台共用：Windows 是「同一包里的 ffmpeg + 可选 ffprobe」，Linux 是
+ * 「分两次下载的 ffmpeg + 必需 ffprobe」，落盘形态完全一致。
+ *
+ * @param {{ ffmpeg: string, ffprobe: string|null, version?: string }} found
+ */
+function installBinaries(found) {
+  if (!found.ffmpeg) return { ok: false, error: `解压后没有找到 ${exeName('ffmpeg')}` };
+
+  state.step = '安装';
+  const destDir = managedBinDir();
+  const parent = path.dirname(destDir);
+  fs.mkdirSync(parent, { recursive: true });
+  const staging = `${destDir}.new-${process.pid}-${Date.now().toString(36)}`;
+  fs.mkdirSync(staging, { recursive: true });
+  const destFfmpeg = path.join(staging, exeName('ffmpeg'));
+  fs.copyFileSync(found.ffmpeg, destFfmpeg);
+  // Linux 上 zip 条目未必带执行位，copyFile 会原样保留该属性 —— 不显式 chmod
+  // 就会出现"文件在、-version 跑不起来"。Windows 没有执行位概念，no-op。
+  fs.chmodSync(destFfmpeg, 0o755);
+  if (found.ffprobe) {
+    const destFfprobe = path.join(staging, exeName('ffprobe'));
+    fs.copyFileSync(found.ffprobe, destFfprobe);
+    fs.chmodSync(destFfprobe, 0o755);
+  }
+
+  // 旧目录先挪开，成功后删除；失败则挪回 —— 不能让用户从"能用"变成"没有"
+  const backup = `${destDir}.old-${process.pid}-${Date.now().toString(36)}`;
+  let hadOld = false;
+  try {
+    if (fs.existsSync(destDir)) { fs.renameSync(destDir, backup); hadOld = true; }
+    fs.renameSync(staging, destDir);
+  } catch (e) {
+    try { if (fs.existsSync(staging)) fs.rmSync(staging, { recursive: true, force: true }); } catch { /* ignore */ }
+    if (hadOld) { try { fs.renameSync(backup, destDir); } catch { /* ignore */ } }
+    return { ok: false, error: `安装失败（无法写入 ${destDir}）：${e?.message ?? e}` };
+  }
+  if (hadOld) { try { fs.rmSync(backup, { recursive: true, force: true }); } catch { /* ignore */ } }
+
+  return { ok: true, version: found.version || '' };
 }
 
 /** 删除已下载的那份（只动 managedBinDir，不碰系统装的）。 */

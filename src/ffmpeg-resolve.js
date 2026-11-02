@@ -27,6 +27,36 @@
 // 非 PATH 目录（随包 / 下载 / 手填）时，明明同目录就躺着 ffprobe.exe，却
 // 找不到，只能退化到「解析 ffmpeg -i 的 stderr」——精度和健壮性都差一截。
 // 现在 ffprobeFor() 从 ffmpeg 路径推同目录的 ffprobe，找不到才返回 null。
+//
+// ── 全平台资产（2026-11-03）──────────────────────────────────────────
+// 三平台分三种策略，FFMPEG_ASSETS 也按平台分组：
+//
+//   Windows  程序内下载（GyanD/codexffmpeg 的 essentials_build）。原样保留：
+//            这台机器上没有可依赖的包管理器，按需下载是唯一不要求用户先
+//            配环境的路径。
+//   Linux    程序内下载（martin-riedl 的静态包）。服务器与容器里经常没有
+//            包管理器的写权限（或根本没有包管理器），此时"给条 apt 命令"
+//            等于让用户去改宿主机，程序内下载才是唯一能自己解决的路。
+//   macOS    **不**做程序内下载，只给 Homebrew 命令。原因不是"懒"：
+//            Homebrew 的 ffmpeg bottle 是动态链接的，依赖 7 个 libav*.dylib
+//            与 11 个 formula，无法塞进单个可执行文件；而唯一可行的第三方
+//            静态包又与"用 brew 的源"这个决定相悖 —— 留着它就会同时存在
+//            两条互不兼容的升级路径（brew upgrade 升不到下载的那份，
+//            下载的那份也不会被 brew 感知），用户无从判断自己用的是哪套。
+//            与其造一个会分叉的安装方式，不如把 macOS 交给它事实上的包管理器。
+//
+// Linux 为什么选 riedl 而不是 johnvansickle：后者停在 7.0.2，且发布页只给
+// md5 —— 与本模块"装上的东西一定是验证过的"这条前提冲突（md5 可碰撞，
+// 且无法与上游 digest 对齐）。riedl 是 9.0.2，与 Windows 那份同版本，
+// 且每个包都提供 sha256。
+//
+// ⚠️ 已知取舍：riedl 的 Linux 包是**动态链接**的，需要 glibc ≥ 2.22。
+//    CentOS 7 这类老系统（glibc 2.17）装了也跑不起来。这是有意的取舍 ——
+//    为了拿到 sha256 可验证的现成包，放弃对已停止维护的老发行版的支持；
+//    这些系统上用户可以改用发行版自带的 ffmpeg（解析链会先看系统那份）。
+//
+// 注意：程序内下载**只在 canAutoInstall() 为真的平台**上开放。macOS 上
+// platformAssets() 返回 null，调用方据此隐藏下载入口、改展示 installGuideFor()。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,27 +64,138 @@ import { spawn } from 'node:child_process';
 import { ROOT, DATA_DIR, getConfig } from './config.js';
 
 /**
- * 随包下载的 ffmpeg 版本。**升级时必须同步改 FFMPEG_ASSETS 里的 sha256 与字节数**。
+ * 程序内下载的 ffmpeg 版本。**升级时必须同步改 FFMPEG_ASSETS 里的 sha256 与字节数**。
  *
- * 校验值写死在代码里而不是每次问 GitHub API，是为了让「装上的东西一定是
+ * 校验值写死在代码里而不是每次问上游 API，是为了让「装上的东西一定是
  * 我们验证过的」成为一条不依赖网络与限流的性质：API 挂掉、Token 过期、
  * 镜像站被投毒，都拦不住下载，但改不了这里的一个字节。
+ *
+ * Windows 与 Linux 两份资产都是 9.0.2，版本号因此只有一个来源。
  */
 export const FFMPEG_VERSION = '9.0.2';
 
-/** 两个发布包（7z 优先，zip 兜底），sha256 取自 GitHub Release API 的 digest 字段。 */
+/**
+ * 按平台分组的下载资产。
+ *
+ * win32：两个发布包（7z 优先，zip 兜底），sha256 取自 GitHub Release API 的
+ *        digest 字段。字段形态 `{ name, sha256, bytes }`。
+ * linux：ffmpeg 与 ffprobe 是**两个独立 zip**，按架构分目录，字段形态
+ *        `{ url, sha256, bytes }`。URL 里的时间戳目录是站点构建 ID，没有稳定
+ *        别名，所以整条 URL 写死；sha256 与字节数均为逐包实测值，改动前必须
+ *        重新下载核对。
+ *
+ * darwin 刻意不在表里：它的 ffmpeg 由 Homebrew 提供，见文件头说明。
+ */
 export const FFMPEG_ASSETS = {
-  '7z': {
-    name: `ffmpeg-${FFMPEG_VERSION}-essentials_build.7z`,
-    sha256: '4705843ccaaf54257c16ad90f3e952ece33c17df964ecf7bfdbb0f49c7171077',
-    bytes: 35430500
+  win32: {
+    '7z': {
+      name: `ffmpeg-${FFMPEG_VERSION}-essentials_build.7z`,
+      sha256: '4705843ccaaf54257c16ad90f3e952ece33c17df964ecf7bfdbb0f49c7171077',
+      bytes: 35430500
+    },
+    zip: {
+      name: `ffmpeg-${FFMPEG_VERSION}-essentials_build.zip`,
+      sha256: '60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba',
+      bytes: 114768076
+    }
   },
-  zip: {
-    name: `ffmpeg-${FFMPEG_VERSION}-essentials_build.zip`,
-    sha256: '60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba',
-    bytes: 114768076
+  linux: {
+    x64: {
+      ffmpeg: {
+        url: 'https://ffmpeg.martin-riedl.de/download/linux/amd64/1789931100_9.0.2/ffmpeg.zip',
+        sha256: 'fa8ecf4abbd290d98f7d188b8649cc6b391ae209a98452be955a15aab1909d7f',
+        bytes: 33326445
+      },
+      ffprobe: {
+        url: 'https://ffmpeg.martin-riedl.de/download/linux/amd64/1789931100_9.0.2/ffprobe.zip',
+        sha256: '3f428c49070be3d24ec338602b76d412e401ffcb8a5641ef0e729181a232fc32',
+        bytes: 33223234
+      }
+    },
+    arm64: {
+      ffmpeg: {
+        url: 'https://ffmpeg.martin-riedl.de/download/linux/arm64/1789931697_9.0.2/ffmpeg.zip',
+        sha256: '93a76ae90db5474eecdf951a729857c64f3de23567228d6a7d5e6e8e3cd1021b',
+        bytes: 28753826
+      },
+      ffprobe: {
+        url: 'https://ffmpeg.martin-riedl.de/download/linux/arm64/1789931697_9.0.2/ffprobe.zip',
+        sha256: 'bcbe80fb741c180083327afaf5434812e006b33cacde2016b9aeaf6936128330',
+        bytes: 28655683
+      }
+    }
   }
 };
+
+/**
+ * 当前平台能不能程序内下载。macOS 一律 false —— 它的 ffmpeg 由 Homebrew 提供。
+ *
+ * 用函数而不是让调用方读 FFMPEG_ASSETS：调用方要回答的是"能不能点这个按钮"，
+ * 而资产表的结构在 win32（按格式）与 linux（按架构）之间并不一致，让 UI
+ * 去理解两种形态只会把平台差异泄漏到界面层。
+ */
+export function canAutoInstall(platform = process.platform) {
+  return platform === 'win32' || platform === 'linux';
+}
+
+/**
+ * 取当前平台的资产组；不支持平台返回 null。
+ *
+ * win32 返回 `{ '7z': {...}, zip: {...} }`，linux 返回 `{ ffmpeg: {...}, ffprobe: {...} }`。
+ * 两种形态由 ffmpeg-setup 各自消费，这里不做归一化 —— 归一化会丢掉
+ * 「Windows 的 7z/zip 是同一份内容的不同压缩格式」与「Linux 的 ffmpeg/ffprobe
+ * 是两个独立文件」这个本质区别。
+ */
+export function platformAssets(platform = process.platform, arch = process.arch) {
+  if (platform === 'win32') return FFMPEG_ASSETS.win32;
+  if (platform === 'linux') return FFMPEG_ASSETS.linux[arch] || null;
+  return null;
+}
+
+/** Homebrew 官方安装脚本地址。写死常量，避免在返回结构里散落长字符串。 */
+const HOMEBREW_INSTALL_CMD = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"';
+
+/**
+ * 包管理器安装命令。Windows 返回 null（它走程序内下载）。
+ *
+ * 这里只返回数据、不执行：安装系统包需要 sudo 与用户确认，替用户跑
+ * `sudo apt install` 既越权，也会让"点了没反应"变成一个需要排查的问题。
+ * 界面负责把命令展示成可复制的形式。
+ *
+ * @returns {null | { kind:'command', primary?:{label:string,cmd:string},
+ *                    fallback?:{label:string,cmd:string}, notes?:string[],
+ *                    distros?:Array<{id:string,label:string,cmd:string,note:string}> }}
+ */
+export function installGuideFor(platform = process.platform, arch = process.arch) {
+  if (platform === 'darwin') {
+    const guide = {
+      kind: 'command',
+      primary: { label: 'Homebrew（推荐）', cmd: 'brew install ffmpeg' },
+      fallback: { label: '还没装 Homebrew 的话先装它', cmd: HOMEBREW_INSTALL_CMD },
+      notes: []
+    };
+    // Intel Mac 没有官方 ffmpeg bottle，brew 会回落到源码编译 —— 这一步
+    // 需要 Xcode 命令行工具，且耗时以十分钟计。提前说明，免得用户以为卡死。
+    if (arch === 'x64') {
+      guide.notes.push('Intel Mac 上 Homebrew 会从源码编译 ffmpeg，需先执行 xcode-select --install，耗时约十几分钟');
+    }
+    return guide;
+  }
+  if (platform === 'linux') {
+    return {
+      kind: 'command',
+      distros: [
+        { id: 'debian', label: 'Debian / Ubuntu', cmd: 'sudo apt install ffmpeg', note: '' },
+        // Fedora 默认源不含 ffmpeg（专利考虑），必须先启用 RPM Fusion。
+        { id: 'fedora', label: 'Fedora', cmd: 'sudo dnf install ffmpeg', note: '需先启用 RPM Fusion 源' },
+        { id: 'arch', label: 'Arch / Manjaro', cmd: 'sudo pacman -S ffmpeg', note: '' },
+        // openSUSE 的官方 ffmpeg 功能受限，完整编解码器在 Packman 源里。
+        { id: 'suse', label: 'openSUSE', cmd: 'sudo zypper install ffmpeg', note: '需先启用 Packman 源' }
+      ]
+    };
+  }
+  return null;
+}
 
 /** 下载落地目录（`data/runtime/ffmpeg/bin/`）。下载安装只往这里写。 */
 export function managedBinDir() {
@@ -521,6 +662,32 @@ export async function listFfmpegSources({ perGroupLimit = SOURCE_PROBE_LIMIT_PER
   return out;
 }
 
+/**
+ * 非 Windows 上额外探测的固定安装目录。
+ *
+ * 为什么需要：从 systemd（Linux 服务）或 launchd（macOS 后台启动）拉起的进程，
+ * PATH 往往只有 `/usr/bin:/bin` —— Homebrew、Linuxbrew、snap 的 bin 全都不在
+ * 里面。用户明明装了 ffmpeg，本应用却报"未找到"，而且从终端手动跑一次
+ * `pnpm start` 又好了，极难自查。固定目录不依赖启动方式，能把这类环境补齐。
+ *
+ * 不写成 Windows 的等价物（注册表 / WinGet）：那几条在非 Windows 上本就是
+ * 空数组，这里是它们的对应物。
+ */
+function nonWinSystemDirs() {
+  const dirs = [
+    '/opt/homebrew/bin',                    // Apple Silicon Homebrew
+    '/usr/local/bin',                       // Intel Homebrew / 常见手动安装
+    '/home/linuxbrew/.linuxbrew/bin',       // Linuxbrew
+    path.join(os.homedir(), '.local', 'bin'),
+    '/snap/bin'
+  ];
+  // 自定义前缀的 Homebrew（如用户装在 /opt/brew）不会出现在上面的固定列表里，
+  // 但 brew 自己会导出 HOMEBREW_PREFIX，有值就补上它的 bin。
+  const prefix = String(process.env.HOMEBREW_PREFIX || '').trim();
+  if (prefix) dirs.push(path.join(prefix, 'bin'));
+  return dirs;
+}
+
 /** buildCandidates 的分组形态（同一套探测，只是先不拍平）。 */
 async function buildCandidatesByGroup() {
   const groups = { manual: [], managed: [], system: [] };
@@ -535,7 +702,16 @@ async function buildCandidatesByGroup() {
   push('managed', path.join(bundledBinDir(), exeName('ffmpeg')));
 
   for (const p of await whereExecutable('ffmpeg')) push('system', p);
+  // 裸名排在固定目录**之前**：PATH 是用户/发行版明确的优先顺序，只要 PATH
+  // 里能找到，就该按 PATH 走（可能是指向自建构建的软链）。固定目录只用来
+  // 补 PATH 被裁剪时的缺口，不该反过来抢在 PATH 前面 —— 那会让"我把新版
+  // 放进 PATH 第一位"这类常规操作失效。
   push('system', 'ffmpeg');
+  if (process.platform !== 'win32') {
+    for (const dir of nonWinSystemDirs()) {
+      push('system', path.join(dir, exeName('ffmpeg')));
+    }
+  }
   for (const p of await registryPathFfmpeg()) push('system', p);
   for (const p of wingetLinksCandidates()) push('system', p);
   for (const p of wingetFfmpegCandidates()) push('system', p);

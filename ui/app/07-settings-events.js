@@ -1833,6 +1833,75 @@ function bindSettingsEvents(c) {
       system: '系统安装的'
     };
 
+    // 平台适配（2026-11-03）：installGuide / canAutoInstall 只有 /api/ffmpeg/status
+    // 才有，06 的渲染函数是同步纯函数拿不到 —— 安装指引区首帧是空占位（hidden），
+    // 由 paint() 注入；平台相关的文案与 macOS 要隐藏的下载区块也在 paint() 里修正。
+    // 注意 paint 只改文字与显隐、不重建表单（与 qbRefresh 同一约束），
+    // 所以这里对每块内容都先确认存在再写。
+    const installGuideHtml = (g) => {
+      if (!g || g.kind !== 'command') return '';
+      // 这块是运行时注入的，不是 .set-card 的直接子节点，所以拿不到
+      // `#settings-form .set-card > h3` 那套卡片标题样式（会落成页面级蓝色标题）。
+      // 内联对齐卡片标题的观感，避免这一块看起来像另一个层级的分区。
+      const head = '<h3 style="margin:14px 0 10px;font-size:13px;font-weight:700;color:var(--fg);border-bottom:0">安装 ffmpeg</h3>';
+      // 一行 = 说明 + 等宽命令 + 复制。label 用 <span> 而不是 <label>：
+      // .field label 被全局设成 display:block，会把命令挤到下一行。
+      const row = (label, cmd, note = '') => `
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px">
+          ${label ? `<span class="hint" style="margin:0">${esc(label)}</span>` : ''}
+          <code>${esc(cmd)}</code>
+          <button class="btn btn-mini btn-ghost" type="button" data-ffmpeg-copy="${esc(cmd)}">复制</button>
+        </div>
+        ${note ? `<div class="hint">${esc(note)}</div>` : ''}`;
+      if (Array.isArray(g.distros) && g.distros.length) {
+        // linux：主路径是发行版包管理器，四个发行版各给一条命令。
+        return `${head}
+          <div class="field">
+            <div class="hint" style="margin-top:0">按你的发行版选一条在终端执行；装完回来点「测试」确认。</div>
+            ${g.distros.map((d) => `
+              <div style="margin-top:8px">
+                <span class="hint" style="display:block;margin:0 0 2px">${esc(d.label || d.id)}</span>
+                ${row('', d.cmd, d.note || '')}
+              </div>`).join('')}
+          </div>`;
+      }
+      // darwin：主命令 + 备用（装 Homebrew 本身）折叠 + 逐条注意事项。
+      const parts = [];
+      if (g.primary) parts.push(row(g.primary.label, g.primary.cmd));
+      if (g.fallback) {
+        parts.push(`
+          <details style="margin-top:8px">
+            <summary class="hint" style="cursor:pointer">${esc(g.fallback.label || '备用命令')}</summary>
+            ${row('', g.fallback.cmd)}
+          </details>`);
+      }
+      const notes = (g.notes || []).filter(Boolean);
+      if (notes.length) {
+        parts.push(`<ul class="hint" style="margin:8px 0 0;padding-left:18px">${notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>`);
+      }
+      return `${head}<div class="field">${parts.join('')}</div>`;
+    };
+
+    // 复制命令：与 00-core.js 启动失败卡片的 copyBtn 同一套反馈节奏。
+    // 每次注入都是新的 DOM（旧节点连同监听一起丢弃），所以重绑不会累积。
+    const bindCopyButtons = (root) => {
+      $$('[data-ffmpeg-copy]', root).forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(btn.dataset.ffmpegCopy || '');
+            btn.textContent = '已复制 ✓';
+          } catch (_) {
+            // 剪贴板被拒（网页版无权限 / 非安全上下文）时明说，别假装成功。
+            btn.textContent = '复制失败';
+          }
+          setTimeout(() => { btn.textContent = '复制'; }, 1500);
+        });
+      });
+    };
+
+    // 平台是否允许程序内下载；paintCandidates 的兜底文案要据此改写。
+    let autoInstallAllowed = true;
+
     // 把本机探测到的可用 ffmpeg 列在「优先使用」下面。
     // 这是用户判断"系统里那份到底认不认"的唯一依据 —— 只给单选而不给清单，
     // 用户切到 system 后看到"未安装"会以为是设置坏了。
@@ -1841,7 +1910,10 @@ function bindSettingsEvents(c) {
       if (!hint) return;
       const rows = (list || []).filter((x) => x && x.path);
       if (!rows.length) {
-        hint.textContent = '没有探测到可用的 ffmpeg：可以点上面的「下载并安装」，或在下面手动指定路径。';
+        // macOS 没有下载按钮，不能再让用户"点上面的「下载并安装」"。
+        hint.textContent = autoInstallAllowed
+          ? '没有探测到可用的 ffmpeg：可以点上面的「下载并安装」，或在下面手动指定路径。'
+          : '没有探测到可用的 ffmpeg：按上面的命令装好后回来，或在下面手动指定路径。';
         return;
       }
       // esc 来自 00-core.js（classic script，全局可见）
@@ -1854,6 +1926,52 @@ function bindSettingsEvents(c) {
 
     const paint = (s) => {
       if (!s) return;
+      // ── 平台适配（2026-11-03）────────────────────────────────────
+      // canAutoInstall 缺省按 true 处理：后端旧版本 / 字段未就位时保持现状，
+      // 不能因为读不到就突然把 Windows 的下载入口藏掉。
+      const canAutoInstall = s.canAutoInstall !== false;
+      autoInstallAllowed = canAutoInstall;
+      const isWin = s.platform === 'win32';
+      // 安装指引区：有 installGuide 才注入（win32 为 null → 保持 hidden）。
+      // 内容随平台而变，每次刷新都按内容哈希判断是否重写。
+      const guideBox = $('#ffmpeg-install-guide');
+      if (guideBox && s.installGuide !== undefined) {
+        const html = installGuideHtml(s.installGuide);
+        // 内容没变就不重写：innerHTML 重建会把「已复制 ✓」的按钮态和展开的
+        // <details> 一起吹掉，而刷新会在下载 / 删除后触发。
+        if (html !== guideBox.dataset.guideHtml) {
+          guideBox.innerHTML = html;
+          guideBox.dataset.guideHtml = html;
+          guideBox.hidden = !html;
+          if (html) bindCopyButtons(guideBox);
+        }
+      }
+      // 下载按钮与高级区：macOS 整块不显示。高级区里全是下载相关的东西
+      // （下载 / 下载源 / Token / 删除），藏掉后只剩一个展开后空白的入口，
+      // 所以连折叠按钮一起藏。
+      // ⚠️ 这些内容被 settingsCards() 切成了独立卡片，必须按卡片藏 ——
+      //    只藏 #ffmpeg-adv 的话，它的子元素早被 </section> 挤到了卡外。
+      const advToggleEl = $('#ffmpeg-adv-toggle');
+      const advBoxEl = $('#ffmpeg-adv');
+      if (advToggleEl) advToggleEl.hidden = !canAutoInstall;
+      if (advBoxEl) advBoxEl.hidden = !canAutoInstall;
+      $$('.ffmpeg-dl-only').forEach((h) => {
+        const card = h.closest('.set-card');
+        (card || h).hidden = !canAutoInstall;
+      });
+      // 手动路径文案里的可执行文件名：Windows 才有 .exe。
+      const pathHint = $('#cfg-ffmpeg-path-hint');
+      if (pathHint) {
+        pathHint.textContent = `自己装过 ffmpeg 的话，把 ${isWin ? 'ffmpeg.exe' : 'ffmpeg'} 的完整路径填这里，会优先使用它。`;
+      }
+      // winget 是 Windows 专有，非 Windows 上别让用户去找一个不存在的命令。
+      const systemLabel = $('#cfg-ffmpeg-source-system-label');
+      if (systemLabel) {
+        systemLabel.textContent = isWin
+          ? '优先用系统里自己装的（PATH / winget）'
+          : '优先用系统里自己装的（PATH）';
+      }
+
       // 两个下载按钮（状态条上的主按钮 + 高级区里的）共用同一份状态：
       // 已安装时只保留高级区那个「重新下载」，顶部不再出现一个大按钮 ——
       // 用户已经有能用的 ffmpeg 了，主行动不该是"再装一遍"。
@@ -1871,11 +1989,11 @@ function bindSettingsEvents(c) {
         statusText.innerHTML = `<b style="color:var(--orange)">ffmpeg 不可用</b>　·　${esc(why)}`;
         // 换成新的一份是这类情况唯一可靠的自助方案：缺编码器/滤镜的构建
         // 改配置补不回来，只能换二进制。
-        ffmpegDownloadBtn.hidden = false;
+        ffmpegDownloadBtn.hidden = !canAutoInstall;
         ffmpegDownloadBtn.textContent = '下载可用的 ffmpeg';
       } else {
         statusText.innerHTML = '<b style="color:var(--orange)">未安装</b>　·　上面四项媒体功能当前不可用';
-        ffmpegDownloadBtn.hidden = false;
+        ffmpegDownloadBtn.hidden = !canAutoInstall;
         ffmpegDownloadBtn.textContent = '下载并安装';
       }
       ffmpegDownloadBtn.disabled = false;
@@ -1899,7 +2017,8 @@ function bindSettingsEvents(c) {
       // 看这条纯属噪音；但健康检查不通过时仍要显示（那份确实要重下）。
       const proxyLine = $('#ffmpeg-proxy-line');
       if (proxyLine) {
-        proxyLine.hidden = s.ok && !unhealthy && !s.managed;
+        // macOS 不走程序内下载，这条通道信息纯属噪音。
+        proxyLine.hidden = !canAutoInstall || (s.ok && !unhealthy && !s.managed);
         if (!proxyLine.hidden) {
           proxyLine.textContent = s.downloadChannel
             ? `本次下载通道：${s.downloadChannel}`
@@ -1968,6 +2087,16 @@ function bindSettingsEvents(c) {
         if (!r.ok) {
           progressHint.textContent = '';
           if (btn) btn.disabled = false;
+          // 后端以 use_package_manager 拒绝下载 —— 这不是故障，是"这台机器该走
+          // 包管理器"。照抄成"下载失败"会把用户引向反复重试。
+          // 命令取自当前安装指引，避免在别处再写死一份 brew 命令。
+          if (r.code === 'use_package_manager') {
+            const primary = r.installGuide?.primary?.cmd || 'brew install ffmpeg';
+            if (statusText) {
+              statusText.innerHTML = `这台机器上不提供程序内下载，请按上面的 <code>${esc(primary)}</code> 安装后回来刷新。`;
+            }
+            return;
+          }
           if (statusText) statusText.textContent = `下载失败：${r.error || '未知原因'}`;
           return;
         }

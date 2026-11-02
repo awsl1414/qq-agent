@@ -40,15 +40,25 @@ function touchFile(file) {
 
 test('版本与校验值常量自洽（升级时最容易漏改的一处）', () => {
   assert.match(mod.FFMPEG_VERSION, /^\d+\.\d+(\.\d+)?$/);
-  for (const key of ['7z', 'zip']) {
-    const a = mod.FFMPEG_ASSETS[key];
-    assert.ok(a, `缺少 ${key} 资产`);
-    assert.ok(a.name.includes(mod.FFMPEG_VERSION), `${key} 文件名与版本不一致`);
-    assert.match(a.sha256, /^[0-9a-f]{64}$/, `${key} 的 sha256 不是 64 位小写十六进制`);
-    assert.ok(a.bytes > 0, `${key} 的字节数应为正数`);
+  // 资产按平台分组：win32 是同一份内容的两种压缩格式，linux 是 ffmpeg/ffprobe
+  // 两个独立包。分组结构不同，但每个资产都必须过同一套校验值自洽检查。
+  const groups = [
+    ['win32', mod.FFMPEG_ASSETS.win32],
+    ['linux.x64', mod.FFMPEG_ASSETS.linux.x64],
+    ['linux.arm64', mod.FFMPEG_ASSETS.linux.arm64]
+  ];
+  for (const [group, assets] of groups) {
+    assert.ok(assets, `缺少 ${group} 资产组`);
+    for (const [key, a] of Object.entries(assets)) {
+      assert.match(a.sha256, /^[0-9a-f]{64}$/, `${group}.${key} 的 sha256 不是 64 位小写十六进制`);
+      assert.ok(Number.isInteger(a.bytes) && a.bytes > 0, `${group}.${key} 的字节数应为正整数，实际 ${a.bytes}`);
+    }
   }
-  // 7z 必须显著小于 zip，否则「7z 优先」的前提不成立
-  assert.ok(mod.FFMPEG_ASSETS['7z'].bytes < mod.FFMPEG_ASSETS.zip.bytes);
+  // Windows 的 7z 必须显著小于 zip，否则「7z 优先」的前提不成立
+  assert.ok(
+    mod.FFMPEG_ASSETS.win32['7z'].bytes < mod.FFMPEG_ASSETS.win32.zip.bytes,
+    '7z 应小于 zip，否则优先下 7z 没有意义'
+  );
 });
 
 test('parseFfmpegVersion：官方构建取主版本', () => {
@@ -174,13 +184,19 @@ test('normalizeSourcePreference：只认三个组名，其余归零', () => {
 // 前端靠结构化原因码决定"给一键去安装"还是"只报错"，不匹配中文文案 ——
 // 所以这里钉住字段本身，改文案不会悄悄把引导弄丢。
 
-test('wallpaper deps：缺 ffmpeg 时带 reason=missing，版本过旧时带 reason=outdated', async () => {
+test('wallpaper deps：缺 ffmpeg / 版本过旧 / 平台不支持各有独立原因码', async () => {
   const { checkFfmpeg } = await import('../src/wallpaper/lib/deps.js');
   const r = await checkFfmpeg();
   assert.equal(typeof r.ok, 'boolean');
   if (!r.ok) {
-    // 本机没有 / 没有可用 ffmpeg 时的形态
-    assert.ok(['missing', 'outdated'].includes(r.reason), `reason 应为 missing/outdated，实际 ${r.reason}`);
+    // 本机没有 / 没有可用 ffmpeg 时的形态。非 Windows 一律是
+    // unsupported-platform：动态壁纸录制依赖 ddagrab 与 Wallpaper Engine，
+    // 装不装 ffmpeg 都录不出来。
+    const reasons = ['missing', 'outdated', 'unsupported-platform'];
+    assert.ok(reasons.includes(r.reason), `reason 应为 ${reasons.join('/')}，实际 ${r.reason}`);
+    if (process.platform !== 'win32') {
+      assert.equal(r.reason, 'unsupported-platform', '非 Windows 上必须是平台原因，不能混成缺 ffmpeg');
+    }
     assert.equal(typeof r.detail, 'string');
     assert.ok(r.detail.length > 0);
   } else {

@@ -93,9 +93,20 @@ test('tarPath：Windows 上必须指向 System32（Git 的 GNU tar 读不了 7z/
 });
 
 test('两个格式都准备了校验值（7z 失败要能自动降级到 zip）', () => {
-  assert.ok(resolve.FFMPEG_ASSETS['7z']);
-  assert.ok(resolve.FFMPEG_ASSETS.zip);
-  assert.notEqual(resolve.FFMPEG_ASSETS['7z'].sha256, resolve.FFMPEG_ASSETS.zip.sha256);
+  assert.ok(resolve.FFMPEG_ASSETS.win32['7z'], 'win32 资产组里应有 7z');
+  assert.ok(resolve.FFMPEG_ASSETS.win32.zip, 'win32 资产组里应有 zip');
+  assert.notEqual(
+    resolve.FFMPEG_ASSETS.win32['7z'].sha256,
+    resolve.FFMPEG_ASSETS.win32.zip.sha256,
+    '7z 与 zip 是不同格式，校验值不应相同'
+  );
+});
+
+test('Linux x64 资产指向 amd64 发布包（架构拼错会下到别的包或 404）', () => {
+  const a = resolve.FFMPEG_ASSETS.linux.x64.ffmpeg;
+  assert.ok(a, 'linux.x64 资产组里应有 ffmpeg');
+  assert.match(a.url, /^https:\/\//, `Linux 资产应走 https：${a.url}`);
+  assert.ok(a.url.includes('linux/amd64'), `x64 资产应指向 linux/amd64，实际 ${a.url}`);
 });
 
 test('sha256OfFile：对已知内容算出正确摘要', async () => {
