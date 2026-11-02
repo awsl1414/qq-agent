@@ -167,6 +167,12 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   const appLog = (...args) => {
     logger.info('app', ...args);
   };
+  // ⚠️ 监听器必须持有"调用方原本传入的 log"的独立引用。
+  // 下面会把形参 `log` 改指 appLog，而监听器闭包与形参共享同一个绑定 ——
+  // 改指后监听器调到的是 appLog 自己，日志经 logger 的重入防护被静默丢弃，
+  // 落盘/SSE 之外的所有出口（终端、Electron 主进程 console）全部收不到。
+  // headless 下表现为 `pnpm run server` 启动后终端一片空白，连端口都看不到。
+  const forwardLog = log;
   // 把调用方传入的 log（如 Electron 的 console.log 或测试的静默 log）挂到 logger 的监听器上，
   // 与 mirrorConsole 解耦：mirrorConsole 管 console，监听器管调用方的 log。
   //
@@ -177,13 +183,15 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   //   每轮递归给文本再包一层 [app] 前缀 —— 一条日志膨胀成几千条、
   //   每条带几千个 [app] 前缀，几个小时内日志文件就能写到 15GB。
   //   这里用 WeakSet 识别"这个 log 是不是 appLog"，是则跳过挂载。
+  //   （同时这也是为什么监听器必须用 forwardLog：形参 `log` 马上会被改指 appLog，
+  //   用它就等于把护栏自己绕过去了。）
   // r92：持有退订函数。原实现把 logger.onLog 的返回值直接丢掉 —— 同进程二次
   // createApp（Electron 重启核心 / 测试串行多轮）时旧监听器仍在：每条日志
   // 广播 N 份、持有上一个 app 的 log 闭包（可能指向已销毁的窗口）。
   let unsubscribeAppLog = null;
-  if (!appLogFns.has(log)) {
+  if (!appLogFns.has(forwardLog)) {
     unsubscribeAppLog = logger.onLog((entry) => {
-      try { log(`[${entry.module}] ${entry.text}`); } catch { /* ignore */ }
+      try { forwardLog(`[${entry.module}] ${entry.text}`); } catch { /* ignore */ }
     });
   }
   appLogFns.add(appLog);

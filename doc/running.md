@@ -29,7 +29,7 @@
   - 「显示 API Key」「协议端控制台密码」这类明文密钥端点，在浏览器里默认读不到（`keyEndpointAllowed` 只认 Electron 主进程注入的渲染凭据或你自配的 `server.token`）。需要时配 token，而不是去打开 `server.allowBrowserKeyRead`。
 - **网页模式没有的功能**：托盘常驻、开机自启、桌宠（`desktopPetHost` 为 `null`，桌宠页会提示「需要 QQ Agent 桌面程序」）、桌面悬浮小窗、选背景图 / 选文件夹这类原生对话框。壁纸控制（Wallpaper Engine）走系统命令，网页模式下照常可用。
 - **怎么停**：`Ctrl+C`。`src/server.js` 注册了 SIGINT，会先 `app.stop()`（落盘、释放单实例锁、断开 OneBot）再退出。直接关终端窗口属于强杀，锁文件靠下次启动时的残留检测自动接管。
-- **启动日志**：写在 `<数据目录>/logs/qq-agent-<日期>.log`，里面有一行 `控制台已就绪：http://127.0.0.1:<端口>`。这些日志**不回显到终端**，终端只在启动失败时打出 `[启动失败] …`（stderr）。要看运行状态，读日志文件或进控制台「工具 → 连接 → 应用日志」。
+- **启动日志**：同时写两处 —— 终端（stdout，`[模块] 消息`）和 `<数据目录>/logs/qq-agent-<日期>.log`（带时间戳与级别）。启动完成时会打一行 `控制台已就绪：http://127.0.0.1:<端口>`，这就是实际端口；`<数据目录>/console-port` 里也有同一份数字。启动失败走 stderr 打 `[启动失败] …` 并退出。
 
 ### 1.2 桌面端
 
@@ -226,7 +226,7 @@ Bing 网页解析不需要 Key，是默认搜索源。
 | 控制台打不开，日志里是 `EADDRINUSE` | 基准端口起连续 10 个端口都被占 | 改 `config.json` 的 `server.port`，或换 profile（第 4 节）。实际端口始终看 `console-port` |
 | 「机器人工作中」一直不亮 | 协议端没起、端口对不上、或访问令牌不一致。`/api/status` 的 `onebot.diagnosis` 会直接说缺什么 | 先确认协议端在跑且开了 WS 3001；再核对「工具 → 连接」页的地址与令牌，改完「保存并重连」即可生效，不用重启 |
 | headless 跑完发现仓库根多出 `plugin-data/`，自检报告在界面上看不到 | 旧版本的数据目录在 env 为空时回落到进程 cwd。现已统一走 `src/config.js` 的 `DATA_DIR`（按模块位置锚定，不看 cwd，profile 也一并正确） | 升级到含该修复的版本；确认 `data/plugin-data/` 才是界面读的那份 |
-| 网页模式终端里什么都没有 | 日志只落盘，不回显到终端（`[启动失败]` 这类致命错误仍会打到 stderr） | 看 `<数据目录>/logs/qq-agent-<日期>.log`，或进控制台「工具 → 连接 → 应用日志」 |
+| 网页模式终端里什么都没有 | 0.5.0.0 及更早版本的 `createApp` 把日志监听器闭包与形参 `log` 共享绑定，改指 `appLog` 后形成自指、被 logger 重入防护静默丢弃 —— 终端与 Electron console 都收不到，只有日志文件有 | 升级到含该修复的版本；期间临时看 `<数据目录>/logs/qq-agent-<日期>.log` 或控制台「工具 → 连接 → 应用日志」 |
 | 浏览器里「显示 API Key」「协议端控制台密码」读不出来 | 明文密钥端点只认 Electron 注入的渲染凭据或自配的 `server.token`；`server.allowBrowserKeyRead` 默认关 | 配 `server.token` 并用 `?token=` 打开（第 1.1 节），不要为了省事去打开 `allowBrowserKeyRead` |
 
 ---
