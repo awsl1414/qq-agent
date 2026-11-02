@@ -82,9 +82,11 @@ function allowed(kind, id, cfg) {
 }
 
 // ── 版本更新检查 ─────────────────────────────────────────────────────
-// 线上版本信息只有一份：kondius.cn/qq-agent/version.json（发版时手动改）。
+// 更新源地址走配置 `config.update.feedUrl`（默认空 = 功能关闭），不再硬编码。
 // 由后端代取而不是前端直连：绕过 CORS，且失败信息能统一回给 UI。
-const UPDATE_INFO_URL = 'https://kondius.cn/qq-agent/version.json';
+// 历史：此处曾固定指向上游项目的 version.json。本仓库是从上游 fork 出来独立
+// 维护的，上游的更新源推的是上游的安装包，与本仓库的构建不对应 —— 见
+// src/config.js 的 update 段注释。
 
 function localVersion() {
   try {
@@ -96,7 +98,7 @@ function localVersion() {
 /**
  * 逐段数字比较；返回 1 / 0 / -1。非数字段按 0 处理。
  *
- * ⚠️ 段数必须取两侧的**最大值**：本项目的版本号是四段（`package.json` 当前 0.4.9.2），
+ * ⚠️ 段数必须取两侧的**最大值**：本项目的版本号是四段（如 `0.5.0.0`），
  *    而线上 version.json 曾只有三段（0.4.0）。原实现写死 `i < 3`，只比前三段 ——
  *    一旦线上改用四段、且变化只发生在第四段，比较结果恒为 0，`hasUpdate` 永远是 false，
  *    用户收不到任何更新提示。按 max(len) 走：两侧都是三段时行为与原来完全一致，
@@ -1726,7 +1728,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   const apiRoutes = createRoutes({
     store, memory, sessions, onebot, orchestrator,
     emit, log,
-    localVersion, compareSemver, UPDATE_INFO_URL,
+    localVersion, compareSemver,
     sanitizeConfig, keyEndpointAllowed, sanitizeProvider,
     readBody, authorize,
     qqPortableStatus, qqPortableLogs, launchPortableQQ, stopPortableQQ,
@@ -2052,7 +2054,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       log(`[api] 控制台实际端口 ${port} 已写入 ${path.join(DATA_DIR, 'console-port')}`);
     } catch (e) { log(`[api] ⚠️ 端口落盘失败（不影响使用）：${e?.message ?? e}`); }
 
-    // 匿名用量遥测：启动 90 秒后发第一次，之后每 6 小时一次；失败静默不影响使用
+    // 匿名用量遥测：默认关闭（config.telemetry.enabled），未启用时不装任何定时器。
+    // 要自己收数据时在 config.json 填 telemetry.reportUrl 并打开开关。
     startTelemetryLoop(log);
 
     // 会话索引后台对账：启动读的是毫秒级缓存，这里异步补扫磁盘修正差异
@@ -3195,7 +3198,7 @@ function aggregateDayFromArchive(archive, dayKey) {
     //    赋值直接抛 TypeError: Cannot set properties of undefined (setting 'webSearchCount')。
     //    而"归档为空"恰恰是会话文件被外部清空后的常态 —— 于是快照路径每次必抛、
     //    被 buildUsageStats 的 catch 回落到实时聚合，表现为用量页按天只剩今天、
-    //    下钻 0 行、成本 0。参考包（洛版修复版）同位置有同样的问题。
+    //    下钻 0 行、成本 0。参考包同位置有同样的问题。
     const cur = coveredByDay.get(dayKey)
       || { promptTokens: 0, completionTokens: 0, cachedTokens: 0, webSearchCount: 0 };
     cur.webSearchCount = s;

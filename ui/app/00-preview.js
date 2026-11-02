@@ -851,7 +851,7 @@
         // 补两个后端真实存在、预览此前漏 mock 的 GET（routes.js 的会话与设置接口）——
         // 漏了会落到 realFetch → 预览下 502：10-feedback.js 的更新检查、
         // 02-sse-sessions.js / 05-memory-settings.js 的视觉扫描结果。
-        if (u.startsWith('/api/update-check')) return Promise.resolve(jsonRes({ ok: true, current: PV_VERSION, latest: PV_VERSION, hasUpdate: false, url: 'https://kondius.cn/qq-agent', notes: '' }));
+        if (u.startsWith('/api/update-check')) return Promise.resolve(jsonRes({ ok: true, current: PV_VERSION, disabled: true, hasUpdate: false, reason: '在线更新检查未启用' }));
         if (u.startsWith('/api/version')) return Promise.resolve(jsonRes({ version: PV_VERSION }));
         if (u.startsWith('/api/vision/results')) return Promise.resolve(jsonRes({ results: {}, scanning: false }));
         if (u.startsWith('/api/usage/stats')) return Promise.resolve(jsonRes(mockStats(new URL(u, 'http://preview.local').searchParams.get('range') || '7')));

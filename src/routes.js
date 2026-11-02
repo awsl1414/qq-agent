@@ -78,7 +78,7 @@ export function createRoutes(deps) {
     store, memory, sessions, onebot, orchestrator,
     emit, log,
     // app.js 内部的过程/状态
-    localVersion, compareSemver, UPDATE_INFO_URL,
+    localVersion, compareSemver,
     sanitizeConfig, keyEndpointAllowed, sanitizeProvider,
     // r92：删掉 authorize 的死解构 —— 本文件从未用它，鉴权实际在 app.js
     // 统一执行。留着它会误导后来者以为某条路由漏鉴权。
@@ -3984,8 +3984,19 @@ export function createRoutes(deps) {
       method: 'GET', pattern: '/api/update-check',
       handler: async ({ res, json }) => {
         const current = localVersion();
+        // 功能关闭或没配源：明确返回 disabled，不发任何网络请求。
+        // 不能只是"查不到"—— UI 需要把"这项没开"和"网络不通"分开显示，
+        // 否则用户会以为检查失败，反复点。
+        const feed = getConfig()?.update || {};
+        const feedUrl = String(feed.feedUrl || '').trim();
+        if (feed.enabled !== true || !feedUrl) {
+          return json(res, 200, {
+            ok: true, current, disabled: true, hasUpdate: false,
+            reason: feed.enabled !== true ? '在线更新检查未启用' : '尚未配置更新源地址'
+          });
+        }
         try {
-          const r = await fetch(UPDATE_INFO_URL, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
+          const r = await fetch(feedUrl, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           const info = await r.json();
           const latest = String(info.version || '');
@@ -4005,7 +4016,8 @@ export function createRoutes(deps) {
             staleHint: stale
               ? `更新源版本（${latest}）低于当前安装（${current}）：服务器上的 version.json 尚未推进，因此不会提示更新`
               : '',
-            url: String(info.url || 'https://kondius.cn/qq-agent'),
+            // 下载页地址由 version.json 给；没给就不给链接（不内置任何第三方地址）
+            url: String(info.url || ''),
             notes: String(info.notes || '')
           });
         } catch (error) {

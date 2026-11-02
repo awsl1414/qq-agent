@@ -693,7 +693,7 @@ async function dpClick(event) {
 // 被隐藏的页面不发轮询请求；重新可见后由现有计时器恢复。
 window.addEventListener('beforeunload', stopDesktopPetPage);
 // 桌宠双击 / 右键菜单打开控制台时直接进入本页。
-// 桥名按宿主：洛版 electron/preload.cjs 暴露的是 qqaDesktop（不是 qqAgentShell）。
+// 桥名按宿主：electron/preload.cjs 暴露的是 qqaDesktop（不是 qqAgentShell）。
 let dpConsoleUnsubscribe = null;
 try {
   dpConsoleUnsubscribe = window.qqaDesktop?.onPetOpenConsole?.(() => switchTab('desktop-pet'));

@@ -2,7 +2,7 @@
 //
 // 原形态是 4 个独立插件/技能（plugins/wallpaper、plugins/wallpaper-theme、
 // skills/wallpaper-chat、skills/wallpaper-engine），按用户要求「不进插件，直接
-// 内置进洛版」合并为**一个** core 模块：不走插件目录扫描、不进
+// 内置进本应用」合并为**一个** core 模块：不走插件目录扫描、不进
 // builtin-modules 基线、不出现在插件/Skill 列表、不可禁用
 // （manifest.kind='core'，注册见 src/harness/index.js 的 MODULES）。
 //

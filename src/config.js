@@ -586,6 +586,29 @@ export const DEFAULT_CONFIG = {
   onboarding: {
     seen: false,
     version: 0
+  },
+  // ── 在线更新检查（2026-11-03）──────────────────────────────────────
+  // 本仓库是从上游项目 fork 出来独立维护的，更新源原本硬编码指向上游服务器，
+  // 那个源推的是上游的安装包，与本仓库的构建不对应 —— 所以改为
+  // **默认关闭 + 源地址可配**：
+  //   enabled=false 时 /api/update-check 直接返回 disabled，不发任何网络请求；
+  //   要恢复时在这里填自己发布的 version.json 地址（格式 { version, url, notes }）。
+  // 关掉不影响 /api/version（界面显示当前版本仍走它）。
+  update: {
+    enabled: false,
+    feedUrl: ''
+  },
+  // ── 匿名用量遥测（2026-11-03）──────────────────────────────────────
+  // 原实现每 6 小时把 installId + 版本号 + 调用计数 POST 到上游项目的服务器，
+  // 且**没有任何开关**。本仓库 fork 后独立维护，这些数据继续发给上游既无意义
+  // 也不合适，所以改为默认关闭 + 上报地址可配：
+  //   enabled=false 时 startTelemetryLoop 不装任何定时器，进程零网络请求；
+  //   要自己收数据时填 reportUrl（接收端按 installId 覆盖式 upsert）。
+  // 本机的 telemetry-totals.json 仍照常累计（sessions.js 写），它只是本地计数，
+  // 关掉遥测不影响任何界面功能。
+  telemetry: {
+    enabled: false,
+    reportUrl: ''
   }
 };
 

@@ -1605,11 +1605,12 @@ function renderDesktopSection(c) {
       </div>
     </div>
     <h3>版本更新</h3>
-    <div class="field"><label>当前版本 <b id="update-current">…</b><span id="update-status-text">${updateAvailable ? '<b style="color:var(--orange)">；发现新版本</b>' : '；检查线上是否有新版本'}</span></label>
+    <div class="field"><label>当前版本 <b id="update-current">…</b><span id="update-status-text">${updateStatusText()}</span></label>
       <div style="display:flex;gap:10px;align-items:center">
         <button class="btn btn-small" id="check-update-btn">检查更新</button>
         <span class="hint" id="update-hint" style="margin:0"></span>
-      </div></div>`;
+      </div>
+      ${updateDisabled ? '<div class="hint">在线更新检查未启用：请手动下载新版本覆盖安装，用户数据保存在 data/ 目录不会丢。</div>' : ''}</div>`;
 }
 
 function renderOnebotSection(c) {

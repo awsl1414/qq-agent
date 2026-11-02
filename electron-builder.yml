@@ -10,9 +10,9 @@
 #   %LOCALAPPDATA%\Programs\...）。electron/main.js 的 resolveDataDir 在打包态
 #   把数据目录固定为「exe 同级的 data/」，装进 Program Files 会因权限写不进去。
 
-appId: com.kondius.qq-agent
+appId: com.awsl1414.qq-agent
 productName: qq-agent
-copyright: Copyright © 2026 Kondius
+copyright: Copyright © 2026 logan（fork 自 Kondius 的 qq-agent）
 
 directories:
   output: dist
@@ -33,6 +33,7 @@ files:
   - builtin-modules.json
   - prices.json
   - package.json
+  - VERSION
   - LICENSE
   - README.md
   - CHANGELOG.md

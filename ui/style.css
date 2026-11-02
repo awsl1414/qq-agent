@@ -320,16 +320,8 @@ body,
 }
 
 
-/* ── 设置项变动反馈：已移除（原「流动的浅黄色渐变」）──
-   原 .dirty-glow 是一条 rgba(255,213,79,.10~.22) 的半透明黄色渐变带
-   （background-size 220% + dirtyFlow 1.6s infinite），由表单 change/input
-   触发，一直挂到 600ms 防抖 + 保存请求完成才消失。
-   在透明分层窗口上它会被逐帧 alpha 混合成一条横向的黄色残影
-   —— 就是用户反复看到的"黄色的一坨"。
-   R95：连下面这条"置空"兜底规则也一并删掉 —— 全仓已无任何 add/remove 调用
-        （07-settings-events.js 的 markDirty 早已不再收集 dirtyEls，只留说明注释），
-        规则纯空转。（原文写"JS 里仍有 add/remove 调用"，与实际不符。）
-   ⚠️ 若将来要恢复这个提示：**不要用半透明逐帧动画**，透明分层窗口下必然糊成残影。 */
+/* ⚠️ 设置项变动反馈（原 .dirty-glow 的流动黄色渐变）已整体移除。若将来要恢复：
+   **不要用半透明逐帧动画** —— 透明分层窗口下它会被 alpha 混合成横向黄色残影。 */
 
 /* ══════════════════════════════════════════════════════════════
    无障碍：尊重"减少动态效果"系统偏好
@@ -787,7 +779,6 @@ html[data-wp='on'] #app-bg { display: none; }
 .bl-global-toggle:hover { color: var(--red); }
 .bl-global-toggle.on { background: var(--red); color: var(--on-accent); box-shadow: var(--inset-edge); }
 
-/* 群二维码彩蛋样式已移除（2026-10-07 打包发布时按用户要求删除） */
 /* 上传成功浮框（右上角，不自动消失，只能手动关） */
 .upload-toast {
   position: fixed; top: 14px; right: 14px; z-index: 9999;
@@ -8874,7 +8865,7 @@ code, .mono { font-family: var(--mono); }
 
 /* ═══════════════════════════════════════════════════════════════════════
    改造层 · 31. harness「开发工单」（dev-orders 插件）（r105 搬运）
-   ── 这一段整体搬运自上游 0.4.7（洛版）的 style.css 末尾，原样保留 ——
+   ── 这一段整体搬运自上游 0.4.7 的 style.css 末尾，原样保留 ——
       它是 orders 子模块的专属样式，我们的改造层里没有对应内容。
    ⚠️ 它用的是上游令牌名（--border / --text / --layer-2 / --layer-3 / --muted），
       这几个令牌在本文件的令牌层里同时定义了（与 --line / --fg / --card 并存），

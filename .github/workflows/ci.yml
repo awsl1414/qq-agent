@@ -60,7 +60,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # 见文件头：防「同一版本号对应两份内容」
-      - name: 校验版本号与 CHANGELOG 一致
+      - name: 校验 VERSION / package.json / CHANGELOG 一致
         run: pnpm run verify:version
 
       - name: 运行测试

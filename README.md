@@ -1,8 +1,8 @@
-# QQ Agent（洛版 v0.4.9.2 · 桌面端）
+# QQ Agent（桌面端）
 
 ![平台](https://img.shields.io/badge/platform-Windows%20%7C%20Electron-lightgrey)
 ![技术栈](https://img.shields.io/badge/stack-Node.js%20%7C%20原生前端-orange)
-![测试](https://img.shields.io/badge/tests-68%20cases-brightgreen)
+![测试](https://img.shields.io/badge/tests-112%20cases-brightgreen)
 
 一个跑在自己电脑上的 QQ 群聊机器人：装完双击启动，扫码登录，填个模型 Key 就能用。
 事件驱动 + 无状态会话，每次处理的 token 成本恒定；所有操作都在图形控制台里完成。
@@ -65,9 +65,9 @@
 
 **桌面端**
 
-- 托盘常驻 / 开机自启 / 关窗不退出；明暗主题；版本更新检查（发现新版本时直接提示）
+- 托盘常驻 / 开机自启 / 关窗不退出；明暗主题；版本更新检查（默认关闭，配 `config.update.feedUrl` 后可用）
 
-**桌宠（洛版内置）**
+**桌宠（内置）**
 
 - Live2D 桌面伙伴（插件 `desktop-pet`，PixiJS + Cubism Core）。随包带 DS鼠控版 默认模型（8 个动作组 / 44 个表情），控制台「桌宠」页可导入 Cubism 4 模型（自动读动作组与表情），支持置顶/穿透/缩放/透明度、待机动作与表情
 - 交互：单击弹「今日用量」卡片（今日 N 次运行 · X tok · 缓存 Y% · ¥Z，下面一行「搜索：N 次」，16 秒自动收起，期间每 5 秒刷新）；双击打开开发工单对话窗（需启用 `dev-orders`）
@@ -130,7 +130,7 @@ plugins/my-plugin/            skills/my-skill/
 ## 安装与使用
 
 ```bash
-git clone https://github.com/Kondius/qq-agent.git
+git clone https://github.com/awsl1414/qq-agent.git
 cd qq-agent
 pnpm install
 pnpm start
@@ -170,12 +170,31 @@ pnpm test            # 全量测试（等价于 pnpm run check）
 - SnowLuma 是独立第三方项目，受其自身 EULA 约束。本项目不分发其代码、不自动部署，只按 OneBot v11 协议连接用户自行运行的协议端
 - 用户自行承担使用本项目的所有风险
 
-## 致谢
+## 致谢与出处
 
-- **[Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge)**：本项目由其改造而来，"仿真群友"的思路是这一切的起点
+本项目基于前人的工作，一并致谢：
+
+- **[Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge)**：最初的改造来源，"仿真群友"的思路是这一切的起点
+- **[Kondius/qq-agent](https://github.com/Kondius/qq-agent)**：本仓库 fork 自该项目（上游当时称「洛版」），大部分代码由上游作者 Kondius 编写
 - **SnowLuma** / **NapCat**：QQ 协议端（OneBot v11）提供者，各自独立、各自受自身许可约束
 
-由 **Kondius** 开发与维护。
+本仓库由 fork 者独立维护，与上游项目无隶属关系。
+
+## 社区与反馈
+
+上游项目建立的社区渠道仍然有效，内容与用户都在那里：
+
+| 渠道 | 地址 | 用途 |
+|---|---|---|
+| 官网 | <https://kondius.cn/qq-agent> | 项目主页、下载 |
+| 意见箱 | <https://kondius.cn/qq-agent/comments> | 提交意见与建议（应用内「意见收集」直传此处） |
+| 金句墙 | <https://kondius.cn/qq-agent/holyshits> | 收录机器人的精彩发言（应用内「金句上传」直传此处） |
+| Skill 市场 | <https://www.kondius.cn/qq-agent/skill-market/> | 技能分享与安装 |
+| 插件市场 | <https://www.kondius.cn/qq-agent/plugin-market/> | 插件分享与安装 |
+| 人设广场 | <https://www.kondius.cn/qq-agent/persona-plaza/> | 人设与系统提示词分享 |
+| 作者博客 | <https://kondius.cn> | 上游作者 Kondius 的站点 |
+
+> 应用内「意见收集 / 金句上传 / 三个市场按钮」均指向上述地址。这些服务由上游维护，本仓库不控制其可用性。
 
 ## 许可
 

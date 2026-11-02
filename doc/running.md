@@ -48,7 +48,7 @@
 pnpm run build          # 产出 NSIS 安装包与免安装 zip，落在 dist/
 pnpm run build:dir      # 只出解包目录，用于快速验证
 pnpm run prepack:check  # 只跑构建前静态校验
-pnpm run verify:version # 校验 package.json 与 CHANGELOG 顶部版本一致
+pnpm run verify:version # 校验 VERSION / package.json / CHANGELOG 顶部版本一致
 ```
 
 - 数据目录固定在 **exe 同级的 `data/`**（多实例为 `data-<N>/`），不往 `%APPDATA%` 塞。安装目录必须可写，所以安装器默认装到 `%LOCALAPPDATA%\Programs\…`，不要手工装进 `Program Files`。
@@ -135,7 +135,7 @@ Bing 网页解析不需要 Key，是默认搜索源。
 | `plugin-data/<id>/` | 各插件/技能自己的数据（自检报告、修复工单、锻造台暂存、开发工单等） |
 | `usage-ledger/` | 用量账本，按天一个 `YYYY-MM-DD.ndjson` |
 | `usage-daily.json` / `usage-today.json` / `usage-archived-days.json` | 用量聚合快照 |
-| `telemetry.json` / `telemetry-totals.json` | 匿名用量遥测的本机 id 与累计值 |
+| `telemetry.json` / `telemetry-totals.json` | 匿名用量遥测的本机 id 与累计值（遥测默认关闭，文件仍会累计本地计数） |
 | `image-cache/` / `video-cache/` | 收到的图片与视频缓存 |
 | `ui/` | 控制台背景图、壁纸预览图 |
 | `wallpaper-static/` / `wallpaper-state.json` / `wallpaper-imports.json` | 壁纸库静态副本与状态 |

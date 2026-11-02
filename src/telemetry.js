@@ -1,4 +1,9 @@
-// 匿名用量遥测：周期性把"调用次数 + token 用量"快照发到 kondius.cn，供官网做总览统计。
+// 匿名用量遥测：周期性把"调用次数 + token 用量"快照发到 `config.telemetry.reportUrl`。
+//
+// 默认关闭（`config.telemetry.enabled=false`）：不装任何定时器，进程零网络请求。
+// 曾经硬编码发往上游项目的服务器且无开关 —— 本仓库是从上游 fork 出来独立维护的，
+// 继续往上游发数据既无意义也不合适，所以改为「开关 + 地址」都可配。
+// 要自己收数据时在 config.json 里填 reportUrl。
 //
 // 隐私红线：payload 只有 随机 installId + 版本号 + 四个计数器。
 //   不含 QQ 号、群号、昵称、聊天内容、机器信息、IP（IP 只在服务器内存里做限流，不落库）。
@@ -7,11 +12,25 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { DATA_DIR, ROOT } from './config.js';
+import { DATA_DIR, ROOT, getConfig } from './config.js';
 
-const REPORT_URL = 'https://kondius.cn/qq-agent/api/telemetry';
 const INTERVAL_MS = 6 * 3600 * 1000;   // 之后每 6 小时一次
 const FIRST_DELAY_MS = 90 * 1000;      // 启动 90 秒后发第一次（避开启动高峰）
+
+/** 当前遥测配置：{ enabled, reportUrl }。未启用或缺地址时调用方应直接跳过。 */
+function telemetryConfig() {
+  const t = getConfig()?.telemetry || {};
+  return {
+    enabled: t.enabled === true,
+    reportUrl: String(t.reportUrl || '').trim()
+  };
+}
+
+/** 是否应当上报：开关打开且配了接收地址。 */
+function telemetryEnabled() {
+  const c = telemetryConfig();
+  return c.enabled && Boolean(c.reportUrl);
+}
 
 const ID_FILE = path.join(DATA_DIR, 'telemetry.json');
 const TOTALS_FILE = path.join(DATA_DIR, 'telemetry-totals.json');
@@ -120,6 +139,9 @@ function appVersion() {
 }
 
 export async function report(log) {
+  // 关闭状态下不读任何文件、不发任何请求（loadTotals 在老数据上可能同步重扫会话）
+  const cfg = telemetryConfig();
+  if (!cfg.enabled || !cfg.reportUrl) return;
   const totals = loadTotals();   // 没有用量（含重建后仍为空）就不报
   if (!totals || !Number(totals.calls)) return;
   // 工具调用明细：只留 [a-z0-9_] 形态的键、整数次数，最多 50 个键
@@ -130,7 +152,7 @@ export async function report(log) {
     if (/^[\w-]+$/.test(key) && n > 0 && Object.keys(toolCounts).length < 50) toolCounts[key] = n;
   }
   try {
-    const res = await fetch(REPORT_URL, {
+    const res = await fetch(cfg.reportUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -154,6 +176,9 @@ let firstTimer = null;
 let loopTimer = null;
 
 export function startTelemetryLoop(log = console.log) {
+  // 未启用就不装定时器 —— 不是"装了定时器再早退"，那样 report() 仍会被周期性唤醒，
+  // 每次都要读配置判一遍。这里在入口处一次性决定。默认关闭是常态，不写日志免得刷屏。
+  if (!telemetryEnabled()) return;
   const first = setTimeout(() => {
     report(log);
     loopTimer = setInterval(() => report(log), INTERVAL_MS);

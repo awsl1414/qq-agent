@@ -498,10 +498,10 @@ process.on('uncaughtException', (error) => {
 
 // AppUserModelID：让 Windows 把窗口归到「QQ Agent」身份下（任务栏分组/图标/通知），
 // 否则 dev 模式下会被当成裸 electron.exe，钉任务栏变成 electron 图标
-app.setAppUserModelId('cn.kondius.qq-agent');
+app.setAppUserModelId('cn.awsl1414.qq-agent');
 
 // ── 数据目录：始终固定在「应用根目录/data」──
-// Kondius 钦定：所有数据都存在安装目录下，不往 %APPDATA% 塞。
+// 所有数据都存在安装目录下，不往 %APPDATA% 塞。
 //   压缩包用户：data 本来就在压缩包目录里，直接用（项目内 data/）；
 //   安装版用户：安装目录/exe 旁边的 data/。选压缩包目录当安装目录时
 //   天然接管里面的 data/（config、记忆、聊天记录、telemetry id 全保留），零迁移零 bug。
@@ -544,7 +544,7 @@ if (!gotLock) {
   app.whenReady().then(() => {
     showDialog({
       type: 'info',
-      title: '洛版 QQ Agent v0.4.9.2',
+      title: 'QQ Agent',
       message: 'QQ Agent 已经在运行了',
       detail: '已为你唤出正在运行的窗口。\n如果那个窗口一直停在启动画面，请从右下角托盘图标选择「退出」，再重新打开。',
       buttons: ['知道了']

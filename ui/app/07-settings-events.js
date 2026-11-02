@@ -1546,11 +1546,15 @@ function bindSettingsEvents(c) {
     const data = await runUpdateCheck({ manual: true });   // 手动：即使关过浮窗也再弹一次
     if (!data) {
       if (hint) hint.textContent = '检查失败：网络不可达';
+    } else if (data.disabled) {
+      if (hint) hint.textContent = `${data.reason || '在线更新检查未启用'}（当前为手动安装模式）`;
     } else if (!data.ok) {
       if (hint) hint.textContent = `检查失败：${data.error || '未知错误'}`;
     } else if (data.hasUpdate) {
       // 有新版：给下载链接。Electron 里 target=_blank 会被 main.js 转给系统浏览器。
-      if (hint) hint.innerHTML = `发现新版本 <b>v${esc(data.latest)}</b>（当前 v${esc(data.current)}） <a href="${esc(data.url)}" target="_blank" rel="noopener">去下载</a>`;
+      if (hint) hint.innerHTML = data.url
+        ? `发现新版本 <b>v${esc(data.latest)}</b>（当前 v${esc(data.current)}） <a href="${esc(data.url)}" target="_blank" rel="noopener">去下载</a>`
+        : `发现新版本 <b>v${esc(data.latest)}</b>（当前 v${esc(data.current)}），更新源未提供下载地址`;
     } else if (hint) hint.textContent = `已是最新（v${data.current}）`;
     checkUpdateBtn.disabled = false;
   });

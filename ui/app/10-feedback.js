@@ -354,11 +354,20 @@ function openSite() {
 }
 
 // ── 自动检查更新 ──
-// 节奏：启动时一次 + 之后每小时一次（version.json 作者手动改，这个频率足够）。
+// 节奏：启动时一次 + 之后每小时一次。
+// 更新检查默认关闭（config.update.enabled），后端此时直接返回 disabled、不发网络请求；
+// 前端照常走同一条路径，只是不亮红点、不弹浮窗 —— 这样将来打开开关无需改前端。
 // 有更新 → 弹浮窗引导下载；用户手动关掉浮窗 → 本次启动内不再弹（重启恢复）。
 // 但只要检测到新版，设置侧栏「桌面端」右侧就一直挂红点，直到版本追平。
 let updateAvailable = false;
+let updateDisabled = false;         // 后端报告"在线更新未启用 / 未配源"
 let updateToastDismissed = false;   // 本次启动内用户关过更新浮窗
+
+function updateStatusText() {
+  if (updateAvailable) return '<b style="color:var(--orange)">；发现新版本</b>';
+  if (updateDisabled) return '；在线更新检查未启用';
+  return '；检查线上是否有新版本';
+}
 
 function renderUpdateDot() {
   // 侧栏菜单每次重渲染都会重建（菜单 HTML 里已按 updateAvailable 画了点）；
@@ -375,20 +384,25 @@ function renderUpdateDot() {
   }
   // 桌面端页签的版本文案同步：有新版时"检查线上是否有新版本"→"发现新版本"
   const st = document.getElementById('update-status-text');
-  if (st) {
-    st.innerHTML = updateAvailable ? '<b style="color:var(--orange)">；发现新版本</b>' : '；检查线上是否有新版本';
-  }
+  if (st) st.innerHTML = updateStatusText();
 }
 
 async function runUpdateCheck({ manual = false } = {}) {
   try {
     const data = await api('/api/update-check');
+    // 功能关闭 / 未配置更新源：不是错误，界面按"未启用"处理即可
+    if (data?.disabled) {
+      updateAvailable = false;
+      updateDisabled = true;
+      renderUpdateDot();
+      return data;
+    }
+    updateDisabled = false;
     if (!data?.ok) return data;   // 网络/服务器错误原样返回，手动检查要显示原因
-    updateLatest = data;
     updateAvailable = !!data.hasUpdate;
     renderUpdateDot();
     // 自动检查弹浮窗；本次启动内被用户关过就不再弹（手动点「检查更新」除外）
-    if (updateAvailable && (!updateToastDismissed || manual)) {
+    if (updateAvailable && data.url && (!updateToastDismissed || manual)) {
       showUploadToast(
         `发现新版本 v${data.latest}（当前 v${data.current}）`,
         data.url,
@@ -398,7 +412,6 @@ async function runUpdateCheck({ manual = false } = {}) {
     return data;
   } catch { return null; }
 }
-let updateLatest = null;
 
 // ── 金句上传 ──
 state.quoteMode = false;
@@ -562,8 +575,6 @@ $('#open-site-btn')?.addEventListener('click', () => openSite());
 $('#skill-market-btn')?.addEventListener('click', () => window.open('https://www.kondius.cn/qq-agent/skill-market/', '_blank', 'noopener'));
 $('#plugin-market-btn')?.addEventListener('click', () => window.open('https://www.kondius.cn/qq-agent/plugin-market/', '_blank', 'noopener'));
 $('#persona-plaza-btn')?.addEventListener('click', () => window.open('https://www.kondius.cn/qq-agent/persona-plaza/', '_blank', 'noopener'));
-// 官方Q群按钮与群二维码已移除（2026-10-07 打包发布时按用户要求删除：
-// 群号与二维码属个人信息，不随包分发）。对应 #qq-group-btn 也已在 index.html 移除。
 $('#quote-btn')?.addEventListener('click', () => {
   if (state.quoteMode) exitQuoteMode(); else enterQuoteMode();
 });

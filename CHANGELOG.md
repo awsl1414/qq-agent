@@ -4,6 +4,38 @@
 
 ---
 
+## 0.5.0.0 · 从上游 fork 独立维护：更新与遥测改为可配置、默认关闭（2026-11-03，需重启）
+
+### 变更：品牌与出处
+
+- **不再称「洛版」**：页面标题、单实例提示框、README 统一为「QQ Agent」。上游项目的出处保留在 README 的「致谢与出处」与 LICENSE 的双版权声明中
+- **新版本在 Windows 上被视为另一个应用**：`appId` 改为 `com.awsl1414.qq-agent`，`setAppUserModelId` 同步更换。与上游版本不共用任务栏分组、通知与开机自启项；从上游版本升级前请手动卸载
+
+### 变更：在线更新检查默认关闭
+
+- **更新源不再指向上游项目的服务器**：原先硬编码读取上游托管的 `version.json`，但那是上游的构建产物，与本 fork 的发布不对应。现在改为读 `config.update`，默认 `enabled: false` 且 `feedUrl` 为空，此时直接返回 `disabled`、不发任何网络请求
+- 设置页「检查更新」在未启用时显示「在线更新检查未启用（当前为手动安装模式）」，不再把"没开"误报成「已是最新」
+- 要启用在线更新：在 `config.json` 填 `update.feedUrl`（指向自己发布的 `version.json`，格式 `{ version, url, notes }`）并把 `update.enabled` 设为 `true`
+- `/api/version` 不受影响，界面照常显示当前版本
+
+### 变更：匿名用量遥测默认关闭
+
+- **不再向上游项目的服务器发送任何数据**：原先每 6 小时把 installId + 版本号 + 调用计数 POST 到上游服务器，且没有任何开关。本 fork 独立维护后，这些数据继续发给上游既无意义也不合适。现在改为读 `config.telemetry`，默认 `enabled: false`；关闭时连定时器都不装，进程零网络请求
+- 要自己收数据：在 `config.json` 填 `telemetry.reportUrl` 并设 `telemetry.enabled: true`
+- 本机 `data/telemetry-totals.json` 仍照常累计（只写本地、不外发），不影响任何界面功能
+
+### 新增：版本号文件 `VERSION`
+
+- 根目录新增纯文本 `VERSION`，作为给人看的唯一版本入口。`pnpm run verify:version` 改为校验 `VERSION` / `package.json` / CHANGELOG 顶部已发布版本三者一致，构建与 CI 都会拦下不一致
+- 运行时不读 `VERSION`（Electron 与打包工具只认 `package.json`），它随包分发仅作标识
+
+### 清理：删除随包分发的上游官网页面
+
+- **删除 `ui/landing.html` 与 `ui/{plugin,skill}-market/`、`ui/persona-plaza/`**：这四个页面是上游官网的部署文件，依赖站点主题包 `/assets/theme.css`，应用内从不加载，随 fork 分发只会让人误以为还能用
+- **上游的社区渠道仍然有效**：应用内「意见收集 / 金句上传 / 三个市场按钮」指向的线上地址保持不变，README 新增「社区与反馈」一节集中列出这些地址
+
+---
+
 ## 0.4.9.2 · 打包基础设施与网页模式修复（2026-11-03，需重启）
 
 ### 新增：可复现的打包基础设施
