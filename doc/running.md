@@ -11,7 +11,7 @@
 |---|---|---|---|
 | 桌面端 | `pnpm start`（`electron/main.js`） | Electron 二进制 | 日常使用：托盘常驻、桌宠、桌面悬浮小窗 |
 | 网页模式 | `pnpm run server`（`src/server.js`） | 只要 Node | 服务器常驻、想用另一台设备的浏览器看控制台 |
-| 打包版 | 双击 `qq-agent.exe`（安装包或解压目录） | 无 | 不想装 Node / pnpm 的机器 |
+| 打包版 | Windows 双击 `QQ Agent.exe`（安装后或解压目录） | 无 | 不想装 Node / pnpm 的机器 |
 
 三者共用同一套核心（`src/app.js` 的 `createApp()`）与同一份数据格式，随时可以换着跑，数据目录不变就能接上。
 
@@ -70,7 +70,7 @@ pnpm run verify:version # 校验 VERSION / package.json / CHANGELOG 顶部版本
 | `QQ_AGENT_PROFILE` | 多实例编号 | 纯数字；非数字视为未设 | `src/profile.js` 的 `PROFILE_ID` / `portOffset` |
 | `QQ_AGENT_PORT` | 控制台端口 | 数字；只在 `config.json` 里还没有 `server.port` 时生效 | `src/config.js` 的 `DEFAULT_CONFIG.server.port` |
 | `QQ_AGENT_DEV` | 强制打开扩展热重载 | `1` = 强制开（不能强制关） | `src/app.js` 的 `hotReloadOn` |
-| `QQ_AGENT_DEV_SANDBOX` | 开发工单沙箱根目录 | 绝对路径；默认在应用根外两级的 `dev-sandbox/` | `src/harness/dev/index.js` 的 `SANDBOX_ENV` |
+| `QQ_AGENT_DEV_SANDBOX` | 开发工单沙箱根目录 | 绝对路径；默认在项目根的 `dev-sandbox/`；源码版项目根即应用根，`resources/app` 安装布局取安装根 | `src/harness/dev/index.js` 的 `SANDBOX_ENV` |
 | `QQ_AGENT_DEV_CTX_BUDGET` | 开发工单的单轮上下文字符预算 | 数字；默认 400K 字符 | `src/harness/dev/executor.js` 的 `DEV_CTX_CHAR_BUDGET_DEFAULT` |
 | `QQ_AGENT_FFMPEG` | 指定 ffmpeg 路径（优先于自动探测） | 可执行文件绝对路径 | `src/ffmpeg-resolve.js` 的 `buildCandidatesByGroup` |
 | `QQ_AGENT_COMMUNITY_KEY` | 云端屏蔽名单写密钥（仅管理员） | 字符串；显式设为空 = 不用 | `src/community.js` 的 `communityWriteKey` |
@@ -246,7 +246,7 @@ pnpm test                                  # 等价于 pnpm run check
 node --test tests/volatile-contract.test.mjs   # 只跑一个文件
 ```
 
-测试用 Node 内置的 `node:test` + `node:assert/strict`，没有测试框架依赖。改动提示词组装前先读 `tests/volatile-contract.test.mjs`，它钉住了前缀缓存的段落顺序契约。
+测试用 Node 内置的 `node:test` + `node:assert/strict`，没有测试框架依赖。自动修复的 `tests` 验证器优先采用项目根 `tests/`，仅该目录不存在时采用上游 `.workbuddy/tools/`，只允许运行其中的 `.mjs` / `.js`，并校验真实路径以阻止链接越界。两者都不存在时返回 skip；它运行真实源码测试，不能证明暂存的沙箱改动已通过。`scan` 同样扫描真实源码，不比较暂存改动或历史基线。改动提示词组装前先读 `tests/volatile-contract.test.mjs`，它钉住了前缀缓存的段落顺序契约。
 
 ---
 

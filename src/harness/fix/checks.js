@@ -4,15 +4,13 @@
 //   它们回答的是同一个问题："这版改动能不能交给人工看一眼？"
 //   协议闸判**合规**（是不是碰了禁区、是不是最小改动、声明齐不齐），
 //   验证器判**可运行**（语法过不过、自检有没有新增问题、测试绿不绿）。
-//   两者都只读暂存区 + 沙箱，谁都不写真实文件。
+//   协议闸读取暂存区与原文件；各验证器的数据来源见各自结果，不能统称沙箱验证。
 //
 // 静态检查是启发式的，不是沙箱。它挡得住"模型顺手写出危险东西"，
 // 挡不住精心构造的绕过。所以它必须与人工闸②配合使用。
 //
-// ── 为什么不 import extension-forge/gate.js ──
-//   本项目约定：每个扩展自包含，不跨插件 import（plugin-loader.js 把"逃出自包含模型"
-//   列为要防的事）。所以危险模式规则在这里**有意重复一份**，且尺度更严：
-//   gate.js 管的是"生成的新扩展"，这里管的是"改现有代码"，后者风险更高。
+// src/harness/forge/gate.js 管生成的新扩展，本文件管改现有代码。
+// 两者现均为内置核心模块；危险规则表各自维护，新增安全规则时应同时核对两条链路。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,8 +19,7 @@ import { stagedPath, resolveTarget, diffStat, sandboxDir, backupPath } from './c
 
 // ── 危险模式（block 一票否决 / confirm 标红 / notice 提示）────────────────
 //
-// 这份规则与 `src/harness/forge/gate.js` 的 DANGER_RULES 是**同口径的两份**
-// （项目约定：每个扩展自包含、不跨插件 import，所以只能重复一份）。
+// 与 `src/harness/forge/gate.js` 的 DANGER_RULES 有交集，但不是相同的检查集合。
 // 曾经凭据漏洞的修复只落到 gate.js、这份漏了，于是
 // `import fs from 'node:fs'` + 读 `config.json` 的改动能通过本协议闸，
 // 而协议闸正是 self-fix 落盘前唯一的自动防线。
@@ -39,9 +36,9 @@ const DANGER_RULES = [
   { id: 'credential-read', level: 'block',
     re: /account\.json|config\.json|\.env\b|apiKey\s*[:=]\s*['"][^'"]{8,}|dshProviderKeys|accessToken|httpAccessToken|\bcookie\b/i,
     title: '读取凭据', why: '凭据泄露的一票否决项：API Key 在 config.json，网关 token 也在配置里。需要配置请走既有的配置 API。' },
-  // 能力闸：字符串黑名单追不上 require('f'+'s') 这类等价写法，但**import 目标本身
-  // 是无法等价改写的**（`export … from 'node:fs'` 与变量 import 是已知漏网，
-  // 那需要 AST 解析才能根治，这里先守住常见形态）。
+  // 能力闸：字符串黑名单追不上 require('f'+'s') 这类等价写法，import 目标
+  // 在静态字面量形式下可检查（含 export … from）；变量 import 等动态形式仍有局限，
+  // 完整语义分析不能靠正则替代，这里先守住常见形态。
   { id: 'dangerous-import', level: 'block',
     re: /(?:^|[^\w$.])(?:import\s[\s\S]{0,80}?from\s*|\bexport\s[\s\S]{0,80}?from\s*|import\s*\(?\s*|require\s*\(\s*)['"](?:node:)?(?:fs(?:\/promises)?|child_process|cluster|dgram|net|tls|worker_threads|inspector|v8|vm|module)['"]/,
     title: '导入高危 Node 模块（fs / child_process / net / vm 等）',
@@ -64,8 +61,8 @@ const DANGER_RULES = [
 export const VERIFIERS = [
   { id: 'syntax', label: '语法检查', hard: true, desc: 'node --check 解析每个改动的 JS 文件' },
   { id: 'protocol', label: '协议闸', hard: true, desc: 'P1-P9 合规检查 + 五道闸门' },
-  { id: 'scan', label: '自检扫描', hard: false, desc: '对改动文件跑静态扫描，对比改动前基线' },
-  { id: 'tests', label: '回归测试', hard: false, desc: '跑白名单测试脚本（cwd 指向沙箱）' },
+  { id: 'scan', label: '自检扫描', hard: false, desc: '扫描真实源码中的改动目标，不对比沙箱改动或历史基线' },
+  { id: 'tests', label: '回归测试', hard: false, desc: '跑 tests/（缺失时 .workbuddy/tools/）内的真实测试脚本，未覆盖沙箱改动版' },
   { id: 'load', label: '加载冒烟', hard: false, desc: '在子进程里 import 沙箱入口并跑一次 setup()' }
 ];
 
@@ -248,32 +245,35 @@ function vProtocol(root, appRoot, dataRoot, rec) {
 }
 
 /**
- * 静态扫描对比：只看**改动过的文件**有没有新增 finding。
- * 依赖 self-doctor 的 doctor.scan-project 能力（软依赖）；插件没开就 skip 并说明。
+ * 静态扫描：筛出真实源码中本次改动目标的 finding，不比较沙箱或历史基线。
+ * 依赖内置自检的 doctor.scan-project 能力；不可用时 skip 并说明。
  */
 function vScan(root, rec, ctx) {
   const scan = ctx?.scanProject;
   if (typeof scan !== 'function') {
-    return [{ file: '(自检扫描)', status: 'skip', detail: 'self-doctor 插件未启用或版本过旧，跳过（不影响其它验证项）' }];
+    return [{ file: '(自检扫描)', status: 'skip', detail: '内置自检扫描能力不可用，跳过（不影响其它验证项）' }];
   }
   const changed = new Set((rec.proposal.changes || []).map((c) => c.path));
   let after;
   try { after = scan({}); } catch (e) { return [{ file: '(自检扫描)', status: 'skip', detail: `扫描失败：${e?.message || e}` }]; }
-  const findings = after?.result?.findings || [];
+  if (!Array.isArray(after?.result?.findings)) {
+    return [{ file: '(自检扫描)', status: 'skip', detail: '自检未返回扫描结果，无法确认目标文件状态' }];
+  }
+  const findings = after.result.findings;
   const hits = findings.filter((f) => changed.has(f.file) || changed.has(f.file?.replace(/\\/g, '/')));
   const critical = hits.filter((f) => f.severity === 'critical');
   return [{
     file: '(自检扫描)',
     status: critical.length ? 'fail' : 'pass',
-    detail: hits.length
+    detail: '扫描真实源码，未验证沙箱改动版或比较历史基线。\n' + (hits.length
       ? `改动文件上有 ${hits.length} 处静态命中（critical ${critical.length}）：\n` + hits.slice(0, 12).map((f) => `  ${f.file}:${f.line} [${f.ruleId}] ${f.detail}`).join('\n')
-      : '改动文件上没有静态命中',
+      : '改动文件上没有静态命中'),
     hits: hits.slice(0, 50)
   }];
 }
 
 /**
- * 白名单测试：只允许跑 <projectRoot>/.workbuddy/tools/ 下的 .mjs/.js。
+ * 白名单测试：优先项目 tests/，不存在时采用上游 .workbuddy/tools/，仅 .mjs/.js。
  * 测试脚本本身不知道沙箱的存在，所以它**读的是真实副本**，不是沙箱里的改动版。
  * 这一点必须在结果里说明，不能让人误以为"沙箱验过了"。
  */
@@ -281,25 +281,38 @@ function vTests(root, rec, ctx, args) {
   const rel = String(args?.file || '').trim();
   if (!rel) return [{ file: '(回归测试)', status: 'skip', detail: '验证计划没有指定测试文件' }];
   const projectRoot = String(ctx?.projectRoot || '');
-  const allowedRoot = path.join(projectRoot, '.workbuddy', 'tools');
-  // 开发侧测试目录**只有开发机有**（安装版/用户机的项目根下没有 .workbuddy）。
-  // 目录不存在时 tests 验证**整体不可用**：必须诚实 skip 并说明替代手段，
-  // 不能报 fail（模型会误以为代码有问题），也不能让整个修复流程卡死。
-  if (!fs.existsSync(allowedRoot)) {
+  if (!projectRoot) return [{ file: rel, status: 'skip', detail: '未提供项目根目录，无法定位白名单测试目录' }];
+  const testDir = ['tests', '.workbuddy/tools'].find((dir) => {
+    try { return fs.statSync(path.join(projectRoot, dir)).isDirectory(); }
+    catch (e) { if (e.code === 'ENOENT' || e.code === 'ENOTDIR') return false; throw e; }
+  });
+  if (!testDir) {
     return [{
       file: rel,
       status: 'skip',
-      detail: '本环境没有开发侧测试目录（.workbuddy/tools，仅开发机存在）—— tests 验证不可用，已跳过。'
+      detail: '本环境没有测试目录（tests/ 或 .workbuddy/tools/）—— tests 验证不可用，已跳过。'
         + '请改用 load（加载冒烟）/ scan（静态扫描）验证本次改动。'
     }];
   }
+  const allowedRoot = path.resolve(projectRoot, testDir);
   const abs = path.resolve(projectRoot, rel);
-  const back = path.relative(allowedRoot, abs);
-  if (!projectRoot || back.startsWith('..') || path.isAbsolute(back) || !/\.(mjs|js)$/i.test(abs)) {
-    return [{ file: rel, status: 'fail', detail: `测试文件不在白名单目录（只允许 .workbuddy/tools/ 下的 .mjs/.js）` }];
+  const isInside = (base, file) => {
+    const back = path.relative(base, file);
+    return back !== '' && back !== '..' && !back.startsWith(`..${path.sep}`) && !path.isAbsolute(back);
+  };
+  const denied = () => [{ file: rel, status: 'fail', detail: `测试文件不在白名单目录（只允许 ${testDir}/ 下的 .mjs/.js，禁止链接越界）` }];
+  if (!isInside(allowedRoot, abs) || !/\.(mjs|js)$/i.test(abs)) {
+    return denied();
   }
   if (!fs.existsSync(abs)) return [{ file: rel, status: 'fail', detail: '测试文件不存在' }];
-  const res = spawnSync(nodePathOf(ctx), [abs], {
+  const realRoot = fs.realpathSync(allowedRoot);
+  const realFile = fs.realpathSync(abs);
+  // 白名单根本身也不能借 junction 改指 src/ 或项目外；项目根的真实路径可正常规范化。
+  if (path.relative(path.join(fs.realpathSync(projectRoot), testDir), realRoot) !== ''
+      || !isInside(realRoot, realFile) || !/\.(mjs|js)$/i.test(realFile) || !fs.statSync(realFile).isFile()) {
+    return denied();
+  }
+  const res = spawnSync(nodePathOf(ctx), ['--test', realFile], {
     cwd: String(ctx?.sandbox || projectRoot), timeout: (ctx?.timeoutSec || 30) * 1000,
     encoding: 'utf8', windowsHide: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', QQ_AGENT_FIX_SANDBOX: String(ctx?.sandbox || '') }
   });

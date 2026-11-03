@@ -16,7 +16,7 @@ export function dataDirName() {
 }
 
 export function portOffset() {
-  // 每个实例偏移 PROFILE_ID * 100：#2 → +100、#3 → +200。
+  // 每个实例偏移 PROFILE_ID * 100：#1 → +100、#2 → +200。
   // 恒 100 的旧实现会让 #2 和 #3 的 HTTP/OneBot 端口互撞。
   return isSecondary() ? Number(PROFILE_ID) * 100 : 0;
 }

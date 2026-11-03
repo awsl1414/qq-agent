@@ -116,11 +116,11 @@ export function activate() { api_.storage.set('snapshot', { items: [...] }); }  
 ```
 
 落盘位置：`<DATA_DIR>/plugin-data/<id>/storage.json`
-（`DATA_DIR` = `config.js` 的 `DATA_DIR`，默认 `<ROOT>/data`，可用 `QQ_AGENT_DATA_DIR` 覆盖。）
+（`DATA_DIR` 来自 `src/config.js`；各运行方式的默认位置见 [运行方式与部署第 3 节](../running.md#3-数据目录)，可用 `QQ_AGENT_DATA_DIR` 覆盖。）
 
 - 单个文件 1MB 硬上限，超了 `set` 抛错。
 - 键名 `__proto__` / `constructor` / `prototype` 会被拒。
-- 只读通道没有写接口，页面改不了任何东西。
+- `/plugin-panel/` 静态通道没有写接口；这不代表同源页面无法调用宿主 API。
 
 ### 3.2 读：页面侧 fetch 相对路径
 
@@ -249,20 +249,17 @@ frame-ancestors 'self'
 
 ### 6.3 明确不防的东西
 
-页面能读到自己插件的全部源码与全部 `plugin-data`。
-
-这不是漏洞，那本来就是它自己的东西。但插件不该把别人的机密往 `plugin-data` 里塞，
-因为它等于放在一个可被自己的页面读到的位置。
-
-同理，页面读不到别的插件的目录（根被限定在自己的 id 下）。
+每次 `/plugin-panel/<id>/` 请求只映射该 id 的扩展目录和私有数据目录，且只返回白名单类型的文件。
+这限制的是单次请求的文件路径；同源页面仍可请求另一个 id 的路由，不能把它理解成插件之间的访问隔离。
+不要通过此通道暴露凭据。页面与宿主同源，接口访问仍受宿主鉴权约束。
 
 ### 6.4 为什么用 iframe，而不是把 HTML 注进主页面
 
 1. 插件页有自己的 `<script>`，注进来会被主页面 CSP 的 `script-src 'self'` 拦掉；
 2. 它的 `<style>` 会串味到整个控制台；
-3. iframe 是现成的沙箱，插件页拿不到主页面的 DOM、变量和事件。
+3. iframe 提供独立 document，便于样式和页面生命周期管理。当前 iframe 同源且未设置 `sandbox`，插件脚本可以访问宿主 DOM；它不是不可信代码的隔离边界。
 
-代价：插件页要自己再发一次请求，且只能读 `/plugin-panel/` 与 `/api` 的公开数据。
+插件页需要单独请求资源，CSP 的 `connect-src 'self'` 允许同源请求；能访问哪些 API 由宿主鉴权决定。
 
 ---
 

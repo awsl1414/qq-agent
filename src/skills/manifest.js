@@ -12,11 +12,11 @@
 //   version             语义化版本
 //   apiVersion          Skill API 版本（当前 1）
 //   enabledByDefault    默认开关（用户没配置过时用这个）
-//   category            model | message | knowledge | media | utility
+//   category            model | message | knowledge | media | utility | fun | query
 //   description         一句话说明（UI 展示）
 //   requires            依赖的能力名数组（如 ['web.fetch']）
 //   capabilities        本 Skill 提供的能力名数组
-//   permissions         权限声明数组（当前只有 web_fetch，控制 api.fetch 是否可用）
+//   permissions         权限声明数组（web_fetch / qq_sticker，控制 api.fetch / api.qqCall）
 //   configSchema        配置项声明（UI 据此渲染表单）
 //                       其中 type:'action' 的条目**不是配置项**，是"界面入口"，
 //                       见下面的 panels，以及 src/skills/panel.js 的完整契约
@@ -159,7 +159,7 @@ function normalizePrompt(prompt) {
       title: cleanString(s?.title, ''),
       content: String(s?.content ?? '').trim(),
       // Skill 不得覆盖核心安全规则：priority 上限 99
-      priority: Math.min(99, Number(s?.priority) || 50)
+      priority: Math.min(99, Number.isFinite(Number(s?.priority ?? NaN)) ? Number(s.priority) : 50)
     }))
     .filter((s) => s.content);
   if (!normalized.length && !prompt.instruction) return null;

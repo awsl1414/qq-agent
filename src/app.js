@@ -1147,7 +1147,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         senderId,
         senderName,
         text: text || '',
-        // 契约字段（CORE-PATCH.md）：onebot/sender/store/log/sendSegments，与 onRecall 同款。
+        // 契约字段见 doc/extend_development/skill-reference.md 第 10 节，与 onRecall 同款。
         onebot,
         sender,
         store,
@@ -1408,7 +1408,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     // 无论 store 里有没有标记成功都要发，插件的缓存与 store 是两套记录。
     // ctx 必须带齐 onebot/sender/store/log/sendSegments：runHook 原样透传 ctx，
     // 缺任何一项都会让 anti-recall 的 sendSegmentsSafe 三级回退落空（ctx.onebot.call
-    // 抛 TypeError 被 catch 吞掉），撤回时机器人毫无反应。见 CORE-PATCH.md 的契约。
+    // 抛 TypeError 被 catch 吞掉），撤回时机器人毫无反应。见 doc/extend_development/skill-reference.md 第 10 节。
     // 段发送通过 SendQueue，准入、限频、去重与留档口径一致。
     try {
       skillManager.runHook('onRecall', {

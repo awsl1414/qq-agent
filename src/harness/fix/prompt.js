@@ -24,9 +24,10 @@ export const VERIFY_PLAN_DOC =
   '可选验证器（只能从这里选，不能自定义命令）：\n'
   + '  · syntax   语法检查（node --check）—— 建议总是包含\n'
   + '  · protocol 协议闸（P1-P9 + 五道闸门）—— 建议总是包含\n'
-  + '  · scan     对改动文件跑静态扫描，看有没有新增问题\n'
-  + '  · tests    跑白名单测试脚本，参数 file=<.workbuddy/tools/ 下的 .mjs/.js 相对路径>；'
-  + '该目录仅开发环境存在 —— 没有时此验证器会返回 skip（不可用），届时改用 load/scan\n'
+  + '  · scan     扫描真实源码中本次改动目标的现存问题；不比较沙箱改动版或历史基线\n'
+  + '  · tests    用 node --test 跑白名单测试脚本，file 为相对项目根的 .mjs/.js 路径；'
+  + '优先 tests/（如 tests/volatile-contract.test.mjs），仅该目录不存在时采用 .workbuddy/tools/；'
+  + '两者都不存在则返回 skip（不可用），届时改用 load/scan。测试按真实源码路径运行，不能证明沙箱改动版已通过\n'
   + '  · load     在子进程里 import 沙箱入口并跑一次 setup()（仅插件/技能入口改动时有意义）';
 
 /**

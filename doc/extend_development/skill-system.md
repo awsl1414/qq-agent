@@ -30,11 +30,11 @@ plugins/<id>/           skills/<id>/
 
 1. `manifest.kind`（`'plugin'` / `'skill'`），供控制台分页展示；
 2. `lintKindPlacement` 的一条告警（`src/plugin-loader.js` 的 `lintKindPlacement`）：
-   - 放 `skills/` 却一个工具都没注册 → 告警"模型看不到它"；
-   - 放 `plugins/` 却既无 `providers` 也无 `hooks` → 告警"没有任何代码会去调用它"。
+   - 放 `skills/` 却一个工具都没注册 → 提示模型没有工具可调用；
+   - 放 `plugins/` 却既无 `providers` 也无 `hooks` → 提示缺少确定性触发机制。
 
-告警不阻断加载，这就是「选错类型 = 功能静默失效」的机制来源：装上了、开关也是开的、
-就是不干活，而且不报错。所以先读两份开发文档的第 1 节再动手。
+告警不阻断加载，也不屏蔽已注册的工具、能力、钩子或提示词。功能能否触发取决于其实现及调用方，
+不能仅凭目录判断失效；开发前先读两份开发文档的第 1 节。
 
 ---
 

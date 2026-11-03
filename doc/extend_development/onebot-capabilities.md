@@ -31,7 +31,7 @@ config.protocol = {
 }
 ```
 
-双开（第二个实例）时端口自动带偏移（3001/3000 + N），避免两个实例抢同一个协议端。
+`QQ_AGENT_PROFILE=N` 时默认端口偏移为 N×100（WS 3001 + N×100 / HTTP 3000 + N×100），已有配置优先；仍需在协议端配置相应端口，见 [运行方式与部署第 4 节](../running.md#4-多实例)。
 
 ---
 
@@ -139,7 +139,7 @@ api.qqCall(action, params = {})   // => Promise<any>
 它们会走完整的发送链路（分段、重试、@ 处理、图片转存）。
 
 同理，发表情走 `ctx.sender.sendSticker`，不需要 `qqCall`
-（`src/plugin-loader.js` 的 `createSkillApi`）。`qqCall` 只用于同步收藏表、取图这类"读"操作。
+（`src/plugin-loader.js` 的 `createSkillApi`）。发送操作应走上述队列；`qqCall` 适合查询或队列未封装的协议动作，其权限并不只读（见第 5 节）。
 
 ---
 

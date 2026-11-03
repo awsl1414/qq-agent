@@ -31,15 +31,16 @@
 //
 // ── 安全模型（谁在防谁）───────────────────────────────────────────────────
 // 页面是**插件自己写的 HTML**，跑在控制台的**同源** iframe 里。所以：
-//   · 只能读，不能写，通道是纯 GET 静态文件，没有任何写接口；
+//   · 此静态通道只有 GET/HEAD，没有写接口；同源页面仍可调用宿主 API；
 //   · 只有两个根：插件自己的目录（plugins|skills/<id>/）与它自己的 plugin-data；
 //     两者都经 realpath 二次确认，符号链接 / 目录联接指到外面一律 404；
 //   · 扩展名白名单（PANEL_FILE_TYPES），不做通用文件下载器；
 //   · 来源校验，恶意网页借浏览器读 127.0.0.1 也读不到（app.js 的 originAllowed）；
 //   · 页面 CSP 由 panelCsp() 统一给出：script-src 'self'（禁内联脚本）、
 //     frame-ancestors 'self'（只允许控制台自己嵌）。
-// 反过来说：**页面能读到自己插件的全部源码与全部 plugin-data**。这不是漏洞
-// （那本来就是它自己的东西），但插件不该把别人的机密往 plugin-data 里塞。
+// 每次请求按 URL 中的 id 限定文件根，但同源页面可请求其他 id 的路由。
+// 当前 iframe 无 sandbox，可访问宿主 DOM；路径白名单与 CSP 不是插件间的隔离边界。
+// 仅白名单类型的文件可读，不应通过此通道暴露凭据。
 //
 // ⚠️ 改了 plugins/** 或 skills/** 下任何内置模块，都要重算 builtin-modules.json 指纹
 //    （src/plugin-loader.js 的 refreshBuiltinEntry），否则插件会被当第三方扫、被拒加载。

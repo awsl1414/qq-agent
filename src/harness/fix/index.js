@@ -6,23 +6,23 @@
 //   fix.parse   解析提案 JSON（校验 P1 schema / P8 单一目标 / P9 计划完整性）
 //   fix.create  落一笔工单（status=proposed），发一次性 approvalToken  ← 闸①之前，不写任何真实文件
 //   fix.apply   校验令牌 → 把 hunks 确定性地写进暂存区 → 跑协议闸      ← 闸①在这里被强制执行
-//   fix.verify  跑白名单验证器（沙箱），记一轮
+//   fix.verify  跑白名单验证器并记录来源（暂存副本或真实源码），记一轮
 //   fix.rerun   同一版本重跑（不改码），限次
-//   fix.commit  快照 → 写真实文件（唯一允许写真实路径的地方）
+//   fix.commit  持久化快照与事务清单 → 替换真实文件
 //   fix.rollback 从快照回滚
 //   fix.discard 丢弃（理由落盘）
 //   fix.list / fix.detail / fix.delete / fix.prune / fix.export / fix.status
 //
 // ── 与 self-doctor 的关系 ──
-//   软依赖：`api.capability('doctor.scan-project')` 拿来跑"自检扫描"对比。
-//   self-doctor 没装或没开 → 该项验证降级为 skip，其余照跑（不把整条链路堵死）。
+//   `api.capability('doctor.scan-project', args)` 调用内置自检，返回扫描结果。
+//   能力不可用或未返回结果 → 该项验证降级为 skip，其余照跑。
 //
 // ── 红线 ──
-//   1. 本插件所有写盘都在 <DATA_DIR>/plugin-data/self-fix/ 之下，唯一的例外是 fix.commit，
-//      且它必须先成功落快照 + fsync 才允许写真实文件。
+//   1. 工单、暂存与快照写在 <DATA_DIR>/plugin-data/self-fix/；commit / rollback 会写真实目标及内置基线。
+//      commit 必须先持久化原始快照和 writing 清单，才允许替换真实文件。
 //   2. 模型没有任何写盘工具："应用改动"是把提案里的 hunks **确定性地**套到暂存区副本上，
 //      不是让模型再写一遍文件。这样 P2（最小改动）才有可能被静态校验。
-//   3. 默认关闭（enabledByDefault:false + fixEnabled:false 双保险）。
+//   3. 模块作为 kind='core' 常驻，自动修复操作由默认 false 的 fixEnabled 控制。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -41,6 +41,7 @@ import { buildEvidencePack, packToMarkdown, buildDocx, buildReportPrompt, parseR
 // 该 env 只有 electron/main.js 会设：headless（node src/server.js）下回落进程 cwd，
 // 工单会写进 <仓库根>/plugin-data/self-fix/，而 UI 读 data/ 下的真目录。
 import { DATA_DIR } from '../../config.js';
+import { harnessProjectRoot } from '../paths.js';
 
 const DEFAULTS = {
   fixEnabled: false,
@@ -58,8 +59,8 @@ let askCapability = () => undefined;
 
 let root = null;        // <DATA_DIR>/plugin-data/self-fix
 let dataRoot = null;    // <DATA_DIR>（寻址 scope='data' 用）
-let appRoot = null;     // resources/app（寻址 scope='code' 用）
-let projectRoot = null; // 项目根（.workbuddy/tools 在这里）
+let appRoot = null;     // 源码根或 resources/app（寻址 scope='code' 用）
+let projectRoot = null; // 项目根（tests/，上游布局可用 .workbuddy/tools/）
 let logsDir = null;
 let isEnabled = false;
 
@@ -271,7 +272,7 @@ export function setup(api) {
   // 必须用 fileURLToPath：new URL().pathname 在 Windows 上会给 /E:/... 前导斜杠。
   // 优先用宿主注入的 appRoot（见 src/harness/index.js），算错会让自检/修复指向 src/。
   appRoot = api.appRoot || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-  projectRoot = path.dirname(path.dirname(appRoot));
+  projectRoot = harnessProjectRoot(appRoot);
   logsDir = path.join(dataRoot, 'logs');
 
   try { ensureDir(fixesDir(root)); } catch { /* 无权限时后续每步都会明确报错 */ }
@@ -473,7 +474,7 @@ export const providers = {
     return { ok: true, protocol: rec.protocol };
   },
 
-  /** 自验：跑一遍验证计划（沙箱）。记一轮，更新状态。 */
+  /** 自验：准备改动副本，按各验证器的数据来源执行并记录结果。 */
   'fix.verify': ({ fixId } = {}) => {
     const g = guardEnabled(); if (g) return g;
     const rec = readRecord(root, fixId);
@@ -499,11 +500,7 @@ export const providers = {
       return { ok: false, error: `准备沙箱失败：${e.message}` };
     }
 
-    let scanProject = null;
-    try {
-      const scanCap = askCapability('doctor.scan-project');
-      if (typeof scanCap === 'function') scanProject = (a) => scanCap(a || {});
-    } catch { scanProject = null; }
+    const scanProject = (args) => askCapability('doctor.scan-project', args);
 
     const ctx = { ...ctxOf(), sandbox: sb, scanProject };
     const res = runVerifyPlan(root, appRoot, dataRoot, rec, ctx);

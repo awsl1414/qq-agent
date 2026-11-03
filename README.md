@@ -2,7 +2,7 @@
 
 ![平台](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Electron-lightgrey)
 ![技术栈](https://img.shields.io/badge/stack-Node.js%20%7C%20原生前端-orange)
-![测试](https://img.shields.io/badge/tests-122%20cases-brightgreen)
+[![测试](https://img.shields.io/badge/tests-node%3Atest-brightgreen)](doc/running.md#8-测试)
 
 一个跑在自己电脑上的 QQ 群聊机器人：装完双击启动，扫码登录，填个模型 Key 就能用。
 事件驱动 + 无状态会话，每次处理的 token 成本恒定；所有操作都在图形控制台里完成。
@@ -71,7 +71,7 @@
 
 - Live2D 桌面伙伴（插件 `desktop-pet`，PixiJS + Cubism Core）。随包带 DS鼠控版 默认模型（8 个动作组 / 44 个表情），控制台「桌宠」页可导入 Cubism 4 模型（自动读动作组与表情），支持置顶/穿透/缩放/透明度、待机动作与表情
 - 交互：单击弹「今日用量」卡片（今日 N 次运行 · X tok · 缓存 Y% · ¥Z，下面一行「搜索：N 次」，16 秒自动收起，期间每 5 秒刷新）；双击打开开发工单对话窗（由内置模块 `dev-orders` 提供，不可禁用）
-- 模型放在 `data/desktop-pet/models/<模型 id>/`，导入走插件真实链路 `service.importModel`。运行时导入会被 5 秒一次的状态落盘覆盖，导入前先完整退出应用
+- 模型放在当前数据目录的 `desktop-pet/models/<模型 id>/`，可在运行中的控制台导入；`service.importModel` 会同时更新内存状态并落盘。只有手工替换模型或状态文件时才需要先完整退出应用，避免被运行态覆盖
 - 依赖 GPU 渲染。显卡驱动异常导致白屏/崩溃时，按 [doc/running.md](doc/running.md) 第 7 节的显卡条目处理
 
 **OneBot**
@@ -108,7 +108,7 @@ plugins/my-plugin/            skills/my-skill/
 
 判据一句话：规则能写死就做插件（`plugins/`），要理解人话就做技能（`skills/`）。
 
-选错类型的后果是功能静默失效：不报错、不崩、就是没反应。所以两份开发文档请先读：
+目录决定分类与放置告警，不限制工具、能力或钩子能否执行；是否触发取决于是否注册了对应机制及其调用方。按主要用法选择类型，开发前请先读：
 
 - **确定性型** → [doc/extend_development/plugin-development.md](doc/extend_development/plugin-development.md)
 - **LLM 型** → [doc/extend_development/skill-development.md](doc/extend_development/skill-development.md)
@@ -137,17 +137,18 @@ plugins/my-plugin/            skills/my-skill/
 | macOS | `.dmg` / `.zip`（arm64 与 x64 各一份） | 打开 dmg 把应用拖进「应用程序」；zip 解压后拖入 |
 | Linux | `.AppImage` / `.deb` | AppImage：`chmod +x` 后直接运行；deb：`sudo apt install ./qq-agent_*.deb` |
 
-macOS 与 Linux 的产物**未经 Apple 公证**，首次打开会被系统拦一下：
+macOS 产物**未经 Apple 公证**，首次打开可能被系统拦截；Linux AppImage 需要执行权限及 FUSE 运行时：
 
 - **macOS**：提示「无法验证开发者」时，在 Finder 里右键应用 →「打开」，或执行
-  `xattr -dr com.apple.quarantine "/Applications/qq-agent.app"`
+  `xattr -dr com.apple.quarantine "/Applications/QQ Agent.app"`
 - **Linux AppImage**：先 `chmod +x qq-agent-*.AppImage` 再双击/运行。若报
   `dlopen(): error loading libfuse.so.2`，装一下运行时：Debian/Ubuntu 用
   `sudo apt install libfuse2`（Ubuntu 24.04+ 是 `libfuse2t64`），Fedora 用
   `sudo dnf install fuse-libs`
 
-数据目录：Windows 在安装目录旁的 `data/`；macOS 在 `~/Library/Application Support/qq-agent/data/`；
-Linux 在 `~/.config/qq-agent/data/`。多实例后缀 `data-<N>` 三个平台一致。
+数据目录：Windows 安装版在 `%APPDATA%\qq-agent\data\`，免安装 zip 版在 exe 同级的 `data/`；
+macOS 在 `~/Library/Application Support/qq-agent/data/`，Linux 在 `~/.config/qq-agent/data/`。
+多实例使用 `data-<N>`；`QQ_AGENT_DATA_DIR` 可显式覆盖，完整规则见 [运行方式与部署第 3 节](doc/running.md#3-数据目录)。
 
 ### 从源码运行
 

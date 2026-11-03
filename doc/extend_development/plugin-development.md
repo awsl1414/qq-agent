@@ -8,8 +8,7 @@
 
 ## 1. 先判断：该做插件还是技能
 
-**大多数人分不清这两型，所以先花两分钟回答三个问题。** 选错的后果不是报错，
-是功能静默失效：装上了、开关也是开的、就是不干活（原因见 1.1 节）。
+先用三个问题确定主要用法。目录分类不限制执行机制；缺少对应的工具、能力、钩子或调用方，才会导致功能无法触发（见 1.1 节）。
 
 ### 第一问：触发时机能不能写成一条规则？
 
@@ -39,8 +38,8 @@
 
 | 放错的情况 | 实际后果 |
 |---|---|
-| 该做插件，却放进 `skills/` 并且没注册工具 | 模型看不到它 → 永远不触发。日志里只有一条告警 |
-| 该做技能，却放进 `plugins/` 并且没有 providers/hooks | 没有任何核心代码会调它 → 永远不触发 |
+| 该做插件，却放进 `skills/` 并且没注册工具 | 有放置告警；模型无工具可调用，但 providers/hooks 仍可由核心或其他扩展调用 |
+| 该做技能，却放进 `plugins/` 并且没有 providers/hooks | 有放置告警；已注册工具仍可供模型调用 |
 | 该做技能，放进 `skills/` 但忘了写清 `description` | 模型不知道什么时候该用 → 基本不触发 |
 
 判据一句话：规则能写死就做插件；要理解人话就做技能。
@@ -106,10 +105,10 @@ export function setup(api) {
 }
 
 export const hooks = {
-  onMessage(ctx) {
+  async onMessage(ctx) {
     if (!ctx.text || !ctx.text.includes('@我')) return;
     // 通过 ctx.send 主动发言；这里不需要返回值
-    ctx.send(String(cfg().reply));
+    await ctx.send(String(cfg().reply));
   }
 };
 ```

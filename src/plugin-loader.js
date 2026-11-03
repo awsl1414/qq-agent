@@ -673,10 +673,8 @@ function readManifest(dir) {
 /**
  * 校验条目是否放在了语义正确的目录里。
  *
- * 只警告，不阻断加载。放错目录不会报错也不会崩，但后果很隐蔽：
- *   - 只有 providers 的模块放进 skills/：模型根本看不到它，功能永远不被触发
- *   - 只有工具的模块放进 plugins/：能用，但语义混乱，统计与文档都对不上
- * 所以这里把"默默失效"变成"启动就看得见"。
+ * 只警告，不阻断加载，也不限制工具、providers 或 hooks 的执行。
+ * 分类与主要用法不符时提示作者调整目录；能否触发取决于是否有真实调用方。
  *
  * 目录语义定义见 skills/manifest.js 的 DIR_KIND。
  */
@@ -687,12 +685,12 @@ function lintKindPlacement(kind, { manifest, toolIds, providers, hooks, promptSe
   const provides = Object.keys(providers || {}).length > 0 || Object.keys(hooks || {}).length > 0;
 
   if (kind === 'skill' && !hasTools) {
-    const w = `${manifest.id} 在 skills/（LLM 型）却没有注册任何工具：模型看不到它，功能不会被触发。`
+    const w = `${manifest.id} 在 skills/（LLM 型）却没有注册任何工具：模型无法直接调用工具，但已提供的能力、钩子或提示词仍可生效。`
       + '要么 registerTool，要么把它移到 plugins/（确定性型）。';
     warnings.push(w);
   }
   if (kind === 'plugin' && !provides) {
-    const w = `${manifest.id} 在 plugins/（确定性型）却没有提供能力或钩子：没有任何代码会去调用它。`
+    const w = `${manifest.id} 在 plugins/（确定性型）却没有提供能力或钩子：不能由这些机制触发，但已注册的工具仍可供模型调用。`
       + '要么 export providers / hooks，要么把它移到 skills/（LLM 型，注册工具）。';
     warnings.push(w);
   }

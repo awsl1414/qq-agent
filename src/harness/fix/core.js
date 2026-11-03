@@ -3,13 +3,13 @@
 // ── 为什么独立成模块，而不是塞进 self-doctor ──
 //   self-doctor 的清单与文件头都写死「全程只读，不写任何被检对象」，
 //   把写能力塞进去会直接违背它自己的身份契约（而"扩展契约自洽"正是 self-doctor 自己查的东西）。
-//   本项目约定每个扩展自包含、不跨插件 import。所以修复能力独立成 self-fix，
+//   修复与只读诊断职责不同，因此独立成 self-fix（现已迁入内置核心模块），
 //   通过软依赖 api.capability('doctor.report' / 'doctor.scan-project') 取诊断信息。
 //
-// ── 红线（与 forge-tools.js 同构，方向是"写"）──
-//   1. 所有写盘只落在 <DATA_DIR>/plugin-data/self-fix/ 之下（暂存区 / 快照 / 工单 / 沙箱）。
-//      **只有 fix.commit 这一个函数**才允许把暂存区内容搬回真实路径，
-//      且搬运前必须先落快照 + fsync。
+// ── 红线 ──
+//   1. 暂存区 / 快照 / 工单 / 沙箱位于 <DATA_DIR>/plugin-data/self-fix/。
+//      commit 写真实目标前先持久化原始快照与 writing 清单；rollback 按快照还原真实目标。
+//      两者修改内置扩展后还会刷新 builtin-modules.json。
 //   2. 路径解析四道闸：语法干净 → 无 `..` / 绝对路径 → realpath 后仍在允许根内 → 后缀白名单。
 //   3. 分级：L0 元部件一票否决（连人工都不能一键放行）。
 //

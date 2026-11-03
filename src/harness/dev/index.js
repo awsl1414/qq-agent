@@ -21,12 +21,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DATA_DIR } from '../../config.js';
+import { harnessProjectRoot } from '../paths.js';
 import { runTurn, trimMessagesToBudget, isCtxNote, CTX_NOTE_PREFIX } from './executor.js';
 
 // 内置化后本文件在 <appRoot>/src/harness/dev/，层级比插件期深一层。
 // 三个根都可写，setup 时优先采用宿主注入的 api.appRoot（见 src/harness/index.js）。
 let APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-let PROJECT_ROOT = path.resolve(APP_ROOT, '..', '..');
+let PROJECT_ROOT = harnessProjectRoot(APP_ROOT);
 const SANDBOX_NAME = 'dev-sandbox';
 const SANDBOX_ENV = String(process.env.QQ_AGENT_DEV_SANDBOX || '').trim();
 let SANDBOX_ROOT = SANDBOX_ENV || path.join(PROJECT_ROOT, SANDBOX_NAME);
@@ -693,7 +694,7 @@ export function setup(api) {
   // 宿主注入的 app 根优先（内置模块不能靠 import.meta 反推，见文件头注释）
   if (api?.appRoot) {
     APP_ROOT = api.appRoot;
-    PROJECT_ROOT = path.resolve(APP_ROOT, '..', '..');
+    PROJECT_ROOT = harnessProjectRoot(APP_ROOT);
     if (!SANDBOX_ENV) SANDBOX_ROOT = path.join(PROJECT_ROOT, SANDBOX_NAME);
   }
   cfg = () => ({ ...DEFAULTS, ...(api?.config?.() || {}) });

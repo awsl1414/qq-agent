@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { getConfig } from '../../config.js';
+import { getConfig, DATA_DIR } from '../../config.js';
 import { chatCompletionWithRetry, resolveApiKey } from '../../llm.js';
 import { toOpenAiTools, executeTool } from '../../tools.js';
 import { safeFetch } from '../../safe-fetch.js';
@@ -488,7 +488,7 @@ export function buildDevTools(projectRoot, workDir) {
     {
       id: 'dev_read_file',
       name: '读文件',
-      description: '读项目里的文件（相对项目根的路径，如 resources/app/src/config.js 或 README.md）。'
+      description: '读项目里的文件（相对项目根的路径，如 src/config.js；安装布局可能在 resources/app/src/config.js，先列目录确认）。'
         + '改任何东西之前先读它。读不了二进制（图片等）。'
         + `大文件请**分页读**：用 offset/limit 只取需要的部分（单次最多 ${MAX_READ_LINES} 行 / ${MAX_READ_CHARS} 字符），`
         + '返回里会告诉你"共多少行、下一页从哪开始"。别一次把整份大文件拖进上下文 —— 又慢又费钱。',
@@ -542,7 +542,7 @@ export function buildDevTools(projectRoot, workDir) {
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: '相对项目根的路径，如 resources/app/src/util.js' },
+          path: { type: 'string', description: '相对项目根的路径，如 src/util.js；以实际目录布局为准' },
           content: { type: 'string', description: '文件的完整内容' }
         },
         required: ['path', 'content']
@@ -618,7 +618,7 @@ export function buildDevTools(projectRoot, workDir) {
       id: 'dev_run',
       name: '执行命令',
       description: '在项目根目录执行一条命令（Windows cmd，默认 60 秒超时，可传 timeoutSec 加长到最长 600 秒）。'
-        + `用来查文件、git 状态、跑测试与工具脚本（若项目有 .workbuddy/tools 目录，如 node .workbuddy/tools/*.mjs；安装版没有该目录，改用其它方式验证）。会给回 stdout/stderr 和退出码（最多 ${MAX_RUN_OUTPUT} 字符，超了会截断 —— 请用 findstr/head 之类的把输出收窄）。`,
+        + `用来查文件、git 状态、跑测试与工具脚本：优先检查 tests/，用 pnpm test 跑全量或 node --test tests/某文件.test.mjs；tests/ 不存在时检查 .workbuddy/tools/ 的实际 .mjs/.js 文件。两者都不存在则说明测试不可用，改用实际行为验证。会给回 stdout/stderr 和退出码（最多 ${MAX_RUN_OUTPUT} 字符，超了会截断 —— 请用 findstr/head 之类的把输出收窄）。`,
       parameters: {
         type: 'object',
         properties: {
@@ -699,7 +699,7 @@ export function buildDevTools(projectRoot, workDir) {
       id: 'dev_market_pull',
       name: '拉取广场扩展',
       description: '把拓展广场里的某个插件/技能下载到**本次会话的沙箱**（dev-sandbox/<会话>/pulled/ 下）。'
-        + '不会装进项目、不会自动加载 —— 拉下来先读、再按需求改，采用时由你把文件写进 resources/app/plugins|skills/。'
+        + '不会装进项目、不会自动加载 —— 拉下来先读、再按需求改，采用时写进应用根的 plugins/ 或 skills/（先确认实际布局）。'
         + 'id 从 dev_market_search 的结果里取。',
       parameters: {
         type: 'object',
@@ -836,7 +836,7 @@ function buildSysPrompt(projectRoot, workDir) {
     '2b. **做「新」插件 / 技能前，先搜拓展广场**（用户明确要求，别跳过）：',
     '   · 先 dev_market_search 搜关键词（广场里已有 140+ 个扩展，换个说法多搜一两次 —— 中文没有词边界）；',
     '   · 有类似的 → dev_market_pull 拉到沙箱 → dev_read_file 读一遍 → **先回一句问用户「要不要基于它改」，等答复**；',
-    '     用户说要 → 在沙箱里改好，再把（改过的）文件写进 resources/app/plugins|skills/<新目录>/，并跑基线重算；',
+    '     用户说要 → 在沙箱里改好，再把文件写进应用根的 plugins/<新目录>/ 或 skills/<新目录>/；仅覆盖内置扩展时重算其基线；',
     '     用户说不要 → 照常从零做（拉下来的目录先留着，用户没让删就别删）。',
     '   · 没搜到 → 说一句「广场里没有类似的」然后从零做，不要在搜索上反复纠缠。',
     '   · 只有「改现有代码 / 修 bug」这类需求不用搜；纯粹做新东西才搜。',
@@ -844,13 +844,14 @@ function buildSysPrompt(projectRoot, workDir) {
     '    遇到不熟悉的 API/库 → 先 dev_fetch 查文档，别凭记忆瞎写；',
     '    复杂任务（≥3 步）→ 先 dev_plan 列 3–6 项计划，做完一项更新一次。',
     '4. 文件就是你的记忆：需要事实先读文件或跑命令确认。',
-    '5. 常用位置：resources/app/src（核心）、resources/app/plugins|skills（扩展）、data/（运行时数据）、',
-    '   .workbuddy/tools（测试与工具脚本，**仅开发环境有该目录**）、dev-sandbox/（其他会话的产出）。',
-    '6. 改了 resources/app/plugins|skills 里的内置模块内容后，调用 src/plugin-loader.js 导出的',
+    '5. 先列目录确认布局：源码版应用根就是项目根，核心在 src/、扩展在 plugins/ 与 skills/；',
+    '   resources/app 安装布局的应用根在 resources/app/。测试优先看项目根 tests/，缺失时检查 .workbuddy/tools/。',
+    `   当前数据目录：${DATA_DIR}；可能位于项目外，文件工具仍受项目根边界限制。会话产出以本轮给出的路径为准。`,
+    '6. 改了应用根 plugins/ 或 skills/ 里的内置模块内容后，调用应用根 src/plugin-loader.js 导出的',
     '   refreshBuiltinEntry(目录名, { appRoot: 应用根目录 }) 并检查返回值 ok，避免热重载因基线不符拒载。',
     '   生成与校验共用 moduleFileSha1：文本 CRLF 归一化为 LF，含 NUL 的二进制保持原样；仅换行无需重算。',
-    '7. 仅当 .workbuddy/tools 存在：改完核心/插件跑对应测试套件验证（fix-test.mjs、review-fix-test.mjs、',
-    '   session-path-test.mjs、dev-orders-test.mjs）。目录不存在时改用实际行为验证（跑一次真实调用看结果）。',
+    '7. 改完核心/扩展，源码版用 pnpm test 跑 tests/*.test.mjs，或 node --test tests/实际文件.test.mjs；',
+    '   tests/ 不存在时才采用 .workbuddy/tools/ 中实际存在的 .mjs/.js。两者都没有则明确说明，改用实际行为验证。',
     '8. 回复要像聊天：1–3 句话，说清「改了什么 / 在哪 / 怎么验证」；不贴大段代码、不写长篇报告。',
     '9. 用户完全信任你（白名单）——不要问"要不要做"，直接做；不确定就选最合理的解释并在回复里说一句。',
     '   **唯一例外**：从广场拉到现成扩展后，必须先问一句「要不要基于它改」再动手（这是用户明确要求的确认点）。'

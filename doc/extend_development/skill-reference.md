@@ -47,7 +47,7 @@
 
 | 值 | 效果 |
 |---|---|
-| `web_fetch` | 让 `api.fetch` 变成真的 `globalThis.fetch` |
+| `web_fetch` | 启用 `guardedFetch` 受控联网：协议、凭据、DNS / IP、重定向与浏览锁定校验；保留 Response 接口 |
 | `qq_sticker` | 让 `api.qqCall` 可用 |
 
 没声明时这两个 API 存在但永远 reject（`src/plugin-loader.js` 的 `createSkillApi`）。
@@ -65,7 +65,7 @@
 
 | type | 渲染成 | 可用字段 |
 |---|---|---|
-| `boolean` | 复选框（整行可点） | `label` `description` `default` |
+| `boolean` | 开关（`input.sw`，关联标签） | `label` `description` `default` |
 | `number` | 数字输入 | 同上 |
 | `string` | 文本框 | 同上 + `secret` `multiline` |
 | `enum` | 下拉 | 同上 + `values` 或 `options` |
@@ -131,7 +131,7 @@
 ```
 
 - 每个 section 规范成 `{id, title, content, priority}`；`id` 缺省 `section-<序号>`；
-  `content` 裁剪后为空则被过滤掉；`priority` 被钳到 `min(99, 值 || 50)`。
+  `content` 裁剪后为空则被过滤掉；`priority` 上限为 99，显式 `0` 保留，缺省或非有限数值取 50。
 - 给了 `sections` 之外还给了 `instruction`，且 sections 为空 → 合成一个 `{id:'main', priority:50}`。
 - 全都为空 → 返回 `null`，提示词静默消失（不报错）。
 
@@ -180,7 +180,7 @@
 | `capability` | `(name, args?) => any` | 软依赖调用：取第一个生效提供者；无/异常 → `undefined` |
 | `hasCapability` | `(name) => boolean` | 是否有真实实现的能力 |
 | `log` / `warn` / `error` | `(...args)` | 自动带 `[skill:<id>]` 前缀 |
-| `fetch` | `fetch` 或 reject 函数 | 需要 `permissions: ['web_fetch']` |
+| `fetch` | `(input, init?) => Promise<Response>` 或 reject 函数 | 需要 `permissions: ['web_fetch']`，经 `guardedFetch` 安全校验 |
 | `qqCall` | `(method, params?) => Promise` | 需要 `permissions: ['qq_sticker']`，见 [onebot-capabilities.md](onebot-capabilities.md) |
 | `utils.sleep` | `(ms) => Promise` | 定时 |
 | `utils.safeJsonParse` | `(text, fallback?) => any` | 解析失败返回 fallback |
@@ -193,7 +193,7 @@
 ## 7. `api.storage`
 
 落盘位置：`<DATA_DIR>/plugin-data/<id>/storage.json`
-（`DATA_DIR` 默认 `<项目>/data`，可用环境变量 `QQ_AGENT_DATA_DIR` 覆盖）。
+（源码运行默认 `<项目>/data`；打包版位置见 [运行方式与部署第 3 节](../running.md#3-数据目录)，可用 `QQ_AGENT_DATA_DIR` 覆盖）。
 
 | 项 | 值 |
 |---|---|
@@ -316,7 +316,7 @@ export function promptSections(context) {   // 注意：不是 async
 ```
 
 - 同 `id` 时动态覆盖静态（清单里的 `prompt.sections`）。
-- `priority` 显式 `0` 是合法值（排最末），不会被 falsy 吞掉。
+- `priority` 缺省为 40；显式 `0` 是合法值，不会被 falsy 吞掉。建议使用 0~99，0 在该范围内排最末。
 - 排序：`priority` 降序 → 同优先级按 `id` 字典序（防字节漂移击穿缓存）。
 - 上限 **99**，且一律渲染在核心安全规则**之后**。
 
@@ -455,7 +455,7 @@ export const providers = {
 | 现象 | 原因 |
 |---|---|
 | 装上了、开关开了，模型从不用它 | ① 放 `skills/` 但**没注册工具**（模型看不到）；② 工具 `description` 没写清何时用 |
-| 条件满足了但插件不跑 | 放 `plugins/` 但**既无 `providers` 也无 `hooks`**（没有代码会调它） |
+| 条件满足了但确定性行为不触发 | 没有对应的 providers/hooks 或调用方；目录分类本身不会屏蔽执行 |
 | 钩子/能力不生效 | 扩展**未启用 / 依赖未就绪**：`runHook` 与 `getCapabilityProviders` 会跳过非 active 的扩展 |
 | 提示词片段不见了 | ① `prompt` 形态写错（对象但无 `sections`/`instruction` → 返回 `null`）；② `promptSections` 写成了 `async`；③ `content` 为空被过滤 |
 | 自检总是不生效（或恒生效） | `available` 写成了 `async` |
@@ -483,11 +483,13 @@ export const providers = {
 
 ```bash
 # 手动触发重扫（热重载关闭时）
-curl -X POST http://127.0.0.1:<port>/api/skills/reload
+curl -X POST -H "Origin: http://127.0.0.1:<port>" http://127.0.0.1:<port>/api/skills/reload
 
 # 控制台端口写在数据目录里
 cat data/console-port
 ```
+
+将 `<port>` 替换为实际端口；若配置了 `server.token`，还需添加 `-H "x-console-token: <token>"`。`data/` 路径按当前实例的数据目录替换。
 
 校验内置模块指纹（仓库没带重算脚本，做法见
 [skill-system.md 第 6 节](skill-system.md#6-安全边界两层别混淆)）。
