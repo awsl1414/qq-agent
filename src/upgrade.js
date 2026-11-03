@@ -26,28 +26,34 @@
 //     幂等靠 data/upgrade-state.json 里的"已执行 id"。
 //   纯映射能表达的事情继续留在那边，不要搬进来，否则两套幂等机制会打架。
 //
+// 迁移只做一件事：把旧位置的残留搬到当前版本的**正式位置**，或者删掉。
+// 它不替用户保管历史文件 —— 没有"备份区"，也没有"从备份还原"这条路。
+//
+// 为什么不留备份（三条，任一条都足够）：
+//   · 没有消费方：除了本模块，全仓没有任何代码读备份目录，也没有还原入口；
+//   · 不保证当前版本运行：解析链只认正式位置（ffmpeg-resolve.js 的
+//     buildCandidates）。把旧 ffmpeg 搬进备份 = 从"旧的可达位置"搬到"新的
+//     不可达位置"，功能反而降级，什么都没换来；
+//   · 两条路径上都不需要它：迁移失败时原文件本来就没动（runUpgrades 不记
+//     applied，下次重试）；迁移成功时文件已经在正式位置。没有"需要回滚"的场景。
+//
 // 三条硬约束：
-//   ① 不删用户文件：只改配置与本模块自己的状态文件；动磁盘上的旧文件只允许
-//      **搬进数据目录的备份区**（backupPath），绝不直接删除。真正的删除只发生在
-//      用户于界面上逐个确认之后（removeLegacyResidue）。
+//   ① 删除的边界：只删本模块自己认定属于「项目自带物」的文件（随安装包分发、
+//      用户从未主动创建、新版有正式来源），且删除前必须过 assertSafePath。
+//      用户资产 —— 群聊、记忆、API Key、用户装的扩展、便携 QQ 及其登录态
+//      （qq-portable-data）—— 依然绝不删除、绝不搬走。判定标准不是"它在不在
+//      数据目录里"，而是"用户有没有为它做过选择"。
 //   ② 幂等：已执行过的 id 永不重跑；动作本身也要能重复执行而不叠加。
 //   ③ 失败不阻塞启动：单项抛错只记日志（且不记入 applied，下次重试），
 //      其余项与整个启动流程照常继续。
 //
-// 分层：自动迁移 vs 用户确认清理
-//   · 自动迁移（runUpgrades，启动时跑）：只做**无损**动作。旧位置的文件搬到
-//     data/runtime/legacy-backup/，随时可以搬回来，所以不需要用户点头。
-//   · 用户确认清理（detectLegacyResidue / removeLegacyResidue，界面触发）：
-//     删除不可恢复，所以只检测、不自动做，列在「设置 → 外观与数据」里等用户点。
-//   判断标准一句话：搬得走就自动搬，删了回不来的必须让用户确认。
-//
 // 运行时目录的规范形态（`data/runtime/` 是唯一的运行时根）：
-//   data/runtime/ffmpeg/bin/        设置页下载的 ffmpeg
+//   data/runtime/ffmpeg/bin/        设置页下载的 ffmpeg（也是旧随包 ffmpeg 的落点）
 //   data/runtime/qq-portable/       便携 QQ 副本（历史上在 <app>/runtime/ 下）
 //   data/runtime/qq-portable-data/  便携 QQ 的隔离登录态（同上）
-//   data/runtime/legacy-backup/     迁移搬走的旧文件，等用户确认删除
 // 历史上 `runtime/` 同时挂在程序目录与数据目录两个父目录下，迁移项
-// relocate-portable-qq 把它收敛到数据目录；解析口径见 runtimeDirPath。
+// relocate-portable-qq 与 retire-bundled-ffmpeg 把它收敛到数据目录；
+// 解析口径见 runtimeDirPath。
 //
 // 调用点：src/app.js 的 start() 开头，必须在 reloadSkills({reason:'boot'})
 // 之前，因为插件扫描会读 trustedPlugins，晚一步就白做。
@@ -55,6 +61,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR, ROOT, CONFIG_FILE, updateConfig } from './config.js';
+// 正式落点与可执行文件名都以 ffmpeg-resolve 为准：迁移搬去的目录必须和解析链
+// 认的是同一个，各写一份迟早会漂移。
+import { managedBinDir, exeName } from './ffmpeg-resolve.js';
 
 /** 迁移状态文件（放在 DATA_DIR：它是"这台机器的本次安装"的状态，不是出厂内容）。 */
 export function upgradeStatePath(dataDir = DATA_DIR) {
@@ -157,8 +166,8 @@ const ALLOWED_ROOTS_HINT = 'DATA_DIR 或 appRoot/runtime';
 /**
  * 允许写入/删除的根。
  *
- * 只有两处：数据目录（迁移备份、下载残留都在这里），以及程序根下的 runtime/
- * （历史版本随包分发的 ffmpeg 就在那儿）。**刻意不包含 appRoot 本身**：它装着
+ * 只有两处：数据目录（迁移的正式落点都在这里），以及程序根下的 runtime/
+ * （历史版本随包分发的 ffmpeg 就在那儿，是**源**而不是落点）。**刻意不包含 appRoot 本身**：它装着
  * 全部源码与内置扩展，误删一个路径就是整个程序没了。
  */
 export function allowedRoots({ appRoot = ROOT, dataDir = DATA_DIR } = {}) {
@@ -224,7 +233,7 @@ export function assertSafePath(target, roots) {
 }
 
 // ── 文件动作 ────────────────────────────────────────────────────────────
-// 迁移项与用户确认清理共用这三个函数，不各写一遍 rename/copy/rm。
+// 迁移项的搬移与删除都走这里，不各写一遍 rename/copy/rm。
 
 /**
  * 原子搬移。同盘走 rename；跨盘（EXDEV，数据目录与程序目录常在不同分区）
@@ -232,7 +241,7 @@ export function assertSafePath(target, roots) {
  * 失败，会把复制出来的那份也清掉再抛错，绝不留下半套。
  *
  * 目标已存在时默认抛错（不覆盖），这是幂等要求的一部分：重复执行不能把
- * 上一次的备份盖掉。
+ * 上一次搬过去的那份盖掉。
  */
 export function movePath(src, dest, { roots, overwrite = false } = {}) {
   const from = assertSafePath(src, roots);
@@ -305,63 +314,6 @@ export function removePath(p, { roots } = {}) {
   return { removed: true, path: abs };
 }
 
-/** 备份区根：`data/runtime/legacy-backup/`。旧版本留下的文件都搬到这里。 */
-export function legacyBackupRoot(dataDir = DATA_DIR) {
-  return path.join(dataDir, 'runtime', 'legacy-backup');
-}
-
-/**
- * 每个备份目录里的归属文件。内容是
- * `{ migrationId, at, fromVersion, items }`。
- *
- * 为什么需要它：备份目录名只是给人看的（`ffmpeg-<时间戳>`），谁搬来的、
- * 哪个版本搬来的，全靠命名前缀猜。加第二、第三个迁移项之后，猜前缀必然漏，
- * 漏的后果不是报错而是清理界面里"迁移时间与来源版本"静默为空。让目录自己
- * 记下来源，识别逻辑就与迁移项数量无关。
- */
-export const BACKUP_META_FILE = 'meta.json';
-
-/**
- * 没有 meta.json 的老备份目录，按命名前缀认回迁移项。
- *
- * 这是**历史形态**，只覆盖 meta 机制上线之前已经产生的备份（那时只有
- * retire-bundled-ffmpeg 一项会建备份）。新迁移项一律靠 meta.json，
- * 不要往这张表里加东西 —— 加一条就等于承认"meta 写失败了"是常态。
- */
-const HISTORY_BACKUP_PREFIXES = [
-  { prefix: 'ffmpeg-', migrationId: 'retire-bundled-ffmpeg' }
-];
-
-/** 读备份目录的 meta.json。没有 / 坏了返回 null（调用方回落到历史前缀或目录名）。 */
-export function readBackupMeta(dir) {
-  try {
-    const j = JSON.parse(fs.readFileSync(path.join(dir, BACKUP_META_FILE), 'utf8'));
-    if (!j || typeof j !== 'object') return null;
-    return {
-      migrationId: String(j.migrationId || ''),
-      at: String(j.at || ''),
-      fromVersion: String(j.fromVersion || ''),
-      items: Array.isArray(j.items) ? j.items.map(String) : []
-    };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * 给备份目录写归属文件。写失败不抛：搬迁本身已经完成，把"元信息写不进去"
- * 当成整项失败会让下次启动把"源已不存在"重跑一遍，反而丢了这次记录。
- * 缺 meta 的目录在 detectLegacyResidue 里回落到目录名显示，仍可正常清理。
- */
-function writeBackupMeta(dir, meta, log = () => {}) {
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, BACKUP_META_FILE), JSON.stringify(meta, null, 2), 'utf8');
-  } catch (error) {
-    log(`[upgrade]     ⚠️ 备份元信息写入失败（不影响清理，只是界面里少了来源版本）：${error?.message ?? error}`);
-  }
-}
-
 // ── 运行时目录 ──────────────────────────────────────────────────────────
 //
 // 运行时内容的规范根只有一处：`DATA_DIR/runtime/`。历史上 `runtime/` 同时挂在
@@ -402,34 +354,12 @@ function dirIsEmpty(dir) {
   try { return fs.readdirSync(dir).length === 0; } catch { return false; }
 }
 
-/** 目标已存在时追加 `-2` / `-3`…，保证搬移永远不覆盖已有的备份。 */
-function uniqueDest(target) {
-  if (!fs.existsSync(target)) return target;
-  for (let i = 2; i < 100; i += 1) {
-    const cand = `${target}-${i}`;
-    if (!fs.existsSync(cand)) return cand;
-  }
-  throw new Error(`备份目标重复太多，放弃：${target}`);
-}
-
-/**
- * 把路径搬进备份区并返回新位置。`name` 可指定备份中的名字（默认取原文件名），
- * 用来把 `runtime/ffmpeg.exe` 这类散落文件放进同一次迁移的子目录里。
- */
-export function backupPath(p, { backupRoot, roots, name } = {}) {
-  if (!backupRoot) throw new Error('缺少备份根目录');
-  const root = assertSafePath(backupRoot, roots);
-  const src = assertSafePath(p, roots);
-  const dest = uniqueDest(path.join(root, String(name || path.basename(src))));
-  return movePath(src, dest, { roots });
-}
-
 // ── 迁移注册表 ────────────────────────────────────────────────────────────
 // 加一项只需在此追加一个对象。惯例：
 //   - id 一旦发布永不修改（它是幂等账本的键，改了等于让它再跑一次）；
-//   - label 是给用户看的人类可读名字，清理界面按它显示搬进来的东西；
-//   - run() 只做无损动作：改配置，或把磁盘上的旧文件搬进 legacy-backup；
-//     **不删任何东西**，删除只走用户确认那条路（removeLegacyResidue）；
+//   - label 是给用户看的人类可读名字（日志与排障用，界面不再消费它）；
+//   - run() 只在三种动作里选：改配置、把旧位置的残留搬到正式位置、删除本模块
+//     认定属于项目自带物的文件。**不碰用户资产**（见文件头第 ① 条）；
 //   - 返回 { changed: string[], note?: string, record?: object }，
 //     record 会连同执行时间写进状态文件的 applied 里（如 movedTo）。
 
@@ -522,24 +452,25 @@ export const UPGRADES = [
 
   {
     // ffmpeg 曾经随包分发在 `<app>/runtime/ffmpeg.exe`（79MB，占安装包的 43%），
-    // 后来改为设置页按需下载到 `data/runtime/ffmpeg/bin/`。免安装 zip 覆盖升级
-    // 只写新文件、不删旧文件，所以老用户机器上那份会一直留着，且解析链还必须
-    // 为它保留一条兼容候选（buildCandidates 的 ④）—— 一个纯为老版本存在的分支。
+    // 后来改为按需下载到 `data/runtime/ffmpeg/bin/`。免安装 zip 覆盖升级只写
+    // 新文件、不删旧文件，所以老用户机器上那份会一直留着。
     //
-    // 迁移只搬不删：删了不可恢复（用户可能正靠它工作），搬进 legacy-backup 后
-    // 新版照样能用（解析链在迁移**之后**才去掉兼容候选这件事需要另一次版本发布，
-    // 见 src/ffmpeg-resolve.js 文件头）。搬走之后那条候选才失去真实使用方。
+    // 落点是**正式位置**（managedBinDir），不是备份区：解析链只认正式位置，
+    // 搬进备份等于把功能从"旧的可达位置"挪到"新的不可达位置"。目标已经有
+    // ffmpeg 时旧的那份没有保留价值，直接删 —— 这些文件随安装包分发、用户从未
+    // 主动创建，新版也有正式来源，符合文件头第 ① 条的删除边界。
+    //
+    // 幂等靠"按目标逐个判断"，不靠时间戳目录：同名文件已在正式位置就不能再搬
+    // （rename 不覆盖），只能删。部分失败后重试时，已搬走的不在原位，剩下那些
+    // 会重新按目标现状判断，不会重复搬、也不会把缺的 ffprobe 一并删掉。
     id: 'retire-bundled-ffmpeg',
     label: '旧版随包 ffmpeg',
-    title: '把旧版随包分发的 ffmpeg 搬进备份区（新版改为按需下载到数据目录）',
-    run({ appRoot, dataDir, log, now }) {
+    title: '把旧版随包分发的 ffmpeg 移到正式位置（新版改为按需下载到数据目录）',
+    run({ appRoot, dataDir, log }) {
       const roots = allowedRoots({ appRoot, dataDir });
       const runtimeDir = path.join(path.resolve(appRoot), 'runtime');
-      const exe = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
-      const stamp = new Date(now).toISOString().replace(/[:.]/g, '-');
-      // 搬移时的程序版本。状态文件顶层的 version 是**最后一次**启动的版本，
-      // 之后每次启动都会把它刷成新的，所以不能拿它反推"这份备份是谁留下的"。
-      const appVersion = readAppVersion(appRoot);
+      const exe = exeName('ffmpeg');
+      const targetDir = managedBinDir(dataDir);
 
       // 旧随包形态历史上出现过三种：
       //   ① runtime/ffmpeg.exe            单文件（最早的形态，只有 ffmpeg 没有 ffprobe）
@@ -554,7 +485,12 @@ export const UPGRADES = [
       const dirForm = path.join(runtimeDir, 'ffmpeg');
       const fileForm = path.join(runtimeDir, exe);
       const seen = new Set();
-      const real = [];
+      // 每一项 = { root: 旧包根（目录形态才有）, dir: 可执行文件所在目录, entries? }
+      //
+      // 目录形态的 dir 一律取 `ffmpeg/bin/` 再回落到根，**不按"哪边先有 ffmpeg"
+      // 猜**：两类形态下 ffprobe 可能与 ffmpeg 不在同一层，只取一边会把另一个
+      // 漏掉。逐个候选都扫一遍，用 seen 去重即可。
+      const sources = [];
       for (const p of [dirForm, fileForm]) {
         const abs = path.resolve(p);
         if (seen.has(abs)) continue;              // 非 Windows 上两者重合
@@ -563,59 +499,167 @@ export const UPGRADES = [
         try { st = fs.lstatSync(abs); } catch { continue; }   // 不存在 / 权限：当没有
         if (st.isSymbolicLink()) continue;        // 链接不跟：搬它等于搬别人家的文件
         if (st.isDirectory()) {
-          if (dirContainsFfmpeg(abs, exe)) real.push(abs);
+          if (!dirHasFfmpegResidue(abs, exe)) continue;
+          sources.push({ root: abs, dir: abs });
+          sources.push({ root: abs, dir: path.join(abs, 'bin') });
         } else if (st.isFile()) {
-          real.push(abs);
+          sources.push({ root: null, dir: runtimeDir, entries: [exe] });
         }
       }
-      if (!real.length) {
+      if (!sources.length) {
         return { changed: [], note: '本机没有旧随包 ffmpeg，无需处理' };
       }
 
-      const backupRoot = path.join(legacyBackupRoot(dataDir), `ffmpeg-${stamp}`);
-      // 逐项搬；不在搬之前建目录 —— 搬移失败（如文件被占用）时留着空的时间戳
-      // 目录，下次启动又会建一个，日积月累全是空壳。movePath 自己按需建父目录。
-      // 逐个搬而不是整体搬：一个文件被占用不该让另一个留在原地（它下次启动重试）。
-      const moved = [];
-      let failed = null;
-      for (const src of real) {
-        try {
-          const r = backupPath(src, { backupRoot, roots, name: path.basename(src) });
-          moved.push(path.relative(dataDir, r.to).replace(/\\/g, '/'));
-          log(`[upgrade]     已搬移 ${src} → ${r.to}`);
-        } catch (error) {
-          failed = failed || error;
-          log(`[upgrade]     ⚠️ 搬移失败 ${src}：${error?.message ?? error}`);
+      // ── 收集阶段：按**目标文件名**去重，每个名字只保留一个来源 ──
+      //
+      // 上面收集的是"要扫的目录"，不是"要搬的文件"。旧包历史上可能同时在
+      // `ffmpeg/` 根与 `ffmpeg/bin/` 下都有 ffprobe，于是同一个目标名会有两个
+      // 来源。若直接带着 dup 往下走，循环里第二个来源会把第一个**刚搬过去的**
+      // 文件当成"目标已有、清掉让路"，再 rename 覆盖 —— 第一个文件静默丢失，
+      // 而 changed 里记了两次、日志两次都说"已搬移"，零报错。
+      //
+      // 所以在这里一次性收口：先扫出全部候选，按目标名去重，再进动作阶段。
+      // 去重规则是"根优先"——历史上根目录那份是主安装，bin/ 是补丁层。
+      const wanted = new Set([exe, exeName('ffprobe')]);
+      const picks = new Map();   // 目标文件名 → { from, root }
+      const skipped = [];        // 符号链接：不跟，不搬也不删
+      const duplicated = [];     // 同一目标名的多余来源，留在原位不动
+      for (const src of sources) {
+        // 只取可执行文件本体（ffmpeg + 配套 ffprobe）。目录形态里可能还躺着
+        // 许可证、README 之类，它们对运行无用，搬进 bin/ 只会让"已安装目录"
+        // 里多出无主文件；留在原地，由 pruneEmptyDir 判断旧目录是否已空。
+        let present = src.entries;
+        if (!present) {
+          try { present = fs.readdirSync(src.dir); } catch { continue; }
+        }
+        for (const name of present.filter((n) => wanted.has(n))) {
+          const from = path.join(src.dir, name);
+          let st = null;
+          try { st = fs.lstatSync(from); } catch { continue; }   // 根目录形态下会混进目录，跳过
+          if (st.isSymbolicLink()) { skipped.push(from); continue; }
+          if (!st.isFile()) continue;
+          const prev = picks.get(name);
+          if (prev) {
+            // 同名的第二个来源：不搬、不删，留原处交给 pruneEmptyDir 收尾。
+            // 记下来是为了日志能解释"为什么旧目录里还剩一个文件"。
+            duplicated.push({ name, kept: prev.from, ignored: from });
+            continue;
+          }
+          picks.set(name, { from, root: src.root });
         }
       }
-      if (!moved.length) throw failed || new Error('旧随包 ffmpeg 搬移失败');
-      // 部分失败也抛：runUpgrades 的语义是"整项成功才记 applied"，不记才有下次
-      // 重试。已搬走的那些不在原位了，重试只会处理剩下的，不会重复搬。
-      if (failed) throw failed;
+      if (!picks.has(exe) && !picks.has(exeName('ffprobe'))) {
+        return { changed: [], note: '本机没有旧随包 ffmpeg，无需处理' };
+      }
+      const sourceHadFfprobe = picks.has(exeName('ffprobe'));
 
-      // 备份目录自报归属，清理界面靠它反查迁移项与来源版本（见 BACKUP_META_FILE）。
-      // 部分失败时上一步已经抛了，所以这里写的一定是一份完整的备份。
-      writeBackupMeta(backupRoot, {
-        migrationId: 'retire-bundled-ffmpeg',
-        at: new Date(now).toISOString(),
-        fromVersion: appVersion,
-        items: moved
-      }, log);
+      // ── 动作阶段 ──
+      // 正式位置的状态只按**可执行文件是否存在**判断，不看目录在不在：
+      // 上次搬到一半留下的空壳目录必须能覆盖。ffprobe 的目标状态单独取，
+      // 因为"目标有没有 ffprobe"决定了旧包里那份该搬还是该删。
+      // 这个快照现在就安全了：动作阶段每个目标名只会被处理一次。
+      const targetHasFfprobe = isFile(path.join(targetDir, exeName('ffprobe')));
 
-      // data/runtime/ffmpeg/bin/ 里若用户已经下载过新版，这里什么都不做：
-      // 旧的那份搬走与否都不影响新位置，绝不覆盖。
-      const note = `旧随包 ffmpeg 已搬到 ${path.relative(dataDir, backupRoot).replace(/\\/g, '/')}`
-        + `（共 ${moved.length} 项；未删除，确认不要了可在「设置 → 外观与数据」里清理）`;
-      log(`[upgrade]     ${note}`);
-      return {
-        changed: moved,
-        note,
-        record: {
-          movedTo: path.relative(dataDir, backupRoot).replace(/\\/g, '/'),
-          items: moved,
-          fromVersion: appVersion
+      const moved = [];
+      const deleted = [];
+      const errors = [];
+      let movedFfprobe = false;
+
+      for (const [name, { from }] of picks) {
+        const to = path.join(targetDir, name);
+        // 正式位置已有同名文件 → 新版是唯一来源，旧的那份删掉。
+        //
+        // ffprobe 单独判：它不是"新旧两份挑新的"，而是 ffmpeg 的配套。
+        // 目标那份 ffmpeg 若是设置页下载的、可能自带 ffprobe；不带时
+        // （Windows 老包）旧包这唯一的 ffprobe 必须搬过去，不能删 ——
+        // 否则视频抽帧 / 时长探测退化而图片压缩照常，这种半坏状态最难排查。
+        const conflict = fs.existsSync(to);
+        // 「目标已存在」的两类处理合并成一条：凡是目标已有可执行文件（ffmpeg 本身，
+        // 或 ffprobe 且目标已有可用的 ffprobe），就以目标为准、删掉旧的。
+        const targetWins = conflict && (name !== exeName('ffprobe') || targetHasFfprobe);
+        if (targetWins) {
+          try {
+            removePath(from, { roots });
+            deleted.push(from);
+            log(`[upgrade]     已删除旧随包 ${from}（正式位置已有 ${to}）`);
+          } catch (error) {
+            errors.push(`删除 ${from} 失败：${error?.message ?? error}`);
+            log(`[upgrade]     ⚠️ 删除失败 ${from}：${error?.message ?? error}`);
+          }
+          continue;
         }
-      };
+        if (conflict) {
+          // 目标那个同名条目不是可执行文件（目录壳之类）：让路，只清这一个条目。
+          // 走到这里说明是 ffprobe、目标没有可用的 ffprobe，且目标位置被别的东西占着。
+          try { removePath(to, { roots }); } catch { /* 删不掉就让下面的 rename 报错 */ }
+        }
+
+        // 跨盘判断：先比 dev，比不出（路径不存在）就交给 rename 的 EXDEV。
+        // 不做复制兜底 —— 与 relocate-portable-qq 同一条取舍。
+        const srcDev = deviceOf(from);
+        const destDev = deviceOf(to);
+        if (srcDev !== null && destDev !== null && srcDev !== destDev) {
+          throw new Error(`跨磁盘分区（dev ${srcDev} → ${destDev}），不做复制，已放弃：${from} → ${to}`
+            + '（本次不记完成，下次启动会重试）');
+        }
+
+        const r = renamePath(from, to, { roots });
+        moved.push(r.to);
+        if (name === exeName('ffprobe')) movedFfprobe = true;
+        log(`[upgrade]     已搬移 ${r.from} → ${r.to}`);
+      }
+
+      // 旧包目录在整轮动作之后统一收尾，而不是每处理一个目录就 prune 一次：
+      // 目录形态会产生两条 source（根 + bin/），逐个 prune 时先清的是 bin/、
+      // 根目录里可能还剩空 bin，于是根留了下来。收尾按"从深到浅"清，一次到位。
+      const pruneTargets = new Set();
+      for (const src of sources) {
+        if (!src.root) continue;       // 单文件形态就在 <app>/runtime/ 根上，不能删它
+        pruneTargets.add(src.root);
+        pruneTargets.add(src.dir);
+      }
+      for (const dir of [...pruneTargets].sort((a, b) => b.length - a.length)) pruneEmptyDir(dir);
+
+      // 删除失败也整项算失败：文件被占用（Windows 上很常见）时这一轮清不掉，
+      // 记成完成就等于永远留着它。已成功的那些已在原位消失，重试只会处理剩下的。
+      if (errors.length) {
+        const done = moved.length + deleted.length ? `（已处理 ${moved.length + deleted.length} 项）` : '';
+        throw new Error(`${errors.join('；')}${done}`);
+      }
+
+      // 同名文件出现两份来源时只搬一个，另一份原样留在旧目录里（不删非空目录）。
+      // 用户会在程序目录下看到一个残留的 ffmpeg 目录，日志必须解释它是怎么来的，
+      // 否则下次排查会以为迁移没跑完。
+      if (duplicated.length) {
+        for (const d of duplicated) {
+          log(`[upgrade]     同名文件有多个来源，保留 ${d.kept}，忽略 ${d.ignored}（留在原位不删）`);
+        }
+      }
+
+      if (moved.length) {
+        return {
+          changed: moved,
+          note: `旧随包 ffmpeg 已移到正式位置 ${path.relative(dataDir, targetDir).replace(/\\/g, '/')}`
+            + `（搬入 ${moved.length} 项${deleted.length ? `，删除 ${deleted.length} 项` : ''}）`
+            + ffprobeNote({ sourceHadFfprobe, movedFfprobe, targetHasFfprobe })
+            + (duplicated.length ? `；另有 ${duplicated.length} 份同名文件留在原处未处理` : ''),
+          record: {
+            movedTo: path.relative(dataDir, targetDir).replace(/\\/g, '/'),
+            items: moved,
+            fromVersion: readAppVersion(appRoot)
+          }
+        };
+      }
+
+      if (deleted.length) {
+        const note = `旧随包 ffmpeg 已删除（正式位置 ${path.relative(dataDir, targetDir).replace(/\\/g, '/')} 已有可用的那份）`
+          + ffprobeNote({ sourceHadFfprobe, movedFfprobe, targetHasFfprobe: true });
+        log(`[upgrade]     ${note}`);
+        return { changed: deleted, note };
+      }
+
+      const why = skipped.length ? `有 ${skipped.length} 项是符号链接，已跳过（不跟链接动别人家的文件）` : '没有可搬移的内容';
+      return { changed: [], note: `无需搬移：${why}` };
     }
   },
 
@@ -723,12 +767,55 @@ export const UPGRADES = [
   }
 ];
 
-/** 目录里（含一层 bin/）是否有可执行 ffmpeg。用于区分"旧随包目录"与同名杂项目录。 */
-function dirContainsFfmpeg(dir, exe) {
-  for (const cand of [path.join(dir, exe), path.join(dir, 'bin', exe)]) {
-    try { if (fs.statSync(cand).isFile()) return true; } catch { /* 没有 */ }
+/**
+ * 目录里（含一层 bin/）是否有 ffmpeg 或 ffprobe 的残留。
+ *
+ * 用于区分"旧随包目录"与同名杂项目录。**认 ffprobe 也算**：上一轮迁移可能只搬走
+ * 了 ffmpeg、ffprobe 那一步失败（文件被占用），此时目录里只剩 ffprobe。若只在
+ * 有 ffmpeg 时才认，这份 ffprobe 会永远留在旧位置，而它正是"视频抽帧能用、
+ * 时长探测退化"那个难以排查的半坏状态。
+ */
+function dirHasFfmpegResidue(dir, exe) {
+  for (const base of [exe, exeName('ffprobe')]) {
+    for (const cand of [path.join(dir, base), path.join(dir, 'bin', base)]) {
+      try { if (fs.statSync(cand).isFile()) return true; } catch { /* 没有 */ }
+    }
   }
   return false;
+}
+
+/** 是否是普通文件（目录、坏链、没权限一律 false）。 */
+function isFile(p) {
+  try { return fs.statSync(p).isFile(); } catch { return false; }
+}
+
+/**
+ * 旧目录搬空后顺手删掉，只删**空**目录。
+ * 目录里还有别的东西（许可证、用户手放的文件）就原样留着：删它没有收益，
+ * 而误删一个非空目录的代价是数据。删不掉（被占用/只读）也不报错 —— 下次启动
+ * 重跑时它还在，但那已经不是迁移的职责了。
+ */
+function pruneEmptyDir(dir) {
+  if (!dir) return;
+  try {
+    if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+  } catch { /* 不存在、非空、无权限：都当作"不需要清理" */ }
+}
+
+/**
+ * ffprobe 缺失时的日志说明。
+ *
+ * 单文件形态的旧随包只有 ffmpeg、没有 ffprobe（最早的包就是这样），搬到正式
+ * 位置后视频抽帧 / 时长探测会退回解析 ffmpeg -i 的 stderr，图片压缩照常。
+ * 这种"半好"状态最容易被当成 bug 排查半天，所以必须在日志里说清。
+ */
+function ffprobeNote({ sourceHadFfprobe, movedFfprobe, targetHasFfprobe }) {
+  if (!sourceHadFfprobe) {
+    return '；旧包里没有 ffprobe（单文件形态），视频抽帧/时长探测将退回解析 ffmpeg -i 输出';
+  }
+  if (movedFfprobe) return '；ffprobe 已随 ffmpeg 一起搬到正式位置';
+  if (targetHasFfprobe) return '；正式位置已有 ffprobe，旧包里那份未保留';
+  return '；⚠️ 旧包里的 ffprobe 没能搬过去，视频抽帧/时长探测会退化';
 }
 
 /**
@@ -768,7 +855,7 @@ export function runUpgrades({
     try {
       const r = up.run({ appRoot, dataDir, log, saveConfig, now });
       const entry = { at: new Date(now).toISOString() };
-      // record 是迁移项自报的动作结果（如备份落点）。老格式只有时间戳字符串，
+      // record 是迁移项自报的动作结果（如 movedTo 落点）。老格式只有时间戳字符串，
       // 新格式是对象 —— 两种都能被 readUpgradeState 读回同一个形态。
       if (r?.record && typeof r.record === 'object') Object.assign(entry, r.record);
       state.applied[up.id] = entry;
@@ -803,183 +890,6 @@ export function runUpgrades({
   }
 
   return { ran, skipped, failed, stateFile };
-}
-
-// ── 用户确认清理 ─────────────────────────────────────────────────────────
-//
-// 自动迁移只搬不删（删了不可恢复）。搬进 legacy-backup 的东西终究要有个出口，
-// 但出口必须是用户点的，不能是启动时的自动行为。这一节只负责"检测"与"按用户
-// 指定的路径删除"，两件事都收口在一个地方，路由层不做任何路径判断。
-//
-// 删除的边界比搬移更窄：只允许删 legacy-backup 里的条目，以及 `runtime/` 下
-// 那几种旧 ffmpeg 形态。不允许"传什么删什么"——即使路径在 DATA_DIR 里，
-// 也不能让一次误点删掉会话存档或记忆库。
-
-/** 单次统计大小的文件数上限：残留目录通常是几十到几百个文件，超过就按已知部分报。 */
-const RESIDUE_SIZE_FILE_LIMIT = 20000;
-
-function dirSize(target, budget = { files: RESIDUE_SIZE_FILE_LIMIT }) {
-  let bytes = 0;
-  let files = 0;
-  const walk = (p) => {
-    if (budget.files <= 0) return;
-    let st;
-    try { st = fs.lstatSync(p); } catch { return; }
-    if (st.isSymbolicLink()) return;              // 不跟链接，避免统计/删除跑到根外面
-    if (st.isDirectory()) {
-      let ents = [];
-      try { ents = fs.readdirSync(p); } catch { return; }
-      for (const name of ents) walk(path.join(p, name));
-      return;
-    }
-    if (!st.isFile()) return;
-    bytes += st.size;
-    files += 1;
-    budget.files -= 1;
-  };
-  walk(target);
-  return { bytes, files, truncated: budget.files <= 0 };
-}
-
-/**
- * 检出"旧版本残留"的候选项。只检测，不动任何东西。
- *
- * 两类：
- *   ① legacy-backup 里的条目 —— 自动迁移搬进来的旧文件，确认不要了可以删；
- *   ② `<app>/runtime` 下仍存在的旧 ffmpeg 形态 —— 正常启动时已被 ① 搬走，
- *      出现在这里说明那次迁移失败或还没跑（例如用户是手动拷进来的）。
- *
- * 每个备份条目的来源按三级反查（顺着可靠度递减）：
- *   ① 目录里的 meta.json —— 写了 migrationId / at / fromVersion，最准；
- *   ② 老备份目录的命名前缀 —— meta 机制上线前只有 ffmpeg 一项会建备份，
- *      按 HISTORY_BACKUP_PREFIXES 认回；找不到归属的目录不以"某一项"论，
- *      只按目录名显示；
- *   ③ 状态文件的 applied[id] —— 只在没有 meta 时用于补时间与版本
- *      （它记录的是该迁移项最近一次成功的时间，不是每次备份都独立成条）。
- *
- * @returns {{items: Array, roots: string[]}}
- */
-export function detectLegacyResidue({ appRoot = ROOT, dataDir = DATA_DIR } = {}) {
-  const items = [];
-  const backupRoot = legacyBackupRoot(dataDir);
-  let state = { applied: {} };
-  try { state = readUpgradeState(upgradeStatePath(dataDir)); } catch { /* 状态读不到不影响检测 */ }
-
-  const upgradeById = new Map(UPGRADES.map((u) => [u.id, u]));
-
-  // ① 备份区：每个子项一条。大小现算（用户点开设置页才调，不做缓存）。
-  let entries = [];
-  try { entries = fs.readdirSync(backupRoot, { withFileTypes: true }); } catch { /* 没有备份区 */ }
-  for (const e of entries) {
-    // meta.json 是归属文件，不是搬进来的东西
-    if (e.name === BACKUP_META_FILE) continue;
-    const abs = path.join(backupRoot, e.name);
-    const size = dirSize(abs);
-
-    const meta = e.isDirectory() ? readBackupMeta(abs) : null;
-    let migrationId = meta?.migrationId || '';
-    if (!migrationId) {
-      // 历史形态：meta 机制之前建的备份只有命名前缀可认
-      const hit = HISTORY_BACKUP_PREFIXES.find((p) => e.name.startsWith(p.prefix));
-      migrationId = hit?.migrationId || '';
-    }
-    const upgrade = upgradeById.get(migrationId);
-    // 状态记录只用来补 meta 缺失的时间/版本（老目录没有 meta）
-    const stateRecord = migrationId ? normalizeAppliedEntry(state.applied[migrationId]) : null;
-
-    items.push({
-      id: `legacy-backup:${e.name}`,
-      // 迁移项自己声明人类可读标签；查不到迁移项（第三方手工放的目录、
-      // 已从注册表移除的旧项）就如实显示目录名，不冒充任何一项。
-      label: upgrade?.label || e.name,
-      migrationId: migrationId || null,
-      path: abs,
-      relPath: path.relative(dataDir, abs).replace(/\\/g, '/'),
-      sizeBytes: size.bytes,
-      files: size.files,
-      sizeTruncated: size.truncated,
-      // "属于哪个版本"：搬移那一刻的执行时间与程序版本都存在 meta 里。
-      // 状态文件顶层的 version 不能用 —— 它每次启动都会被刷成最新值。
-      migratedAt: meta?.at || stateRecord?.at || '',
-      fromVersion: String(meta?.fromVersion || stateRecord?.fromVersion || ''),
-      action: '删除（不可恢复）',
-      kind: 'legacy-backup'
-    });
-  }
-
-  // ② 还没搬走的旧随包 ffmpeg（迁移失败 / 手动拷入）。
-  // 非 Windows 上 `runtime/ffmpeg` 这一个路径同时是"单文件形态"和"目录形态"
-  // （可执行文件没有 .exe 后缀），所以按解析后的绝对路径去重，否则同一项会被
-  // 列两次，用户勾一下删两次。
-  const exe = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
-  const runtimeDir = path.join(path.resolve(appRoot), 'runtime');
-  const seenRuntime = new Set();
-  for (const cand of [path.join(runtimeDir, exe), path.join(runtimeDir, 'ffmpeg')]) {
-    const abs = path.resolve(cand);
-    if (seenRuntime.has(abs)) continue;
-    seenRuntime.add(abs);
-    let st = null;
-    try { st = fs.lstatSync(abs); } catch { continue; }
-    if (st.isSymbolicLink()) continue;
-    if (st.isDirectory() && !dirContainsFfmpeg(abs, exe)) continue;
-    const size = dirSize(abs);
-    items.push({
-      id: `runtime:${path.basename(abs)}`,
-      label: '旧版随包 ffmpeg（还没搬走）',
-      path: abs,
-      relPath: path.relative(path.resolve(appRoot), abs).replace(/\\/g, '/'),
-      sizeBytes: size.bytes,
-      files: size.files,
-      sizeTruncated: size.truncated,
-      migratedAt: '',
-      fromVersion: '',
-      action: '删除（不可恢复）；下次启动也会自动搬进备份区',
-      kind: 'runtime-pending'
-    });
-  }
-
-  return { items, roots: allowedRoots({ appRoot, dataDir }) };
-}
-
-/**
- * 删除用户勾选的残留项。**逐项重新校验**，不信任前端传来的任何东西：
- *   ① 必须是绝对路径，且通过 assertSafePath（越界 / 根目录 / 符号链接全拒）；
- *   ② 必须落在 legacy-backup 之内，或等于某个已知的旧 ffmpeg 形态；
- *   ③ 不存在视为已删（幂等），不报错。
- * 任何一项校验失败只跳过它并回报原因，不影响其余项。
- *
- * @returns {{removed:string[], skipped:Array<{path:string, reason:string}>, freedBytes:number}}
- */
-export function removeLegacyResidue({ paths, appRoot = ROOT, dataDir = DATA_DIR, log = () => {} } = {}) {
-  const roots = allowedRoots({ appRoot, dataDir });
-  const backupRoot = path.join(path.resolve(dataDir), 'runtime', 'legacy-backup');
-  const exe = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
-  const runtimeDir = path.join(path.resolve(appRoot), 'runtime');
-  const allowedExact = new Set([path.join(runtimeDir, exe), path.join(runtimeDir, 'ffmpeg')]);
-
-  const removed = [];
-  const skipped = [];
-  let freedBytes = 0;
-  for (const raw of (Array.isArray(paths) ? paths : [])) {
-    try {
-      const abs = assertSafePath(raw, roots);
-      // 二次收窄：只在备份区里，或恰好是已知的旧 ffmpeg 形态
-      const inBackup = isStrictlyInside(backupRoot, abs);
-      if (!inBackup && !allowedExact.has(abs)) {
-        throw new Error('不在可清理范围内（只允许备份区与旧 ffmpeg 位置）');
-      }
-      const size = dirSize(abs);
-      const r = removePath(abs, { roots });
-      if (r.removed) {
-        removed.push(abs);
-        freedBytes += size.bytes;
-        log(`[maintenance] 已删除残留 ${abs}（${size.files} 个文件）`);
-      }
-    } catch (error) {
-      skipped.push({ path: String(raw ?? ''), reason: error?.message ?? String(error) });
-    }
-  }
-  return { removed, skipped, freedBytes };
 }
 
 export { readAppVersion, readBuiltinIds, findModuleDir };

@@ -1,6 +1,5 @@
-// 版本迁移（src/upgrade.js）的单测。此前这条链路**完全没有测试**，而它做的是
-// "在用户机器上搬文件、删文件"，出错代价最高：删错一个目录、或把已执行的迁移
-// 重跑一遍（覆盖备份），用户的数据就没了。
+// 版本迁移（src/upgrade.js）的单测。这条链路做的是"在用户机器上搬文件、删文件"，
+// 出错代价最高：删错一个目录、或把已执行的迁移重跑一遍，用户的数据就没了。
 //
 // 钉住五件事：
 //   ① 路径安全：越界 / 根目录 / 符号链接 / 允许根本身 全部拒绝
@@ -9,9 +8,11 @@
 //   ④ 失败不阻塞：抛错项不进 applied、其余项照跑
 //   ⑤ 搬移语义：原位置消失、新位置存在、内容一致、目标已存在不覆盖
 //
+// retire-bundled-ffmpeg 现在的落点是**正式位置**（data/runtime/ffmpeg/bin/），
+// 不是备份区。它的三种落点各自成组：目标已有 ffmpeg / 目标为空 / 目标不存在。
+//
 // 全部在 fs.mkdtempSync 建的临时目录里跑，**绝不碰真实 data/**。
-// runUpgrades / detectLegacyResidue / removeLegacyResidue 都接受 appRoot 与
-// dataDir 注入，这里靠它们把两侧都指到临时目录。
+// runUpgrades 接受 appRoot 与 dataDir 注入，这里靠它们把两侧都指到临时目录。
 //
 // 运行：node --test tests/upgrade-migration.test.mjs
 import { test } from 'node:test';
@@ -30,15 +31,10 @@ import {
   movePath,
   renamePath,
   removePath,
-  backupPath,
-  legacyBackupRoot,
-  readBackupMeta,
   runtimeDirPath,
-  BACKUP_META_FILE,
-  detectLegacyResidue,
-  removeLegacyResidue,
   normalizeAppliedEntry
 } from '../src/upgrade.js';
+import { managedBinDir, exeName } from '../src/ffmpeg-resolve.js';
 
 /** 每次调用建一个全新的隔离现场：appRoot 与 dataDir 是同级两个目录。 */
 function sandbox() {
@@ -58,6 +54,7 @@ function sandbox() {
 function cleanup(root) {
   try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* 临时目录，删不掉无所谓 */ }
 }
+void cleanup;   // 沙箱留在系统 tmp 里由系统回收；显式清理只在排障时用
 
 /** 只跑指定的迁移项（其余项在测试沙箱里多半会因为缺前置而失败，干扰断言）。 */
 function runOnly(ids, opts) {
@@ -65,6 +62,13 @@ function runOnly(ids, opts) {
 }
 
 const silent = () => {};
+const ffmpegExe = exeName('ffmpeg');
+const ffprobeExe = exeName('ffprobe');
+
+/** 正式位置的路径（与迁移项共用同一个函数，避免两边各写一份路径）。 */
+function managedDir(dataDir) {
+  return managedBinDir(dataDir);
+}
 
 // ── ① 路径安全 ──────────────────────────────────────────────────────────
 
@@ -159,13 +163,13 @@ test('状态格式：新格式能读出 movedTo，且不会被重跑', () => {
   fs.writeFileSync(stateFile, JSON.stringify({
     version: '0.5.1.3',
     applied: {
-      'retire-bundled-ffmpeg': { at: '2026-11-03T01:02:03.000Z', movedTo: 'runtime/legacy-backup/ffmpeg-x' }
+      'retire-bundled-ffmpeg': { at: '2026-11-03T01:02:03.000Z', movedTo: 'runtime/ffmpeg/bin' }
     },
     updatedAt: '2026-11-03T01:02:03.000Z'
   }), 'utf8');
 
   const st = readUpgradeState(stateFile);
-  assert.equal(st.applied['retire-bundled-ffmpeg'].movedTo, 'runtime/legacy-backup/ffmpeg-x');
+  assert.equal(st.applied['retire-bundled-ffmpeg'].movedTo, 'runtime/ffmpeg/bin');
   assert.equal(st.applied['retire-bundled-ffmpeg'].at, '2026-11-03T01:02:03.000Z');
 
   const r = runUpgrades({ appRoot, dataDir, version: '9.9.9.9', log: silent, now: 2, saveConfig: () => {} });
@@ -194,7 +198,7 @@ function writeTmpState(payload) {
 test('幂等：同一个迁移项跑两次，第二次不重复执行', () => {
   const { appRoot, dataDir } = sandbox();
   // 造一个旧随包 ffmpeg，让 retire-bundled-ffmpeg 真的有事可做
-  const oldExe = path.join(appRoot, 'runtime', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+  const oldExe = path.join(appRoot, 'runtime', ffmpegExe);
   fs.writeFileSync(oldExe, 'FAKE-OLD-FFMPEG', 'utf8');
 
   const first = runUpgrades({ appRoot, dataDir, version: '9.9.9.9', log: silent, now: 1000, saveConfig: () => {} });
@@ -202,21 +206,18 @@ test('幂等：同一个迁移项跑两次，第二次不重复执行', () => {
   assert.ok(ff, '第一次应执行 ffmpeg 迁移');
   assert.equal(fs.existsSync(oldExe), false, '旧位置应已被搬走');
 
-  // 备份落到 data/runtime/legacy-backup/ffmpeg-<时间戳>/ 下，内容不变
-  const backupRoot = legacyBackupRoot(dataDir);
-  const dirs = fs.readdirSync(backupRoot);
-  assert.equal(dirs.length, 1);
-  const movedFile = path.join(backupRoot, dirs[0], path.basename(oldExe));
+  // 搬到了正式位置，内容不变
+  const movedFile = path.join(managedDir(dataDir), ffmpegExe);
   assert.equal(fs.readFileSync(movedFile, 'utf8'), 'FAKE-OLD-FFMPEG');
 
-  // 状态里记下了搬到哪里
+  // 状态里记下了搬到哪里（相对数据目录，便于日志展示）
   const st = readUpgradeState(upgradeStatePath(dataDir));
-  assert.equal(st.applied['retire-bundled-ffmpeg'].movedTo, `runtime/legacy-backup/${dirs[0]}`);
+  assert.equal(st.applied['retire-bundled-ffmpeg'].movedTo, 'runtime/ffmpeg/bin');
 
-  // 第二次：全部跳过，备份目录不会多出一份
+  // 第二次：全部跳过，正式位置不会多出一份
   const second = runUpgrades({ appRoot, dataDir, version: '9.9.9.9', log: silent, now: 2000, saveConfig: () => {} });
   assert.ok(second.skipped.includes('retire-bundled-ffmpeg'));
-  assert.equal(fs.readdirSync(backupRoot).length, 1, '第二次不应产生新备份');
+  assert.equal(fs.readdirSync(managedDir(dataDir)).length, 1, '第二次不应产生新文件');
 });
 
 // ── ④ 失败不阻塞 ────────────────────────────────────────────────────────
@@ -294,21 +295,6 @@ test('movePath：拒绝把目录搬进它自己里面', () => {
   assert.throws(() => movePath(src, path.join(src, 'inner'), { roots }), /搬进它自己/);
 });
 
-test('backupPath：目标重名时自动加后缀，不覆盖已有备份', () => {
-  const { appRoot, dataDir } = sandbox();
-  const roots = allowedRoots({ appRoot, dataDir });
-  const backupRoot = path.join(dataDir, 'backup');
-  fs.mkdirSync(backupRoot, { recursive: true });
-  fs.writeFileSync(path.join(backupRoot, 'f.txt'), 'FIRST', 'utf8');
-
-  const src = path.join(dataDir, 'f.txt');
-  fs.writeFileSync(src, 'SECOND', 'utf8');
-  const r = backupPath(src, { backupRoot, roots });
-  assert.equal(path.basename(r.to), 'f.txt-2');
-  assert.equal(fs.readFileSync(path.join(backupRoot, 'f.txt'), 'utf8'), 'FIRST');
-  assert.equal(fs.readFileSync(r.to, 'utf8'), 'SECOND');
-});
-
 test('removePath：不存在视为已达成（幂等）', () => {
   const { appRoot, dataDir } = sandbox();
   const roots = allowedRoots({ appRoot, dataDir });
@@ -316,39 +302,135 @@ test('removePath：不存在视为已达成（幂等）', () => {
   assert.equal(r.removed, false);
 });
 
-// ── ffmpeg 迁移项覆盖的旧形态 ────────────────────────────────────────────
+// ── retire-bundled-ffmpeg：三种落点 ────────────────────────────────────
 
-const ffmpegExe = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
-
-test('retire-bundled-ffmpeg：没有旧文件时不做事，也不记成"已执行"之外的东西', () => {
+test('retire-bundled-ffmpeg：没有旧文件时不做事', () => {
   const { appRoot, dataDir } = sandbox();
   const r = runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 10, saveConfig: () => {} });
   assert.equal(r.ran.length, 1);
   assert.deepEqual(r.ran[0].changed, []);
   assert.match(r.ran[0].note, /没有旧随包 ffmpeg/);
+  assert.equal(fs.existsSync(managedDir(dataDir)), false, '什么都不该搬时不该建出空目录');
 });
 
-test('retire-bundled-ffmpeg：覆盖单文件形态 runtime/ffmpeg.exe', () => {
+test('落点①目标已有 ffmpeg：单文件形态 → 旧的被删除，目标不变', () => {
+  const { appRoot, dataDir } = sandbox();
+  const managed = managedDir(dataDir);
+  fs.mkdirSync(managed, { recursive: true });
+  fs.writeFileSync(path.join(managed, ffmpegExe), 'NEW', 'utf8');
+  const oldExe = path.join(appRoot, 'runtime', ffmpegExe);
+  fs.writeFileSync(oldExe, 'OLD', 'utf8');
+
+  const r = runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 11, saveConfig: () => {} });
+  assert.equal(fs.existsSync(oldExe), false, '旧的那份应被删除');
+  assert.equal(fs.readFileSync(path.join(managed, ffmpegExe), 'utf8'), 'NEW', '目标不能被覆盖');
+  assert.equal(r.ran.length, 1);
+  assert.equal(r.ran[0].changed.length, 1);
+  // 没有搬移 → 不记 movedTo（它不是"搬到哪儿"的动作）
+  assert.equal(readUpgradeState(upgradeStatePath(dataDir)).applied['retire-bundled-ffmpeg'].movedTo, undefined);
+});
+
+test('落点①目标已有 ffmpeg：目录形态 → 整目录内容被删、目标不变', () => {
+  const { appRoot, dataDir } = sandbox();
+  const managed = managedDir(dataDir);
+  fs.mkdirSync(managed, { recursive: true });
+  fs.writeFileSync(path.join(managed, ffmpegExe), 'NEW', 'utf8');
+  const dir = path.join(appRoot, 'runtime', 'ffmpeg');
+  fs.mkdirSync(path.join(dir, 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'bin', ffmpegExe), 'OLD-FF', 'utf8');
+  fs.writeFileSync(path.join(dir, 'bin', ffprobeExe), 'OLD-FP', 'utf8');
+
+  runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 12, saveConfig: () => {} });
+  assert.equal(fs.readFileSync(path.join(managed, ffmpegExe), 'utf8'), 'NEW', '目标不能被覆盖');
+  // 旧包里带着 ffprobe、目标没有 → 它必须跟着走，不能删
+  assert.equal(fs.readFileSync(path.join(managed, ffprobeExe), 'utf8'), 'OLD-FP', 'ffprobe 应搬到正式位置');
+  assert.equal(fs.existsSync(dir), false, '搬空的旧目录应被清掉');
+});
+
+test('落点②目标为空目录（空壳）：旧的搬进去，成为正式那份', () => {
+  const { appRoot, dataDir } = sandbox();
+  const managed = managedDir(dataDir);
+  fs.mkdirSync(managed, { recursive: true });                 // 上次搬了一半留下的壳
+  const oldExe = path.join(appRoot, 'runtime', ffmpegExe);
+  fs.writeFileSync(oldExe, 'OLD', 'utf8');
+
+  const r = runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 13, saveConfig: () => {} });
+  assert.equal(fs.existsSync(oldExe), false);
+  assert.equal(fs.readFileSync(path.join(managed, ffmpegExe), 'utf8'), 'OLD');
+  assert.equal(r.ran[0].changed.length, 1);
+  assert.equal(readUpgradeState(upgradeStatePath(dataDir)).applied['retire-bundled-ffmpeg'].movedTo, 'runtime/ffmpeg/bin');
+});
+
+test('落点③目标不存在：单文件形态 → 搬到 managedBinDir()/<exe>', () => {
   const { appRoot, dataDir } = sandbox();
   const oldExe = path.join(appRoot, 'runtime', ffmpegExe);
-  fs.writeFileSync(oldExe, 'X', 'utf8');
-  const r = runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 11, saveConfig: () => {} });
+  fs.writeFileSync(oldExe, 'OLD', 'utf8');
+
+  runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 14, saveConfig: () => {} });
   assert.equal(fs.existsSync(oldExe), false);
-  assert.equal(r.ran[0].changed.length, 1);
+  assert.equal(fs.readFileSync(path.join(managedDir(dataDir), ffmpegExe), 'utf8'), 'OLD');
 });
 
-test('retire-bundled-ffmpeg：覆盖目录形态 runtime/ffmpeg/bin/ffmpeg', () => {
+test('落点③目标不存在：目录形态 bin/ 下的 ffmpeg + ffprobe 一起搬', () => {
   const { appRoot, dataDir } = sandbox();
   const dir = path.join(appRoot, 'runtime', 'ffmpeg');
   fs.mkdirSync(path.join(dir, 'bin'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'bin', ffmpegExe), 'X', 'utf8');
-  fs.writeFileSync(path.join(dir, 'bin', 'ffprobe'), 'P', 'utf8');
+  fs.writeFileSync(path.join(dir, 'bin', ffmpegExe), 'FF', 'utf8');
+  fs.writeFileSync(path.join(dir, 'bin', ffprobeExe), 'FP', 'utf8');
+  fs.writeFileSync(path.join(dir, 'LICENSE.txt'), 'license', 'utf8');
 
-  runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 12, saveConfig: () => {} });
-  assert.equal(fs.existsSync(dir), false, '整个目录应被搬走');
-  const backupRoot = legacyBackupRoot(dataDir);
-  const [inner] = fs.readdirSync(backupRoot);
-  assert.ok(fs.existsSync(path.join(backupRoot, inner, 'ffmpeg', 'bin', ffmpegExe)));
+  const r = runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 15, saveConfig: () => {} });
+  const managed = managedDir(dataDir);
+  assert.equal(fs.readFileSync(path.join(managed, ffmpegExe), 'utf8'), 'FF');
+  assert.equal(fs.readFileSync(path.join(managed, ffprobeExe), 'utf8'), 'FP', 'ffprobe 必须跟着走');
+  assert.equal(fs.existsSync(path.join(managed, 'LICENSE.txt')), false, '非可执行文件不搬进 bin/');
+  assert.equal(r.ran[0].changed.length, 2);
+  // 旧目录里还剩 LICENSE → 不能删非空目录
+  assert.equal(fs.existsSync(dir), true);
+  assert.equal(fs.readFileSync(path.join(dir, 'LICENSE.txt'), 'utf8'), 'license');
+});
+
+test('落点③目录形态：可执行文件直接在根上（历史形态 ③）', () => {
+  const { appRoot, dataDir } = sandbox();
+  const dir = path.join(appRoot, 'runtime', 'ffmpeg');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, ffmpegExe), 'FF', 'utf8');
+  fs.writeFileSync(path.join(dir, ffprobeExe), 'FP', 'utf8');
+
+  runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 16, saveConfig: () => {} });
+  const managed = managedDir(dataDir);
+  assert.equal(fs.readFileSync(path.join(managed, ffmpegExe), 'utf8'), 'FF');
+  assert.equal(fs.readFileSync(path.join(managed, ffprobeExe), 'utf8'), 'FP');
+  assert.equal(fs.existsSync(dir), false, '全部搬空后旧目录应被清掉');
+});
+
+test('单文件形态没有 ffprobe：如实记录日志，不假装搬了', () => {
+  const { appRoot, dataDir } = sandbox();
+  fs.writeFileSync(path.join(appRoot, 'runtime', ffmpegExe), 'OLD', 'utf8');
+  const logs = [];
+  const r = runOnly(['retire-bundled-ffmpeg'], {
+    appRoot, dataDir, version: '9.9.9.9', now: 17, saveConfig: () => {},
+    log: (m) => logs.push(m)
+  });
+  assert.match(r.ran[0].note, /没有 ffprobe/);
+  assert.equal(fs.existsSync(path.join(managedDir(dataDir), ffprobeExe)), false);
+  assert.ok(logs.some((m) => /没有 ffprobe/.test(m)), '日志里要能查到这件事');
+});
+
+test('重试补齐：ffmpeg 已在正式位置、旧目录只剩 ffprobe → 只搬 ffprobe 并清掉旧目录', () => {
+  const { appRoot, dataDir } = sandbox();
+  const managed = managedDir(dataDir);
+  fs.mkdirSync(managed, { recursive: true });
+  fs.writeFileSync(path.join(managed, ffmpegExe), 'FF', 'utf8');
+  // 模拟上一轮：ffmpeg 搬走了、ffprobe 那一步失败留在原地
+  const dir = path.join(appRoot, 'runtime', 'ffmpeg');
+  fs.mkdirSync(path.join(dir, 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'bin', ffprobeExe), 'FP', 'utf8');
+
+  runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 18, saveConfig: () => {} });
+  assert.equal(fs.readFileSync(path.join(managed, ffprobeExe), 'utf8'), 'FP', '缺的 ffprobe 要补上');
+  assert.equal(fs.readFileSync(path.join(managed, ffmpegExe), 'utf8'), 'FF');
+  assert.equal(fs.existsSync(dir), false);
 });
 
 test('retire-bundled-ffmpeg：不动 runtime/qq-portable（便携 QQ 是用户数据）', () => {
@@ -357,194 +439,148 @@ test('retire-bundled-ffmpeg：不动 runtime/qq-portable（便携 QQ 是用户�
   fs.mkdirSync(portable, { recursive: true });
   fs.writeFileSync(path.join(portable, 'QQ.exe'), 'QQ', 'utf8');
 
-  runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 13, saveConfig: () => {} });
+  runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 19, saveConfig: () => {} });
   assert.equal(fs.existsSync(portable), true);
   assert.equal(fs.readFileSync(path.join(portable, 'QQ.exe'), 'utf8'), 'QQ');
 });
 
-test('retire-bundled-ffmpeg：同名空目录不搬（不是 ffmpeg 的目录不误伤）', () => {
+test('retire-bundled-ffmpeg：同名但里面没有 ffmpeg 的目录不搬', () => {
   const { appRoot, dataDir } = sandbox();
   const dir = path.join(appRoot, 'runtime', 'ffmpeg');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'notes.txt'), 'not ffmpeg', 'utf8');
-  runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 14, saveConfig: () => {} });
+  runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 20, saveConfig: () => {} });
   assert.equal(fs.existsSync(dir), true, '目录里没有 ffmpeg，不该动它');
 });
 
-test('retire-bundled-ffmpeg：新版已下载时不覆盖 data/runtime/ffmpeg/bin', () => {
+// 回归：同一个目标文件名有两个来源（旧包根与 bin/ 下都有 ffprobe）。
+// 旧实现按目录逐个搬，第二个来源会把第一个**刚搬过去的**文件当成"目标已存在"
+// 清掉再覆盖 —— 第一份静默丢失，changed 里却记了两次、日志两次都说"已搬移"。
+test('retire-bundled-ffmpeg：同名文件两处来源时只搬一个，不覆盖也不丢', () => {
   const { appRoot, dataDir } = sandbox();
-  const managed = path.join(dataDir, 'runtime', 'ffmpeg', 'bin');
+  const pkg = path.join(appRoot, 'runtime', 'ffmpeg');
+  fs.mkdirSync(path.join(pkg, 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(pkg, 'ffprobe'), 'FROM-ROOT', 'utf8');
+  fs.writeFileSync(path.join(pkg, 'bin', 'ffprobe'), 'FROM-BIN', 'utf8');
+
+  const managed = managedDir(dataDir);
   fs.mkdirSync(managed, { recursive: true });
   fs.writeFileSync(path.join(managed, ffmpegExe), 'NEW', 'utf8');
+
+  const r = runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 21, saveConfig: () => {} });
+  assert.equal(r.ran.length, 1);
+  // 只搬一份：根目录那份优先
+  assert.equal(r.ran[0].changed.length, 1, `changed 不应记录被覆盖的重复项：${JSON.stringify(r.ran[0].changed)}`);
+  assert.equal(fs.readFileSync(path.join(managed, 'ffprobe'), 'utf8'), 'FROM-ROOT');
+  // 未选中的第二份留在原位（不删非空目录），日志里要有交代
+  assert.equal(fs.existsSync(path.join(pkg, 'bin', 'ffprobe')), true, '多余来源应留在原处，不该被静默删除');
+  assert.match(r.ran[0].note, /同名文件/);
+});
+
+test('失败不记 applied：跨盘放弃后下次启动还能重试', () => {
+  const { appRoot, dataDir } = sandbox();
   fs.writeFileSync(path.join(appRoot, 'runtime', ffmpegExe), 'OLD', 'utf8');
 
-  runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 15, saveConfig: () => {} });
-  assert.equal(fs.readFileSync(path.join(managed, ffmpegExe), 'utf8'), 'NEW', '新位置不能被旧文件覆盖');
-  assert.equal(fs.existsSync(path.join(appRoot, 'runtime', ffmpegExe)), false, '旧文件照样搬走');
+  // 真实环境里跨盘由 EXDEV 表达；这里直接让 rename 抛 EXDEV，钉住"放弃、不复制"。
+  const realRename = fs.renameSync;
+  fs.renameSync = () => {
+    const err = new Error('EXDEV: cross-device link not permitted');
+    err.code = 'EXDEV';
+    throw err;
+  };
+  let first;
+  try {
+    first = runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 21, saveConfig: () => {} });
+  } finally {
+    fs.renameSync = realRename;
+  }
+  assert.deepEqual(first.failed.map((x) => x.id), ['retire-bundled-ffmpeg']);
+  assert.equal(fs.existsSync(path.join(appRoot, 'runtime', ffmpegExe)), true, '放弃搬移时源必须原样保留');
+  assert.equal(fs.existsSync(path.join(managedDir(dataDir), ffmpegExe)), false, '不能留下复制出来的副本');
+  assert.equal(readUpgradeState(upgradeStatePath(dataDir)).applied['retire-bundled-ffmpeg'], undefined,
+    '失败项不能记入 applied，否则永不重试');
+
+  // 下一次启动照常搬
+  const second = runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 22, saveConfig: () => {} });
+  assert.equal(second.failed.length, 0);
+  assert.equal(fs.existsSync(path.join(managedDir(dataDir), ffmpegExe)), true);
 });
 
-// ── 用户确认清理 ────────────────────────────────────────────────────────
-
-test('detectLegacyResidue：列出备份区条目与尚未搬走的旧 ffmpeg', () => {
+test('部分失败也整项失败：已搬走的不重复，剩下的下次重试', () => {
   const { appRoot, dataDir } = sandbox();
-  const backup = path.join(legacyBackupRoot(dataDir), 'ffmpeg-2026-11-03T00-00-00-000Z');
-  fs.mkdirSync(backup, { recursive: true });
-  fs.writeFileSync(path.join(backup, ffmpegExe), 'x'.repeat(100), 'utf8');
-  fs.writeFileSync(path.join(appRoot, 'runtime', ffmpegExe), 'y', 'utf8');
+  const dir = path.join(appRoot, 'runtime', 'ffmpeg');
+  fs.mkdirSync(path.join(dir, 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'bin', ffmpegExe), 'FF', 'utf8');
+  fs.writeFileSync(path.join(dir, 'bin', ffprobeExe), 'FP', 'utf8');
 
-  const r = detectLegacyResidue({ appRoot, dataDir });
-  assert.equal(r.items.length, 2);
-  const kinds = r.items.map((x) => x.kind).sort();
-  assert.deepEqual(kinds, ['legacy-backup', 'runtime-pending']);
-  const b = r.items.find((x) => x.kind === 'legacy-backup');
-  assert.equal(b.sizeBytes, 100);
-  assert.equal(b.files, 1);
-  assert.match(b.relPath, /^runtime\/legacy-backup\//);
+  // 让 ffprobe 那一次的 rename 失败（按目标名判断，不误伤 ffmpeg）
+  const realRename = fs.renameSync;
+  fs.renameSync = (from, to) => {
+    if (String(to).endsWith(ffprobeExe)) throw new Error('EBUSY: 文件被占用');
+    return realRename(from, to);
+  };
+  try {
+    const first = runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 23, saveConfig: () => {} });
+    assert.deepEqual(first.failed.map((x) => x.id), ['retire-bundled-ffmpeg']);
+  } finally {
+    fs.renameSync = realRename;
+  }
+  assert.equal(fs.existsSync(path.join(managedDir(dataDir), ffmpegExe)), true, '先搬的那个已经到位');
+  assert.equal(fs.existsSync(path.join(dir, 'bin', ffprobeExe)), true, '失败的那个留在原地');
+
+  const second = runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 24, saveConfig: () => {} });
+  assert.equal(second.failed.length, 0);
+  assert.equal(fs.readFileSync(path.join(managedDir(dataDir), ffprobeExe), 'utf8'), 'FP');
+  assert.equal(fs.readFileSync(path.join(managedDir(dataDir), ffmpegExe), 'utf8'), 'FF', '重复执行不能把已到位的盖掉');
 });
 
-test('detectLegacyResidue：没有残留时返回空列表', () => {
+test('删除失败也整项失败：不记 applied，下次启动重试', () => {
   const { appRoot, dataDir } = sandbox();
-  const r = detectLegacyResidue({ appRoot, dataDir });
-  assert.deepEqual(r.items, []);
+  const managed = managedDir(dataDir);
+  fs.mkdirSync(managed, { recursive: true });
+  fs.writeFileSync(path.join(managed, ffmpegExe), 'NEW', 'utf8');
+  const oldExe = path.join(appRoot, 'runtime', ffmpegExe);
+  fs.writeFileSync(oldExe, 'OLD', 'utf8');
+
+  // 模拟 Windows 上文件被占用：rm 抛 EBUSY
+  const realRm = fs.rmSync;
+  fs.rmSync = () => { const e = new Error('EBUSY: resource busy or locked'); e.code = 'EBUSY'; throw e; };
+  let first;
+  try {
+    first = runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 25, saveConfig: () => {} });
+  } finally {
+    fs.rmSync = realRm;
+  }
+  assert.deepEqual(first.failed.map((x) => x.id), ['retire-bundled-ffmpeg']);
+  assert.equal(fs.existsSync(oldExe), true, '删不掉时源必须还在');
+  assert.equal(readUpgradeState(upgradeStatePath(dataDir)).applied['retire-bundled-ffmpeg'], undefined,
+    '删除失败不能记 applied，否则这份残留永远留着');
+
+  const second = runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 26, saveConfig: () => {} });
+  assert.equal(second.failed.length, 0);
+  assert.equal(fs.existsSync(oldExe), false, '解锁后下次启动应删掉');
 });
 
-test('removeLegacyResidue：只删备份区里的条目', () => {
-  const { appRoot, dataDir } = sandbox();
-  const backup = path.join(legacyBackupRoot(dataDir), 'ffmpeg-old');
-  fs.mkdirSync(backup, { recursive: true });
-  fs.writeFileSync(path.join(backup, ffmpegExe), 'x'.repeat(10), 'utf8');
-
-  const r = removeLegacyResidue({ paths: [backup], appRoot, dataDir });
-  assert.deepEqual(r.removed, [backup]);
-  assert.equal(fs.existsSync(backup), false);
-  assert.ok(r.freedBytes >= 10);
-});
-
-test('removeLegacyResidue：拒绝备份区以外的数据目录路径（不能传什么删什么）', () => {
-  const { appRoot, dataDir } = sandbox();
-  const victim = path.join(dataDir, 'config.json');
-  fs.writeFileSync(victim, '{}', 'utf8');
-  const r = removeLegacyResidue({ paths: [victim], appRoot, dataDir });
-  assert.deepEqual(r.removed, []);
-  assert.equal(r.skipped.length, 1);
-  assert.match(r.skipped[0].reason, /可清理范围/);
-  assert.equal(fs.existsSync(victim), true);
-});
-
-test('removeLegacyResidue：越界、根目录、符号链接全部被拒', { skip: process.platform === 'win32' && 'Windows 上创建符号链接需要额外权限' }, () => {
-  const { root, appRoot, dataDir } = sandbox();
-  const outside = path.join(root, 'outside3');
-  fs.mkdirSync(outside, { recursive: true });
-  fs.writeFileSync(path.join(outside, 'keep'), 'k', 'utf8');
-  const link = path.join(dataDir, 'runtime', 'legacy-backup', 'link');
-  fs.mkdirSync(path.dirname(link), { recursive: true });
-  fs.symlinkSync(outside, link, 'dir');
-
-  const r = removeLegacyResidue({
-    paths: [path.parse(path.resolve('/')).root, path.join(root, 'outside3'), link],
-    appRoot, dataDir
-  });
-  assert.deepEqual(r.removed, []);
-  assert.equal(r.skipped.length, 3);
-  assert.equal(fs.readFileSync(path.join(outside, 'keep'), 'utf8'), 'k');
-});
-
-test('removeLegacyResidue：不存在的项视为已删（幂等，不报错也不计入 removed）', () => {
-  const { appRoot, dataDir } = sandbox();
-  const ghost = path.join(legacyBackupRoot(dataDir), 'ghost');
-  const r = removeLegacyResidue({ paths: [ghost], appRoot, dataDir });
-  assert.deepEqual(r.removed, []);
-  assert.deepEqual(r.skipped, []);
-});
-
-// ── 备份归属（meta.json）与迁移项 label 反查 ─────────────────────────────
+// ── 迁移项元信息 ────────────────────────────────────────────────────────
 
 test('迁移项 label：注册表里每一项都有给用户看的 label，且互不相同', () => {
-  const labels = UPGRADES.map((u) => u.label);
   assert.ok(UPGRADES.length > 0);
+  const labels = UPGRADES.map((u) => u.label);
   for (const u of UPGRADES) {
     assert.equal(typeof u.label, 'string', `${u.id} 缺 label`);
     assert.ok(u.label.trim().length > 0, `${u.id} 的 label 为空`);
   }
-  assert.equal(new Set(labels).size, labels.length, 'label 重复会让清理界面分不清是哪一项');
+  assert.equal(new Set(labels).size, labels.length, 'label 重复会让日志分不清是哪一项');
 });
 
-test('retire-bundled-ffmpeg：搬完写出 meta.json，detectLegacyResidue 按它反查 label 与来源版本', () => {
-  const { appRoot, dataDir } = sandbox();
-  fs.writeFileSync(path.join(appRoot, 'runtime', ffmpegExe), 'OLD', 'utf8');
-
-  runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 5000, saveConfig: () => {} });
-
-  const [dirName] = fs.readdirSync(legacyBackupRoot(dataDir));
-  const meta = readBackupMeta(path.join(legacyBackupRoot(dataDir), dirName));
-  assert.equal(meta.migrationId, 'retire-bundled-ffmpeg');
-  assert.equal(meta.at, new Date(5000).toISOString());
-  assert.equal(meta.fromVersion, '9.9.9.9');
-  assert.equal(meta.items.length, 1);
-
-  const r = detectLegacyResidue({ appRoot, dataDir });
-  assert.equal(r.items.length, 1);
-  const it = r.items[0];
-  assert.equal(it.migrationId, 'retire-bundled-ffmpeg');
-  assert.equal(it.label, '旧版随包 ffmpeg', 'label 应来自迁移项声明，不是目录名');
-  assert.equal(it.migratedAt, new Date(5000).toISOString());
-  assert.equal(it.fromVersion, '9.9.9.9');
-});
-
-test('detectLegacyResidue：老备份目录（无 meta.json）按前缀兜底认回迁移项', () => {
-  const { appRoot, dataDir } = sandbox();
-  const legacyDir = path.join(legacyBackupRoot(dataDir), 'ffmpeg-2026-01-01T00-00-00-000Z');
-  fs.mkdirSync(legacyDir, { recursive: true });
-  fs.writeFileSync(path.join(legacyDir, ffmpegExe), 'OLD', 'utf8');
-
-  const r = detectLegacyResidue({ appRoot, dataDir });
-  assert.equal(r.items.length, 1);
-  assert.equal(r.items[0].migrationId, 'retire-bundled-ffmpeg');
-  assert.equal(r.items[0].label, '旧版随包 ffmpeg');
-  // 没有 meta 也没有状态记录 → 时间与版本为空，但条目照样可清理
-  assert.equal(r.items[0].migratedAt, '');
-  assert.equal(r.items[0].fromVersion, '');
-});
-
-test('detectLegacyResidue：meta.json 本身不作为一条残留列出', () => {
-  const { appRoot, dataDir } = sandbox();
-  const dir = path.join(legacyBackupRoot(dataDir), 'ffmpeg-old');
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, BACKUP_META_FILE), JSON.stringify({ migrationId: 'retire-bundled-ffmpeg' }), 'utf8');
-  fs.writeFileSync(path.join(dir, ffmpegExe), 'OLD', 'utf8');
-
-  const r = detectLegacyResidue({ appRoot, dataDir });
-  assert.equal(r.items.length, 1);
-  assert.notEqual(path.basename(r.items[0].path), BACKUP_META_FILE);
-});
-
-test('detectLegacyResidue：认不出归属的目录用目录名显示，不冒充任何迁移项', () => {
-  const { appRoot, dataDir } = sandbox();
-  const dir = path.join(legacyBackupRoot(dataDir), 'user-hand-copy');
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'x.txt'), 'x', 'utf8');
-
-  const r = detectLegacyResidue({ appRoot, dataDir });
-  assert.equal(r.items.length, 1);
-  assert.equal(r.items[0].migrationId, null);
-  assert.equal(r.items[0].label, 'user-hand-copy');
-});
-
-test('detectLegacyResidue：meta 缺失时用状态记录补 migratedAt / fromVersion', () => {
-  const { appRoot, dataDir } = sandbox();
-  const dir = path.join(legacyBackupRoot(dataDir), 'ffmpeg-legacy');
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, ffmpegExe), 'OLD', 'utf8');
-  fs.writeFileSync(upgradeStatePath(dataDir), JSON.stringify({
-    version: '9.9.9.9',
-    applied: {
-      'retire-bundled-ffmpeg': { at: '2026-01-01T00:00:00.000Z', fromVersion: '0.4.8.0' }
-    }
-  }), 'utf8');
-
-  const r = detectLegacyResidue({ appRoot, dataDir });
-  assert.equal(r.items[0].migratedAt, '2026-01-01T00:00:00.000Z');
-  assert.equal(r.items[0].fromVersion, '0.4.8.0');
+test('备份机制已移除：不再导出备份相关符号', async () => {
+  const mod = await import('../src/upgrade.js');
+  for (const gone of [
+    'legacyBackupRoot', 'BACKUP_META_FILE', 'readBackupMeta', 'backupPath',
+    'detectLegacyResidue', 'removeLegacyResidue'
+  ]) {
+    assert.equal(mod[gone], undefined, `${gone} 应已删除`);
+  }
 });
 
 // ── renamePath：只走 rename，跨盘不复制 ──────────────────────────────────
@@ -608,7 +644,7 @@ const portableNames = ['qq-portable', 'qq-portable-data'];
 
 test('relocate-portable-qq：目录不存在时无事可做（mac/Linux 的正常路径）', () => {
   const { appRoot, dataDir } = sandbox();
-  const r = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 20, saveConfig: () => {} });
+  const r = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 30, saveConfig: () => {} });
   assert.equal(r.ran.length, 1);
   assert.deepEqual(r.ran[0].changed, []);
   assert.match(r.ran[0].note, /无需搬移/);
@@ -624,7 +660,7 @@ test('relocate-portable-qq：正常搬迁两个目录，源清空、内容一致
     fs.writeFileSync(path.join(src, 'sub', 'marker.txt'), name, 'utf8');
   }
 
-  const r = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 21, saveConfig: () => {} });
+  const r = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 31, saveConfig: () => {} });
   assert.equal(r.ran.length, 1);
   assert.equal(r.ran[0].changed.length, 2);
   for (const name of portableNames) {
@@ -646,7 +682,7 @@ test('relocate-portable-qq：目标已存在且非空时跳过，不合并两个
   fs.writeFileSync(path.join(src, 'from-app.txt'), 'APP', 'utf8');
   fs.writeFileSync(path.join(dest, 'from-data.txt'), 'DATA', 'utf8');
 
-  const r = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 22, saveConfig: () => {} });
+  const r = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 32, saveConfig: () => {} });
   // 只有 qq-portable 被跳过（qq-portable-data 根本不存在 → 也算无需处理），整项成功
   assert.equal(r.ran.length, 1);
   assert.deepEqual(r.ran[0].changed, []);
@@ -663,7 +699,7 @@ test('relocate-portable-qq：目标目录存在但为空 → 视为上次失败�
   fs.mkdirSync(dest, { recursive: true });
   fs.writeFileSync(path.join(src, 'QQ.exe'), 'QQ', 'utf8');
 
-  const r = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 23, saveConfig: () => {} });
+  const r = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 33, saveConfig: () => {} });
   assert.equal(r.ran[0].changed.length, 1);
   assert.equal(fs.readFileSync(path.join(dest, 'QQ.exe'), 'utf8'), 'QQ');
 });
@@ -675,7 +711,7 @@ test('relocate-portable-qq：符号链接不搬', { skip: process.platform === '
   fs.writeFileSync(path.join(outside, 'QQ.exe'), 'OUT', 'utf8');
   fs.symlinkSync(outside, path.join(appRoot, 'runtime', 'qq-portable'), 'dir');
 
-  const r = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 24, saveConfig: () => {} });
+  const r = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 34, saveConfig: () => {} });
   assert.equal(r.ran[0].changed.length, 0);
   assert.equal(fs.existsSync(path.join(outside, 'QQ.exe')), true, '链接指向的外部文件必须原样');
 });
@@ -687,7 +723,7 @@ test('relocate-portable-qq：搬移失败时整项报错且不记 applied，下�
   // 用这个代替"Windows 上文件被占用"，在 mac/Linux 上也能稳定复现失败路径。
   fs.writeFileSync(path.join(dataDir, 'runtime'), 'blocker', 'utf8');
 
-  const first = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 25, saveConfig: () => {} });
+  const first = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 35, saveConfig: () => {} });
   assert.deepEqual(first.failed.map((x) => x.id), ['relocate-portable-qq']);
   assert.equal(fs.existsSync(path.join(appRoot, 'runtime', 'qq-portable')), true, '失败时源目录必须原样保留');
   assert.equal(readUpgradeState(upgradeStatePath(dataDir)).applied['relocate-portable-qq'], undefined,
@@ -695,7 +731,7 @@ test('relocate-portable-qq：搬移失败时整项报错且不记 applied，下�
 
   // 修好之后下一次启动应照常搬
   fs.rmSync(path.join(dataDir, 'runtime'), { force: true });
-  const second = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 26, saveConfig: () => {} });
+  const second = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 36, saveConfig: () => {} });
   assert.equal(second.failed.length, 0);
   assert.equal(second.ran.length, 1);
   assert.equal(fs.existsSync(path.join(dataDir, 'runtime', 'qq-portable')), true);
@@ -704,9 +740,9 @@ test('relocate-portable-qq：搬移失败时整项报错且不记 applied，下�
 test('relocate-portable-qq：跑两次，第二次跳过（幂等）', () => {
   const { appRoot, dataDir } = sandbox();
   fs.mkdirSync(path.join(appRoot, 'runtime', 'qq-portable'), { recursive: true });
-  const first = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 27, saveConfig: () => {} });
+  const first = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 37, saveConfig: () => {} });
   assert.equal(first.ran.length, 1);
-  const second = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 28, saveConfig: () => {} });
+  const second = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 38, saveConfig: () => {} });
   assert.deepEqual(second.skipped, ['relocate-portable-qq']);
   assert.equal(second.ran.length, 0);
 });
@@ -748,3 +784,5 @@ test('runtimeDirPath：qq-portable-data 与 qq-portable 各自独立解析', () 
   );
 });
 
+// 临时目录清理：每个 test 自己建沙箱，跑完由操作系统回收 tmp。
+// 这里不留 after()，避免误删仍在断言的现场；cleanup() 留给需要显式清的场景。
