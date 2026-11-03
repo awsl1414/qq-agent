@@ -14,6 +14,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { getConfig, updateConfig, deepMerge as deepMergeConfig, DATA_DIR, ROOT } from './config.js';
+// 从 wsUrl 取端口探测目标（host + port）。以前各处只取端口、主机写死 127.0.0.1，
+// 协议端在局域网另一台机器时状态永远是"端口未监听"。
+import { parseProbeTarget } from './protocol-endpoint.js';
 import { customSearch } from './web-search.js';
 import { listModels, chatCompletion, chatCompletionWithRetry, resolveApiKey, estimateCost, cacheHitRate } from './llm.js';
 import { resolveOfficialPrice, listOfficialPrices } from './model-prices.js';
@@ -680,13 +683,10 @@ export function createRoutes(deps) {
         const cost = estimateCost(usage, { model: cfgNow.api?.model });
         // 协议端（OneBot v11）运行判定用 WS 端口是否在监听。
         // 协议端由用户自行安装运行（SnowLuma / NapCat 任选其一），本软件只负责连。
-        const obWsPort = (() => {
-          try {
-            const u = new URL(String(getConfig().protocol?.wsUrl || 'ws://127.0.0.1:3001'));
-            return u.port ? Number(u.port) : 3001;
-          } catch { return 3001; }
-        })();
-        const obPortOpen = await deps.isPortOpen('127.0.0.1', obWsPort);
+        // 探测目标必须取自配置的 wsUrl：固定 127.0.0.1 会让"协议端在局域网另一台
+        // 机器"的用户永远看到「端口未监听」，而 OneBot 客户端按完整 wsUrl 连是通的。
+        const obTarget = parseProbeTarget(cfgNow.protocol?.wsUrl);
+        const obPortOpen = await deps.isPortOpen(obTarget.host, obTarget.port);
         // 诊断：把"连不上"拆成用户能看懂的原因（给 UI 就绪度体检用）。
         let onebotDiagnosis = '';
         if (!onebot.connected) {

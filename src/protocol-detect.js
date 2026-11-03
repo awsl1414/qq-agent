@@ -251,6 +251,11 @@ function collectAccounts(dirs) {
  * @param {Function} [opts.isPortOpen] (host, port) => Promise<boolean>
  *        传了就用"端口真在监听"来挑账号：双开或多账号时，挑正在跑的那个，
  *        而不是单纯看文件 mtime。
+ *        本模块一律传 `127.0.0.1`：它找的是**本机**上跑着的协议端（目录来自本机
+ *        进程与磁盘扫描），所以探回环是对的，不是"只探了端口"的疏漏。远端协议端
+ *        不走这里——那边由调用方按 `config.protocol.wsUrl` 的 host 自行探测
+ *        （见 protocol-endpoint.js 的 parseProbeTarget）。
+ *        同理返回体里的 `wsPortOpen` 只代表"本机该端口在监听"。
  * @returns {Promise<{
  *   found: boolean, reason?: string,
  *   dir?: string, uin?: string, configPath?: string,
@@ -285,6 +290,9 @@ export async function detectProtocol({ dir = '', isPortOpen = null } = {}) {
   }
 
   // 挑账号：端口在监听 > 文件最新
+  // 主机固定 127.0.0.1 是有意的：候选目录来自本机进程与磁盘，本模块只回答
+  // "本机上哪个账号在跑"。不要改成探配置里的远端地址——那会让"本机双开、
+  // 同时连远端"的组合挑错账号。
   if (typeof isPortOpen === 'function') {
     const ports = [...new Set(accounts.map((a) => a.wsPort).filter(Boolean))].slice(0, 6);
     const states = await Promise.all(ports.map((p) => isPortOpen('127.0.0.1', p).catch(() => false)));
