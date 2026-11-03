@@ -1,16 +1,16 @@
 // 内置「模型图片输入能力」官方资料表（仅图片，不含视频/音频）。
 //
-// 设计目标：
-//   - 用户添加的模型 ID 只要与主流厂商官方模型 ID 对上（大小写/分隔符不敏感），
-//     就无需在线探测，直接显示/判定“支持图片输入”或“不支持图片输入”。
-//   - 判定分两级：
-//       1) 提供商级结论 PROVIDER_DOCS：某条中转链路实际是否透传图片（网关可能拒绝）。
-//       2) 模型级结论 MODEL_DOCS：模型厂商官方能力（OpenAI 兼容 image_url 输入）。
-//   - 与 scripts/apply-vision-docs.mjs 的区别：本表是运行时代码内置的默认知识；
-//     脚本/在线探测写入 config.modelVision 的结论仍优先于本表。
+// 用户添加的模型 ID 只要与主流厂商官方模型 ID 对上（大小写/分隔符不敏感），
+// 就无需在线探测，直接显示/判定"支持图片输入"或"不支持图片输入"。
+// 判定分两级：
+//   1) 提供商级结论 PROVIDER_DOCS：某条中转链路实际是否透传图片（网关可能拒绝）。
+//   2) 模型级结论 MODEL_DOCS：模型厂商官方能力（OpenAI 兼容 image_url 输入）。
 //
-// 维护方式：新增模型时在 MODEL_DOCS 里加一行，providerId 有特殊链路时再加 PROVIDER_DOCS。
-// 字段：verdict: 'vision' | 'no-vision'；note 里注明来源。
+// 与 scripts/apply-vision-docs.mjs 的区别：本表是运行时代码内置的默认知识；
+// 脚本/在线探测写入 config.modelVision 的结论仍优先于本表。
+//
+// 维护方式：新增模型时在 MODEL_DOCS 里加一行，providerId 有特殊链路时再加
+// PROVIDER_DOCS。字段：verdict: 'vision' | 'no-vision'；note 里注明来源。
 
 function norm(s) {
   return String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');

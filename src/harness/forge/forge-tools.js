@@ -10,12 +10,12 @@
 //   1. **四道闸**：语法干净 → 落在暂存目录内 → realpath 后仍在暂存内（防符号链接逃逸）
 //      → 后缀白名单。
 //   2. **只碰暂存区**。本文件所有路径解析都以 stagingRoot 为根，
-//      `..`/绝对路径/node_modules 一律拒。它**没有**任何通往 plugins/ 的写通道 ——
+//      `..`/绝对路径/node_modules 一律拒。它**没有**任何通往 plugins/ 的写通道：
 //      搬运是 index.js 里 forge.install 的职责，且只搬闸门放行过的草稿。
 //   3. **限额**：文件数、单文件字节、总体积三重上限（见 plugin.json 的 settings）。
 //
-// ⚠️ 这里拦得住"路径逃逸"，拦不住"生成的代码本身干坏事" ——
-//    后者靠 gate.js 的静态危险扫描 + 人工确认。三层防线各管一段，缺一不可。
+// 这里拦得住"路径逃逸"，拦不住"生成的代码本身干坏事"：
+// 后者靠 gate.js 的静态危险扫描 + 人工确认。三层防线各管一段，缺一不可。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -36,13 +36,13 @@ export const DEFAULT_LIMITS = {
 /**
  * zip 导入时的条目数上限。**独立于 maxFiles(20)**：
  * maxFiles 管的是"模型生成草稿时别跑飞"（写盘时按文件拦），
- * 而这里面对的是**别人打的包** —— 27 个文件的正常扩展不该在读取阶段就被拒。
+ * 而这里面对的是**别人打的包**：27 个文件的正常扩展不该在读取阶段就被拒。
  */
 export const ZIP_MAX_ENTRIES = 600;
 
 /**
  * 暂存区根目录：<DATA_DIR>/plugin-data/extension-forge/staging
- * ⚠️ 必须在 plugin-data 下，不能放 plugins/（那是 fs.watch 监听范围，写进去就被当扩展加载）。
+ * 必须在 plugin-data 下，不能放 plugins/（那是 fs.watch 监听范围，写进去就被当扩展加载）。
  */
 export function stagingRoot(ctx) {
   return path.join(ctx.dataRoot, 'plugin-data', 'extension-forge', 'staging');
@@ -53,7 +53,7 @@ export function draftDir(ctx, draftId) {
   return path.join(stagingRoot(ctx), sanitizeDraftId(draftId));
 }
 
-/** 草稿 id 只允许安全字符 —— 它会成为目录名。 */
+/** 草稿 id 只允许安全字符，它会成为目录名。 */
 export function sanitizeDraftId(id) {
   const s = String(id || '').replace(/[^a-zA-Z0-9._-]/g, '');
   return s.slice(0, 64) || 'draft';
@@ -87,7 +87,7 @@ export function resolveDraftPath(ctx, draftId, rel) {
   const abs = path.join(base, ...raw.split('/'));
 
   // realpath 校验：父目录可能已被建成符号链接指向外面。
-  // 目录还不存在时（首次写），退到最近的存在祖先上校验 —— 否则新草稿第一次写必然失败。
+  // 目录还不存在时（首次写），退到最近的存在祖先上校验，否则新草稿第一次写必然失败。
   const probe = nearestExisting(abs);
   if (probe) {
     let realProbe, realBase;
@@ -139,19 +139,19 @@ export function draftStats(ctx, draftId) {
   return { files, count: files.length, total, exists: fs.existsSync(base) };
 }
 
-// ── 工具实现：(ctx, args) —— 与 src/tools.js 的 executeTool 约定一致 ──────────
+// ── 工具实现：(ctx, args)，与 src/tools.js 的 executeTool 约定一致 ──────────
 //
-// ⚠️ 参数顺序是 (ctx, args)，不是 (args, ctx)。这是真实执行路径的约定，
-//    写反了不会报错、只会拿到 undefined —— doctor-tools.js 踩过这个坑。
+// 参数顺序是 (ctx, args)，不是 (args, ctx)。写反了不会报错、只会拿到 undefined。
+//
+// 各工具里 `ctx.draftId || args.draft_id` 的优先级也是 **ctx 优先**：
+//   ctx.draftId 由调用方（routes）在发起时固定，是「这次操作只准动这个草稿」的约定；
+//   args.draft_id 则是模型自己填的参数。若让它优先，模型只要多传一个 draft_id
+//   就能把写入重定向到**另一个草稿**（仍在暂存区内，逃不出去，但会悄悄改坏别的东西）。
+//   工具 schema 里本来就没暴露 draft_id，所以正常调用永远走 ctx 这一支；
+//   保留 args 兜底只是让本文件能被直接调用（测试/未来复用），不改变优先级。
 
 /** 写一个文件（覆盖写）。 */
 export function writeFileTool(ctx, args) {
-  // ⚠️ 顺序是 **ctx 优先**，不是 args 优先。
-  //    ctx.draftId 由调用方（routes）在发起时固定，是「这次操作只准动这个草稿」的约定；
-  //    args.draft_id 则是模型自己填的参数 —— 若让它优先，模型只要多传一个 draft_id
-  //    就能把写入重定向到**另一个草稿**（仍在暂存区内，逃不出去，但会悄悄改坏别的东西）。
-  //    工具 schema 里本来就没暴露 draft_id，所以正常调用永远走 ctx 这一支；
-  //    保留 args 兜底只是让本文件能被直接调用（测试/未来复用），不改变优先级。
   const draftId = ctx.draftId || args.draft_id;
   if (!draftId) return { content: '缺少 draft_id', isError: true };
   const r = resolveDraftPath(ctx, draftId, args.path);
@@ -188,12 +188,6 @@ export function writeFileTool(ctx, args) {
 
 /** 读回一个文件（带行号，便于模型自查）。 */
 export function readFileTool(ctx, args) {
-  // ⚠️ 顺序是 **ctx 优先**，不是 args 优先。
-  //    ctx.draftId 由调用方（routes）在发起时固定，是「这次操作只准动这个草稿」的约定；
-  //    args.draft_id 则是模型自己填的参数 —— 若让它优先，模型只要多传一个 draft_id
-  //    就能把写入重定向到**另一个草稿**（仍在暂存区内，逃不出去，但会悄悄改坏别的东西）。
-  //    工具 schema 里本来就没暴露 draft_id，所以正常调用永远走 ctx 这一支；
-  //    保留 args 兜底只是让本文件能被直接调用（测试/未来复用），不改变优先级。
   const draftId = ctx.draftId || args.draft_id;
   const r = resolveDraftPath(ctx, draftId, args.path);
   if (!r.ok) return { content: `读取被拒：${r.error}`, isError: true };
@@ -201,7 +195,7 @@ export function readFileTool(ctx, args) {
   try { text = fs.readFileSync(r.abs, 'utf8'); }
   catch { return { content: `文件不存在：${r.rel}`, isError: true }; }
   const lines = text.split('\n');
-  // 单文件最多回 400 行 —— 草稿都不长，超了说明模型该拆文件了
+  // 单文件最多回 400 行：草稿都不长，超了说明模型该拆文件了
   const shown = lines.slice(0, 400);
   const body = shown.map((l, i) => `${String(i + 1).padStart(4)}| ${l}`).join('\n');
   return { content: `${r.rel}（共 ${lines.length} 行）\n${body}${lines.length > 400 ? '\n…（已截断，只看前 400 行）' : ''}` };
@@ -209,12 +203,6 @@ export function readFileTool(ctx, args) {
 
 /** 列出草稿里的文件。 */
 export function listFilesTool(ctx, args) {
-  // ⚠️ 顺序是 **ctx 优先**，不是 args 优先。
-  //    ctx.draftId 由调用方（routes）在发起时固定，是「这次操作只准动这个草稿」的约定；
-  //    args.draft_id 则是模型自己填的参数 —— 若让它优先，模型只要多传一个 draft_id
-  //    就能把写入重定向到**另一个草稿**（仍在暂存区内，逃不出去，但会悄悄改坏别的东西）。
-  //    工具 schema 里本来就没暴露 draft_id，所以正常调用永远走 ctx 这一支；
-  //    保留 args 兜底只是让本文件能被直接调用（测试/未来复用），不改变优先级。
   const draftId = ctx.draftId || args.draft_id;
   if (!draftId) return { content: '缺少 draft_id', isError: true };
   const s = draftStats(ctx, draftId);
@@ -225,12 +213,6 @@ export function listFilesTool(ctx, args) {
 
 /** 删掉草稿里的一个文件（模型改主意时用）。 */
 export function deleteFileTool(ctx, args) {
-  // ⚠️ 顺序是 **ctx 优先**，不是 args 优先。
-  //    ctx.draftId 由调用方（routes）在发起时固定，是「这次操作只准动这个草稿」的约定；
-  //    args.draft_id 则是模型自己填的参数 —— 若让它优先，模型只要多传一个 draft_id
-  //    就能把写入重定向到**另一个草稿**（仍在暂存区内，逃不出去，但会悄悄改坏别的东西）。
-  //    工具 schema 里本来就没暴露 draft_id，所以正常调用永远走 ctx 这一支；
-  //    保留 args 兜底只是让本文件能被直接调用（测试/未来复用），不改变优先级。
   const draftId = ctx.draftId || args.draft_id;
   const r = resolveDraftPath(ctx, draftId, args.path);
   if (!r.ok) return { content: `删除被拒：${r.error}`, isError: true };
@@ -250,11 +232,11 @@ export function clearDraft(ctx, draftId) {
 //
 // 用途：把"别人发来的扩展包"读进来，之后由模型适配、用户确认后安装。
 //
-// ⚠️ 为什么解到**暂存区**而不是直接 unzipToModuleDir：
+// 解到**暂存区**而不是直接 unzipToModuleDir：
 //    zip-install.js 那条路是"校验后直接落 skills//plugins/"，落地即被执行。
 //    第三方包必须先能被人看过、改过、确认过，所以只能落到暂存区。
 //
-// ── 与 parseZip 的分工（读代码后确认的事实，不是推测）──
+// ── 与 parseZip 的分工 ──
 //   parseZip（src/zip-install.js）不只是解压，它**自带两项安全校验**并且
 //   **整包拒绝**（throw，不逐条跳过）：
 //     · 绝对路径 或 含 `..` → 抛错
@@ -262,16 +244,13 @@ export function clearDraft(ctx, draftId) {
 //     目录条目（以 / 结尾）由它直接跳过。
 //   所以"一个包里混了个 setup.sh"的结局是**整个包被拒**，而不是悄悄扔掉那个文件。
 //   这是刻意的：与市场安装路径保持同一把尺子，不给导入开更松的口子。
-//   我们**不弱化它** —— 拒绝时把 parseZip 的原话（它点名了是哪个条目）透给用户。
+//   我们**不弱化它**：拒绝时把 parseZip 的原话（它点名了是哪个条目）透给用户。
 //
 //   本文件这一层负责 parseZip **不管**的那些：
 //     · mac 打包垃圾（__MACOSX / .DS_Store / Thumbs.db）
 //     · 单文件与总体积超限
 //     · 剥掉统一根目录（包名/）
-//     · 每个条目再走一次 resolveDraftPath（四道闸）—— 纵深防御，不依赖上游
-//
-// 插件 import src/ 下工具模块是本项目既有做法
-// （media-download → safe-fetch、reply-safety → llm，都有先例）。
+//     · 每个条目再走一次 resolveDraftPath（四道闸）：纵深防御，不依赖上游
 
 /**
  * 把 zip 内容解到指定草稿。
@@ -286,14 +265,13 @@ export function extractZipToDraft(ctx, draftId, buffer, parseZip) {
   try {
     entries = parseZip(buffer);
   } catch (e) {
-    // rejected=true：这是**安全校验**拒绝（非法路径 / 禁用后缀），不是"文件坏了"。
-    // 前端据此给出不同的提示 —— 前者是"这个包有问题"，后者是"这个包读不了"。
+    // rejected=true。这是**安全校验**拒绝（非法路径 / 禁用后缀），不是"文件坏了"。
+    // 前端据此给出不同的提示：前者是"这个包有问题"，后者是"这个包读不了"。
     //
-    // ⚠️ 判定方式是按文案前缀匹配，与 zip-install.js 里那两条消息耦合。
-    //    为什么仍这么做：parseZip 把"安全校验"和"结构解析"混在一个函数里抛错
-    //    （validateZipStructure 只是它的薄包装），没有可用的结构化区分。
-    //    匹配失手的**唯一后果是提示语不够准确** —— ok:false 这条结论不受影响，
-    //    安全判定永远由 parseZip 决定，这里只是把它的原话转述得更贴切一点。
+    // 判定方式是按文案前缀匹配，与 zip-install.js 里那两条消息耦合。
+    // 为什么仍这么做：parseZip 把"安全校验"和"结构解析"混在一个函数里抛错，
+    // 没有可用的结构化区分。匹配失手的**唯一后果是提示语不够准确**：ok:false
+    // 这条结论不受影响，安全判定永远由 parseZip 决定。
     const msg = String(e?.message || e);
     const isSecurity = /^安装包包含/.test(msg);
     return { ok: false, rejected: isSecurity, error: msg, files: [], skipped: [] };
@@ -301,9 +279,9 @@ export function extractZipToDraft(ctx, draftId, buffer, parseZip) {
   if (!entries.length) return { ok: false, error: 'zip 是空的（里面没有文件）', files: [], skipped: [] };
 
   const lim = { ...DEFAULT_LIMITS, ...(ctx.limits || {}) };
-  // ⚠️ 这里的上限必须**独立于** maxFiles(20)：maxFiles 是"模型生成时别跑飞"的写盘上限，
-  //    而 zip 导入是"别人打的包" —— 27 个文件的正常包不该在读取阶段就被拒。
-  //    原写 `lim.maxFiles * 3`(=60)，稍大一点的包直接读不进来（2026-10-08 报障）。
+  // 这里的上限必须**独立于** maxFiles(20)：maxFiles 是"模型生成时别跑飞"的写盘上限，
+  // 而 zip 导入是"别人打的包"：27 个文件的正常包不该在读取阶段就被拒。
+  // 用 `lim.maxFiles * 3`(=60) 会让稍大一点的包直接读不进来。
   if (entries.length > ZIP_MAX_ENTRIES) {
     // 先粗筛：条目数远超上限说明这多半不是一个小扩展
     return { ok: false, error: `zip 里有 ${entries.length} 个条目，远超上限（${ZIP_MAX_ENTRIES}）`, files: [], skipped: [] };
@@ -311,13 +289,12 @@ export function extractZipToDraft(ctx, draftId, buffer, parseZip) {
 
   // ── 定位模块根：以**清单文件**为锚，把它上面的所有层级剥掉 ──────────────────
   //
-  // ⚠️ 2026-10-22 修（市场包装不上的根因）：原实现只认"所有条目共享同一个第一段"
-  //   这一种形态（`names.every(...)`）。只要包里混进一个根级杂物 —— macOS 打包的
-  //   `__MACOSX/`、作者顺手放进去的 README、.gitignore —— every() 立刻为 false，
-  //   整层不剥，清单就落在 `<草稿>/reply-meme/skill.json`；而结构闸只在**草稿根**
-  //   找 skill.json / plugin.json → 直接判"缺少清单"，5 项阻断，这个包永远装不上
-  //   （模型也没法把目录整体搬上去，只能一个文件一个文件重写）。
-  //   现在按清单所在目录定根：嵌套多深剥多深，与 zip-install.unzipToModuleDir 同口径。
+  // 只认"所有条目共享同一个第一段"这一种形态（`names.every(...)`）是不够的：
+  //   只要包里混进一个根级杂物：macOS 打包的 `__MACOSX/`、作者顺手放进去的
+  //   README、.gitignore：every() 立刻为 false，整层不剥，清单就落在
+  //   `<草稿>/reply-meme/skill.json`；而结构闸只在**草稿根**找 skill.json /
+  //   plugin.json → 直接判"缺少清单"，这个包永远装不上。
+  // 现在按清单所在目录定根：嵌套多深剥多深，与 zip-install.unzipToModuleDir 同口径。
   const names = entries.map((e) => String(e.name || '').replace(/\\/g, '/'));
   let prefix = '';
   {
@@ -335,7 +312,7 @@ export function extractZipToDraft(ctx, draftId, buffer, parseZip) {
     if (best) {
       prefix = best.depth > 0 ? best.n.split('/').slice(0, best.depth).join('/') + '/' : '';
     } else {
-      // 没有清单：退回"剥统一根目录"，但判定时先排除已知垃圾 ——
+      // 没有清单：退回"剥统一根目录"，但判定时先排除已知垃圾：
       // 否则一个 __MACOSX/ 就让整包结构错位，而真正的错误会以"缺少清单"呈现，
       // 把排查方向带偏（用户以为包坏了，其实是解包路径错了）。
       const clean = names.filter((n) => !/(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db)(\/|$)/i.test(n));
@@ -351,8 +328,8 @@ export function extractZipToDraft(ctx, draftId, buffer, parseZip) {
   let totalBytes = 0;
   for (let i = 0; i < entries.length; i++) {
     // 模块根之外的条目（根级 README / __MACOSX / 作者套的外层文件夹）一律丢弃。
-    // ⚠️ 必须"不在 prefix 下就跳过"，不能一律 slice(prefix.length) ——
-    //    `__MACOSX/._index.js` 切掉同样长度会得到 `index.js`，凭空写出一份假入口。
+    // 必须"不在 prefix 下就跳过"，不能一律 slice(prefix.length)：
+    // `__MACOSX/._index.js` 切掉同样长度会得到 `index.js`，凭空写出一份假入口。
     if (prefix && !names[i].startsWith(prefix)) { skipped.push(names[i]); continue; }
     const rel = names[i].slice(prefix.length);
     // 目录条目 parseZip 已滤掉，这里兜一层（剥根目录后可能剩下空串）
@@ -361,7 +338,7 @@ export function extractZipToDraft(ctx, draftId, buffer, parseZip) {
     if (/(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db)(\/|$)/i.test(rel)) { skipped.push(names[i]); continue; }
 
     // 纵深防御：parseZip 已查过非法路径与禁用后缀，这里再走一遍本文件的四道闸。
-    // 不依赖上游 —— 上游改了校验规则不该导致这里变松。
+    // 不依赖上游：上游改了校验规则不该导致这里变松。
     const r = resolveDraftPath(ctx, draftId, rel);
     if (!r.ok) { skipped.push(`${names[i]}（${r.error}）`); continue; }
 

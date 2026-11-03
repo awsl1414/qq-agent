@@ -1,13 +1,13 @@
-// 工具集批量静默期（2026-10-23）
+// 工具集批量静默期
 //
-// 要证明的核心命题：**一次插件重扫产生 N 次工具集增长时，只让模型看见 1 次变化**。
+// 要证明的命题：一次插件重扫产生 N 次工具集增长时，只让模型看见 1 次变化。
 //
-// 背景（"新加插件后缓存爆炸"的真实成因）：plugin-loader 的 loadSkillRoot 串行
-// await 每个插件，setup() 在 import 期间注册工具，于是 N 个插件 = N 次增长；
-// 而安装流程里每次 setSkillEnabled / trustedPlugins 都会 updateConfig → epoch+1，
-// 让粘滞窗作废、立即生效。活跃群聊的请求撞上每一级中间态 = N 次 17k 全价重算。
+// "新加插件后缓存爆炸"的成因：plugin-loader 的 loadSkillRoot 串行 await 每个插件，
+// setup() 在 import 期间注册工具，于是 N 个插件 = N 次增长；而安装流程里每次
+// setSkillEnabled / trustedPlugins 都会 updateConfig → epoch+1，让粘滞窗作废、
+// 立即生效。活跃群聊的请求撞上每一级中间态 = N 次 17k 全价重算。
 //
-// 对照组（未加 batch）会明确看到 3 次 transition —— 那就是 3 次击穿。
+// 对照组（未加 batch）会明确看到 3 次 transition，那就是 3 次击穿。
 
 import {
   stabilizeToolset,

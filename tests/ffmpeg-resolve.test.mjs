@@ -1,8 +1,8 @@
-// ffmpeg 路径解析（2026-11-03 随包 ffmpeg 下线时补）
+// ffmpeg 路径解析
 //
-// 背景：此前 5 处各自探测 ffmpeg，顺序还不一致 —— video-reader 只查 PATH，
-// 于是同一个安装包里「图片压缩能用、视频元信息读不出」。现在统一到
-// src/ffmpeg-resolve.js，这里钉住三件容易回归的事：
+// 此前 5 处各自探测 ffmpeg，顺序还不一致：video-reader 只查 PATH，于是同一个
+// 安装包里「图片压缩能用、视频元信息读不出」。现在统一到 src/ffmpeg-resolve.js，
+// 这里钉住三件容易回归的事：
 //   ① 版本解析（git 构建不能被误判成"过旧"）
 //   ② ffprobe 从 ffmpeg 同目录推导（不再裸名 spawn）
 //   ③ 候选顺序与缓存语义
@@ -18,7 +18,7 @@ import path from 'node:path';
 
 const TMP = path.join(os.tmpdir(), `qqa-ffresolve-${process.pid}-${Date.now()}`);
 
-// 必须**在 import 模块之前**设好数据目录：config.js 的 DATA_DIR 是模块级常量，
+// 必须在 import 模块之前设好数据目录：config.js 的 DATA_DIR 是模块级常量，
 // 晚一步设就会指向真实 data/，测试会污染用户目录。
 process.env.QQ_AGENT_DATA_DIR = TMP;
 fs.mkdirSync(TMP, { recursive: true });
@@ -149,7 +149,7 @@ test('resolveFfmpeg：手填路径无效时继续往下找，不直接判失败'
 
 // ── 真跑 exe 的断言：机器上确实有 ffmpeg 才执行 ──────────────────────────
 // 上面所有路径推导都用占位文件，这里用真实解析结果验一遍"能跑起来"。
-// 没装 ffmpeg 的机器跳过 —— 这不是失败，只是没条件验。
+// 没装 ffmpeg 的机器跳过，这不是失败，只是没条件验。
 test('真实环境：解析到的 ffmpeg 能跑 -version（无 ffmpeg 则跳过）', async (t) => {
   mod.invalidateFfmpegCache();
   const r = await mod.resolveFfmpeg();
@@ -181,7 +181,7 @@ test('normalizeSourcePreference：只认三个组名，其余归零', () => {
 });
 
 // ── 缺 ffmpeg 时的引导原因码 ────────────────────────────────────────────
-// 前端靠结构化原因码决定"给一键去安装"还是"只报错"，不匹配中文文案 ——
+// 前端靠结构化原因码决定"给一键去安装"还是"只报错"，不匹配中文文案，
 // 所以这里钉住字段本身，改文案不会悄悄把引导弄丢。
 
 test('wallpaper deps：缺 ffmpeg / 版本过旧 / 平台不支持各有独立原因码', async () => {

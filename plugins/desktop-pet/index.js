@@ -19,9 +19,7 @@ export function available() { return true; }
 export function activate() {
   service?.start();
   // 首次启动（模型列表为空）时补种随包的默认角色。
-  // 2026-10-24：默认皮从 Hiyori 换成 DS鼠控版 —— 用户明确要求「这个设为默认」，
-  // 模型随包放在 assets/desktop-pet/DS鼠控版/（含 8 个动作组 / 44 个表情）。
-  // 注意：只补种到 data 目录，不覆盖已有角色；列表非空时完全不动。
+  // 只补种到 data 目录，不覆盖已有角色；列表非空时完全不动。
   const entry = path.join(ROOT, 'assets', 'desktop-pet', 'DS鼠控版', 'c_0120.model3.json');
   if (service && service.getState().models.length === 0 && fs.existsSync(entry)) {
     try { service.importModel(entry, { name: 'DS鼠控版' }); }

@@ -11,14 +11,14 @@
 // 生命周期：
 //   register → (activate) → … → deactivate → dispose
 //   禁用 Skill 一定调 deactivate（清监听器/定时器/注册的工具），
-//   不能只在前端把 checkbox 取消 —— 否则会留下幽灵行为。
+//   不能只在前端把 checkbox 取消，否则会留下幽灵行为。
 
 import { SkillRegistry } from './registry.js';
 import { CapabilityRegistry } from './capabilities.js';
 import { SKILL_ERROR, SkillError, skillErrorText } from './errors.js';
 import { isSkillEnabledInConfig, getSkillConfig } from './config.js';
 // 运行时熔断状态（tool-guard）：工具连续失败 ≥5 次会熔断该扩展的全部工具。
-// 以前只写 console.error，UI 完全看不到 —— "启用后到底跑没跑正常"是市场
+// 以前只写 console.error，UI 完全看不到，"启用后到底跑没跑正常"是市场
 // 下载插件的黑盒盲区之一，把它并进 status() 让模块卡片直接显示"已熔断"。
 import { breakerStateOf } from '../tool-guard.js';
 
@@ -27,10 +27,10 @@ const DEFAULT_HOOK_TIMEOUT_MS = 5000;
 
 // ── before-llm-messages 稳定区快照（2026-10-19）──────────────────────────
 // 判定口径：钩子**不许改写或删除任何已有字节**，允许在任意位置插入新内容。
-//   · messages[0]（system）：全文严格相等 —— 系统提示是 buildSystemPrompt 的
+//   · messages[0]（system）：全文严格相等，系统提示是 buildSystemPrompt 的
 //     成品，没有合法的运行时改写场景；
 //   · messages[1]（首条 user）：钩子后必须**按序包含**快照的全部字符
-//     （子序列语义）—— 尾部追加（mem-layered 的 appendToLastUser）、尾部
+//     （子序列语义），尾部追加（mem-layered 的 appendToLastUser）、尾部
 //     push（knowledge-memes）、中部插入（sticker 的 insertBeforePastState，
 //     插到【过去状态】标记前进可缓存区，2026-10-16 的合法优化）都放行；
 //     改写、删除、重排任何原有字符都会被抓到。
@@ -84,11 +84,11 @@ function stablePrefixViolation(snap, messages) {
  * 大多数能力是"单提供者"（比如 video.frames：抽帧只能有一份实现），
  * 两个技能抢同一个名字就是配置错误。
  * 但有几类语义上就是"一条流水线上的多个环节"，必须允许多个：
- *   · llm.retry-advisor —— 思考参数降级、图片格式降级……各管一类错误，
+ *   · llm.retry-advisor，思考参数降级、图片格式降级……各管一类错误，
  *     llm.js 会挨个问过去，谁认领谁处理（返回 null 表示"不归我管"）
- *   · llm.request-params / llm.response / llm.usage —— 同理，是转换链
- *   · tool.guard —— 每个技能都可以加一道自己的守卫
- *   · media.download —— 按平台拆分实现：B站插件、抖音插件各提供一个，
+ *   · llm.request-params / llm.response / llm.usage，同理，是转换链
+ *   · tool.guard，每个技能都可以加一道自己的守卫
+ *   · media.download，按平台拆分实现：B站插件、抖音插件各提供一个，
  *     核心把消息里的链接挨个问过去，谁认领谁处理。新增平台 = 再加一个提供者，
  *     不需要改核心，所以这里必须允许多个。
  * 列出它们，是为了让"能力名冲突"检查既严格又不误报。
@@ -127,7 +127,7 @@ export class SkillManager {
     if (!id) return { ok: false, id: '', error: '缺少 manifest.id' };
 
     // 覆盖注册（热重载）时必须走完整生命周期：**先 deactivate 再 dispose**。
-    // 历史上这里只调 dispose（只回收工具），不调 deactivate ——
+    // 历史上这里只调 dispose（只回收工具），不调 deactivate，
     // 开发模式每次保存文件都会重载，Skill 在 activate 里建立的定时器/订阅
     // 就永久泄漏（累积幽灵行为：重复推送、重复发言、内存增长）。
     const prev = this.registry.get(id);
@@ -149,7 +149,7 @@ export class SkillManager {
     }
     // manifest 里声明但没给实现的 capability 也登记占位（provider = null），
     // 让 hasCapability / explainCapability 能看到"这个 Skill 自称提供"，
-    // 具体调用时再检查实现 —— 否则会出现"Skill 列表说提供、能力表查不到"的口径分裂。
+    // 具体调用时再检查实现，否则会出现"Skill 列表说提供、能力表查不到"的口径分裂。
     for (const cap of skill.manifest.capabilities || []) {
       if (!Object.prototype.hasOwnProperty.call(skill.providers || {}, cap)) {
         this.capabilities.provide(cap, id, null);
@@ -197,7 +197,7 @@ export class SkillManager {
    * 应用退出时回收全部 Skill（2026-09-26 补）：
    * 逐个 deactivate + dispose。此前 stop() 只停了核心自己的定时器，
    * 插件实例里的 setInterval / setTimeout（如 health-system 的状态衰减、
-   * cache-guard 的节流落盘）在 headless 退出后仍会继续跑 —— 句柄泄漏，
+   * cache-guard 的节流落盘）在 headless 退出后仍会继续跑，句柄泄漏，
    * 还可能在退出窗口里写坏数据文件。
    */
   disposeAll(context = {}) {
@@ -325,18 +325,18 @@ export class SkillManager {
       // 目录语义类型 + 所在目录（仓库相对路径）：
       //   kind = 'plugin' 确定性型（能力/钩子，必然触发）
       //   kind = 'skill'  LLM 型（注册工具，模型决定）
-      // 放这里而不是让调用方按清单**文件名**去猜目录 —— "文件名"与"目录语义"是两件事，
+      // 放这里而不是让调用方按清单**文件名**去猜目录，"文件名"与"目录语义"是两件事，
       // 混用会在改名/挪目录时静默判错（审计脚本原来就是这么脆的）。
       kind: skill.kind || null,
       dir: skill.relDir || '',
       // 有"东西可配"的判断必须把界面入口也算上：只有 panels、没有配置项的插件
-      // 一样需要那颗 ⚙ 才能进设置弹窗 —— 否则它的界面就**没有任何入口**了。
+      // 一样需要那颗 ⚙ 才能进设置弹窗，否则它的界面就**没有任何入口**了。
       hasSettings: Object.keys(m.settings || {}).length > 0
         || Object.keys(m.configSchema || {}).length > 0
         || (Array.isArray(m.panels) && m.panels.length > 0),
       loaded: !skill.loadError,
       // loadError：本次加载失败的具体原因（清单/入口/setup 抛错）。
-      // UI 据此渲染"加载失败"徽章与红色原因行 —— 失败条目现在也会注册进表，
+      // UI 据此渲染"加载失败"徽章与红色原因行，失败条目现在也会注册进表，
       // 不再表现为"条目凭空消失"。
       loadError: skill.loadError || '',
       enabled,
@@ -354,7 +354,7 @@ export class SkillManager {
       implementedCapabilities: Object.keys(skill.providers || {}),
       // 该模块注册的行为钩子名（确定性型常见形态：靠钩子插进主流程）
       hooks: Object.keys(skill.hooks || {}),
-      // 当前设置值（密文已脱敏）与字段描述 —— UI 靠这两个渲染"技能设置"弹窗。
+      // 当前设置值（密文已脱敏）与字段描述，UI 靠这两个渲染"技能设置"弹窗。
       // 放在列表里而不是让前端再发一次请求：技能页本来就要拉一次列表。
       settings: this.settingsView(id),
       configSchema: (m.configSchema && typeof m.configSchema === 'object') ? m.configSchema : {},
@@ -365,13 +365,13 @@ export class SkillManager {
       missingRequires: missing,
       toolIds: [...(skill.toolIds || [])],
       // 运行时熔断状态（tool-guard.js）：{ open, fails, openUntil?, lastTool? }。
-      // open=true 表示该扩展的工具正因连续失败被熔断 —— 加载与开关都正常，
+      // open=true 表示该扩展的工具正因连续失败被熔断，加载与开关都正常，
       // 但"跑起来"实际是坏的，此前这个状态只有日志知道。
       breaker: breakerStateOf(m.id),
       // 放置/引导类 lint 警告（plugin-loader 的 lintKindPlacement）：
       // 「skills/ 里没注册工具（模型完全看不见）」「plugins/ 里没人会调」
       // 「注册了工具但没有策略段引导（模型不知道何时用）」。
-      // 这些不是加载失败 —— 卡片显示"生效中"，用户却遇到"没法正常调用"，
+      // 这些不是加载失败，卡片显示"生效中"，用户却遇到"没法正常调用"，
       // 警告必须进 UI 而不是只躺在启动日志里。
       warnings: Array.isArray(skill.lintWarnings) ? [...skill.lintWarnings] : []
     };
@@ -412,7 +412,7 @@ export class SkillManager {
    * 密文字段（configSchema 里标了 secret: true）脱敏成 '******'：
    * 设置接口会把整个配置回给前端，明文 Key/Cookie 不该出现在响应里。
    * 写入侧约定：收到 '******' 或空串表示"不修改"，保持原值
-   * —— 否则用户只是打开表单点保存，密文就被覆盖成六个星号了。
+   *，否则用户只是打开表单点保存，密文就被覆盖成六个星号了。
    */
   settingsView(id) {
     const skill = this.registry.get(id);
@@ -482,11 +482,11 @@ export class SkillManager {
    * before-llm-messages 注入位置护栏（2026-10-19）：
    * 前缀缓存的稳定区 = system 消息全文 + 首条 user 消息的已有内容。钩子允许
    * 插入/追加新内容（appendToLastUser、messages.push、sticker 的中部插入都
-   * 是合法形态），但不允许改写或删除任何已有字节 —— system 或首条 user 的
+   * 是合法形态），但不允许改写或删除任何已有字节，system 或首条 user 的
    * 之后的全部前缀缓存击穿（实测一次 ≈5k tok 全价，且每轮重复付）。
    * 以前注入位置全靠插件自觉（mem-layered/knowledge-memes 做对了），第三方
    * 插件写错位置时没有任何提示，群友只会看到"装了就命中率暴跌"。现在逐个
-   * 钩子检测并点名 —— 只警告不拦截（警告说明问题，拦截可能让插件功能静默失效）。
+   * 钩子检测并点名，只警告不拦截（警告说明问题，拦截可能让插件功能静默失效）。
    */
   async runHook(name, context = {}) {
     const results = [];
@@ -528,7 +528,7 @@ export class SkillManager {
           const dyn = skill.promptSections(context);
           for (const s of dyn || []) {
             if (!s?.content) continue;
-            // priority 的显式 0 是合法值（排最末，缓存热区用）——不能用 `|| 40` 兜底，
+            // priority 的显式 0 是合法值（排最末，缓存热区用），不能用 `|| 40` 兜底，
             // 否则 0 被 falsy 吞掉变回 40，"排到最末"的意图静默失效。
             const p = Number(s.priority);
             out.push({
@@ -539,7 +539,7 @@ export class SkillManager {
               // ⚠️ volatile 必须显式透传（2026-10-23）：本分支是**逐字段重建**对象，
               //    不写在这里的字段会被静默丢掉。插件即使返回 `volatile: true`，
               //    到了 buildSystemPrompt 也会变回普通段、继续留在系统提示里，
-              //    击穿前缀缓存 —— 而且没有任何报错，只有 [body-lcp] 能看出来。
+              //    击穿前缀缓存，而且没有任何报错，只有 [body-lcp] 能看出来。
               //    只认严格的 true：避免 "false"/1 这类真值被误判成易变段。
               ...(s.volatile === true ? { volatile: true } : {}),
               skillId: skill.manifest.id
@@ -553,7 +553,7 @@ export class SkillManager {
     // 去重（同 id 后写覆盖），再按 priority 降序。
     // ⚠️ 同优先级必须再按 id 定序（2026-09-25）：加载器是缓存击穿式重扫
     //    （plugin-loader.js 用 import(url + '?t=Date.now())，每次重扫都是新实例），
-    //    注册顺序受异步加载完成顺序影响 —— 不加第二排序键时，同优先级片段的
+    //    注册顺序受异步加载完成顺序影响，不加第二排序键时，同优先级片段的
     //    相对顺序会在重扫后漂移，系统提示字节变化 → 前缀缓存整段失效（实测过）。
     const byId = new Map();
     for (const s of out) byId.set(s.id, s);
@@ -579,7 +579,7 @@ export class SkillManager {
 
   /**
    * 请求失败后是否可以"换个姿势重试"。
-   * Skill 只给建议，真正的重试仍由 llm.js 执行 —— 这样超时、abort、
+   * Skill 只给建议，真正的重试仍由 llm.js 执行，这样超时、abort、
    * 计费、日志、fallback 模型都不会被绕过。
    */
   getRetryAdvisors(context = {}) {
@@ -633,7 +633,7 @@ export class SkillManager {
       timer = setTimeout(() => reject(new SkillError(SKILL_ERROR.TIMEOUT, `Skill ${id} 执行超时（${this.hookTimeoutMs}ms）`)), this.hookTimeoutMs);
       // ⚠️ 这里**不能** unref：
       //    unref 后，如果 hook 自身永不 resolve 且当时没有其它任务让事件循环保持活跃
-      //    （例如脚本里单独跑一次 hook），Node 会直接退出进程 —— 超时永远不触发，
+      //    （例如脚本里单独跑一次 hook），Node 会直接退出进程，超时永远不触发，
       //    表现为"调用一个卡死的 Skill，进程静默消失"。
       //    定时器不会被漏掉：无论谁先结束，.finally 都会 clearTimeout。
     });

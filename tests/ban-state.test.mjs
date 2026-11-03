@@ -1,14 +1,10 @@
-// ban-state 插件最小单测（2026-10-22，群禁言排查报告「补最小单测」项）。
+// ban-state 插件单测。
 //
-// 覆盖报告点名的几段逻辑：
-//   · noteMuted / isMuted / noteUnmuted 生命周期 + 到期自动失效
-//   · muteFromTimestamp 边界（到期时刻在未来/过去/0/垃圾值）
-//   · isMuteRejection 禁言签名（result=120；errMsg 为空串，只能认这个码）
-//   · 状态变化订阅（F1 缓存穿透的源头）：禁言/解禁/到期三条路径都通知
-//   · provider 各 action（check / note-muted / note-unmuted / list /
-//     note-send-rejected / subscribe）
+// 覆盖 noteMuted / isMuted / noteUnmuted 生命周期与到期失效、muteFromTimestamp
+// 的边界、isMuteRejection 的禁言签名、状态变化订阅（缓存穿透的源头），
+// 以及 provider 各 action。
 //
-// 运行：node --test tests/ban-state.test.mjs   （在 resources/app 目录下）
+// 运行：node --test tests/ban-state.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as plugin from '../plugins/ban-state/index.js';

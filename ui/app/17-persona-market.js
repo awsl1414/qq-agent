@@ -1,23 +1,23 @@
-// 〔人设市场：浏览 / 预览 / 试用 / 应用〕——r113 新增
+// 〔人设市场：浏览 / 预览 / 试用 / 应用〕
 // ---------------------------------------------------------------------------
-// 为什么单独一个文件，不塞进 16-market.js：
-//   16-market.js 的每一处逻辑都假定"东西是**代码**"—— 有 installCode、下载
+// 单独一个文件，不塞进 16-market.js：
+//   16-market.js 的每一处逻辑都假定"东西是代码"：有 installCode、下载
 //   zip、装进 skills/ 或 plugins/、装完 reloadSkills。人设一样都不是：它是
 //   一段文本，取回来落进 config.customPersonas，装完还要人自己切过去才生效。
 //   硬塞进去会让 loadMarket / installFromMarket 全长出 if (kind==='persona')
-//   分支 —— 那是对现有稳定代码的侵入式改写，且改坏了要回滚的面积很大。
+//   分支，侵入现有稳定代码，改坏了要回滚的面积很大。
 //   独立成文件 = 零改动风险，删掉这个文件市场也只是少一个入口。
 //
 // 数据来源：后端 GET /api/market → 实为 /api/persona-market/list
 //   （src/routes.js），由 src/market.js 的 listPersonaItems 代理官网 /personas。
-//   ⚠️ 列表**不含 prompt 正文**（官网整包 3.7MB / 70 万字，见 market.js 注释），
+//   列表不含 prompt 正文（官网整包 3.7MB / 70 万字，见 market.js 注释），
 //   所以「预览」「试用」「应用」三个动作都要按 id 单取一次正文。
 //
 // 三段式动作（对应 UI 上卡片右侧三颗钮）：
 //   预览 = 看正文前若干行，不落任何配置
-//   试用 = 落库并**立刻切成当前人设**（改 persona.roleText），不满意可一键还原
+//   试用 = 落库并立刻切成当前人设（改 persona.roleText），不满意可一键还原
 //   应用 = 只落库，不动当前人设（存着以后用）
-//   ⚠️ 试用会改当前人设，所以必须给"还原"留退路 —— 见 personaTryBackup。
+//   试用会改当前人设，所以必须给"还原"留退路，见 personaTryBackup。
 
 'use strict';
 
@@ -41,17 +41,16 @@ const PERSONA_SORTS = [
   { key: 'length', label: '提示词长度' }
 ];
 
-/* 试用前的备份：{ id, title, roleText } —— 还原按钮靠它回滚。 */
+/* 试用前的备份：{ id, title, roleText }，还原按钮靠它回滚。 */
 let personaTryBackup = null;
 /* 正文缓存：id → prompt 字符串。同一张卡反复点预览/应用不必每次回后端。 */
 const personaPromptCache = new Map();
-/* 打开预览的那颗「预览」按钮 —— 关掉浮层后把焦点还回去。
+/* 打开预览的那颗「预览」按钮，关掉浮层后把焦点还回去。
    模态里焦点凭空消失是很常见的可访问性毛病（键盘用户会瞬间失去位置）。 */
 let personaPreviewBtn = null;
 /* 预览正文上限：原来是 1200 字（内联小面板，再多会撑爆列表）。
    现在改成 760px 宽的模态、正文框内滚动，可以多给一些；仍留上限是为了
-   极端长卡（几万字）不至于一次性塞进 DOM 造成卡顿。 */
-const PERSONA_PREVIEW_CHARS = 4000;
+   极端长卡（几万字）不至于一次性塞进 DOM 造成卡顿。 */const PERSONA_PREVIEW_CHARS = 4000;
 
 /* ══════════════════════════════════════════════════════════════
    工具
@@ -102,9 +101,9 @@ function personaHueOf(str) {
 
 /**
  * 本机是否已经应用过这个人设。
- * 判据是 config.customPersonas 里的 sourceId（市场安装时写入）——
- *   不能按 name 比：社区里同名不同 id 的人设很多（实测 123 条里 5 组重名），
- *   按名字判会把两个不同的人设认成同一个。
+ * 判据是 config.customPersonas 里的 sourceId（市场安装时写入）。
+ * 不能按 name 比：社区里同名不同 id 的人设很多（实测 123 条里 5 组重名），
+ * 按名字判会把两个不同的人设认成同一个。
  */
 function personaAppliedIds() {
   const set = new Set();
@@ -289,7 +288,7 @@ function bindPersonaShell() {
       return;
     }
     // 预览浮层的 × / 遮罩 / 底部动作都由浮层自己的点击委托处理（它挂在 body 下，
-    // 不在本页容器里，这里收不到 —— 别再重复绑一遍）。
+    // 不在本页容器里，这里收不到，别再重复绑一遍）。
   });
 
   root.addEventListener('change', (e) => {
@@ -339,7 +338,7 @@ async function loadPersonaMarket({ force = false } = {}) {
   st.error = '';
   renderPersonaShell();
   try {
-    // 115s：与后端 marketFetch 的 90s 预算对齐（2026-10-20，详见 16-market.js 同处注释）
+    // 115s：与后端 marketFetch 的 90s 预算对齐（详见 16-market.js 同处注释）
     const r = await api('/api/persona-market/list', { timeoutMs: 115000 });
     st.all = Array.isArray(r?.items) ? r.items : [];
     st.categories = r?.categories && typeof r.categories === 'object' ? r.categories : {};
@@ -369,20 +368,18 @@ async function personaFetchPrompt(id) {
 /* ══════════════════════════════════════════════════════════════
    预览：看开头若干行，不落任何配置
    ──────────────────────────────────────────────────────────────
-   2026-10-22：从「列表底部的内联小面板」改成模态浮层。
-   原实现只往 #pm-preview 里塞 .pm-prev-* 结构，而 style.css 里**一条
-   对应样式都没有** → 关闭键是浏览器默认 <button>（小灰块 + 默认 ×）、
-   正文是默认 <pre>，和全站风格脱节；而且面板在列表最下方，点了还得
-   往下滚才看得见。现在结构与样式成套（见 style.css「人设预览」段）。
+   从「列表底部的内联小面板」改成模态浮层：原实现只往 #pm-preview 里塞
+   .pm-prev-* 结构，而 style.css 里一条对应样式都没有，关闭键是浏览器默认
+   <button>（小灰块 + 默认 ×）、正文是默认 <pre>，和全站风格脱节；而且面板
+   在列表最下方，点了还得往下滚才看得见。现在结构与样式成套（见 style.css「人设预览」段）。
    ══════════════════════════════════════════════════════════════ */
 /* ── 预览浮层（全局单例）────────────────────────────────────────────────
-   2026-10-22 第二版：浮层从「人设市场页里的一个 div」改成挂在 body 上的单例。
-   原因：左栏新增「已安装 → 人设」页后，两个页面都要能弹预览。而 id 不能重复，
-   再复制一套又必然出现"改一处漏一处"。现在谁都可以调 openPersonaPreview()，
-   浮层自己管开关、遮罩点击和 Esc。
-   ⚠️ 挂在 body 下（不是页面容器里）：body 有 contain:paint，会成为 fixed 的
-      包含块 —— 但 body 就是满屏 100vh，效果等同视口。放在页面容器里反而会
-      被 overflow:hidden 和切页时的 display:none 牵连。 */
+   浮层挂在 body 上，不是「人设市场页里的一个 div」：左栏新增「已安装 → 人设」页后，
+   两个页面都要能弹预览，而 id 不能重复，再复制一套又必然出现"改一处漏一处"。
+   现在谁都可以调 openPersonaPreview()，浮层自己管开关、遮罩点击和 Esc。
+   挂 body 下（不是页面容器里）：body 有 contain:paint，会成为 fixed 的
+   包含块，但 body 就是满屏 100vh，效果等同视口。放在页面容器里反而会
+   被 overflow:hidden 和切页时的 display:none 牵连。 */
 let personaPreviewAction = null;
 
 function ensurePreviewLayer() {
@@ -456,7 +453,7 @@ async function personaPreview(id, btn) {
       text: String(item.prompt || ''),
       author: item.author || meta?.author || '',
       trigger: btn,
-      // 模态把列表挡住了 —— 底部必须给一个「试用」，否则文案让人去点一个看不见的按钮
+      // 模态把列表挡住了，底部必须给一个「试用」，否则文案让人去点一个看不见的按钮
       action: { label: '试用这个人设', onClick: () => personaApply(pid, { applyNow: true }, null) }
     });
   } catch (e) {
@@ -513,13 +510,13 @@ async function personaApply(id, { applyNow = false } = {}, btn) {
   const old = btn?.textContent;
   if (btn) { btn.disabled = true; btn.textContent = `${label}…`; }
   try {
-    // 试用会改 persona.roleText —— 先把当前值存下来当退路，
+    // 试用会改 persona.roleText，先把当前值存下来当退路，
     // 否则用户试用完发现不喜欢，却只能自己手动去设置页改回去。
     if (applyNow && !personaTryBackup) {
       const cfg = (typeof state !== 'undefined' && state.config) || {};
       personaTryBackup = {
         id: pid,
-        // 只存"试用前"的身份描述，不存试用的人设名 —— 还原提示要说的是
+        // 只存"试用前"的身份描述，不存试用的人设名，还原提示要说的是
         // 换回了什么（试用前），不是换掉了什么（刚试用的那个）。
         roleText: String(cfg?.persona?.roleText || '')
       };
@@ -530,8 +527,8 @@ async function personaApply(id, { applyNow = false } = {}, btn) {
     });
     // 刷新本地 config 副本：persona / customPersonas 两处都会变，
     // 不刷的话设置页与「已应用」徽标都会停在旧状态。
-    // ⚠️ GET /api/config 回的是**脱敏后的 config 本体**（routes.js 的 `/api/config` 直接
-    //   json(res,200,sanitizeConfig(...))），不是 {config:...} 包一层 ——
+    // ⚠️ GET /api/config 回的是脱敏后的 config 本体（routes.js 的 `/api/config` 直接
+    //   json(res,200,sanitizeConfig(...))），不是 {config:...} 包一层，
     //   包错了就会把整个 state.config 覆盖成 undefined。
     try {
       const d = await api('/api/config');
@@ -542,10 +539,9 @@ async function personaApply(id, { applyNow = false } = {}, btn) {
       'ok'
     );
     if (btn) { btn.textContent = '已应用'; btn.classList.add('mk-btn-done'); }
-    // 试用后要把"还原"那颗钮补上 → 重画一次外壳。
-    // ⚠️ 2026-10-22：renderPersonaShell 是整页 innerHTML 重建，列表容器会换成
-    // 新节点、scrollTop 归零（群友反馈"每次安装完都得重新划下去"是同一类问题）。
-    // 存一份旧的 scrollTop，重画后写给**新**的 #pm-list。
+    // 试用后要把"还原"那颗钮补上，重画一次外壳。
+    // renderPersonaShell 是整页 innerHTML 重建，列表容器会换成新节点、scrollTop 归零。
+    // 存一份旧的 scrollTop，重画后写给新的 #pm-list。
     const sub = document.querySelector('#pm-sub');
     const oldList = document.querySelector('#pm-list');
     const keepTop = oldList ? oldList.scrollTop : 0;
@@ -569,7 +565,7 @@ async function personaUndoTry() {
       personaToast('当前已经是试用前的人设了', 'warn');
       return;
     }
-    // 走 POST /api/config（深合并，routes.js 的 `/api/config`）—— 只带 persona 这一个键，
+    // 走 POST /api/config（深合并，routes.js 的 `/api/config`），只带 persona 这一个键，
     // 后端 merge 后 botName / participation 等同级字段原样保留。
     const d = await api('/api/config', {
       method: 'POST',

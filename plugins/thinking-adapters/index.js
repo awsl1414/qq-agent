@@ -1,13 +1,13 @@
-// 思考模式适配 Skill 入口。
+// 思考模式适配插件入口。
 //
-// 通过 4 个能力接入核心，**不碰网络、不自己做重试**：
+// 通过 4 个能力接入核心，不碰网络、不自己做重试：
 //   llm.request-params   往请求体加本渠道的思考参数
 //   llm.response         从响应里提取思考内容
 //   llm.usage            统计思考 token
 //   llm.retry-advisor    网关拒绝思考参数时，建议"摘掉这些字段重发一次"
 //
-// 为什么重试要交给 llm.js 执行：如果 Skill 自己再发一次请求，就会绕开
-// 超时预算、abort 信号、重试次数上限、日志和计费统计 —— 变成"悄悄多打一次 API"。
+// 重试交给 llm.js 执行：如果插件自己再发一次请求，就会绕开超时预算、abort 信号、
+// 重试次数上限、日志和计费统计，变成"悄悄多打一次 API"。
 // 所以这里只返回"请摘掉这些字段"的建议，动作由核心执行。
 
 import {
@@ -23,14 +23,14 @@ export function setup(api) {
   log = api.log;
 }
 
-/** 合法的思考模式取值。写错了以前会**静默不生效**，很难排查。 */
+/** 合法的思考模式取值。写错了以前会静默不生效，很难排查。 */
 const VALID_MODES = new Set(['off', 'auto', 'on']);
 
 /** 当前生效的思考请求（UI / 排障用）。 */
 export function resolveThinkingRequest(api = null, modeOverride = undefined) {
   const s = cfg();
   // 设置页「思考强度」：api.thinkingMode/Effort/Budget 是模型 API 区的口径，
-  // 与本插件自身设置并存 —— api.* 优先（那是用户在主设置页明确选的），
+  // 与本插件自身设置并存，api.* 优先（那是用户在主设置页明确选的），
   // 没设置过（undefined）才回落插件设置（技能页表单）。
   const userMode = String(api?.thinkingMode ?? '').trim().toLowerCase();
   const fallbackMode = String(s.mode || 'auto').trim().toLowerCase();
@@ -69,8 +69,8 @@ export function resolveThinkingRequest(api = null, modeOverride = undefined) {
 export const providers = {
   // ── 请求参数 ──
   'llm.request-params': ({ body, api, context }) => {
-    // context.thinkingMode 允许调用方为**这一次请求**覆盖模式（'off' 表示别思考）。
-    // 典型场景：回复安全网的裁判、其它分类/判定类调用 —— 它们不需要思考，
+    // context.thinkingMode 允许调用方为这一次请求覆盖模式（'off' 表示别思考）。
+    // 典型场景：回复安全网的裁判、其它分类/判定类调用，它们不需要思考，
     // 开着思考只会多烧一轮 reasoning token 还更慢。
     // 这是"按次覆盖"，不改用户配置，下一次正常对话仍然按配置走。
     // api.thinkingMode（设置页-模型 API「思考强度」）同样按次传入，优先于插件自身设置。
@@ -119,18 +119,18 @@ export const providers = {
 };
 
 export function promptSections(context = {}) {
-  // ⚠️ 必须吃 context（2026-10-16 第二轮审查修）。
+  // 必须吃 context。
   //
-  // 原来是**无参**调用 resolveThinkingRequest()：detectDialect 拿到
-  // {baseUrl:'', model:''} → 恒判 generic → 段里写「当前思考模式：auto
+  // 原来是无参调用 resolveThinkingRequest()：detectDialect 拿到
+  // {baseUrl:'', model:''} 恒判 generic，段里写「当前思考模式：auto
   // （通用（不发送思考参数））」。而运行时 llm.request-params 用的是真实
-  // 端点（可能是 DeepSeek / 通义 / GLM…），参数照样在发 —— 于是提示词里
-  // 是一句**与事实相反**的描述，模型会误以为本轮没有思考。
+  // 端点（可能是 DeepSeek / 通义 / GLM…），参数照样在发，
+  // 于是提示词里是一句与事实相反的描述，模型会误以为本轮没有思考。
   //
   // 为什么不改成"静态段只留稳定信息、删掉模式与方言"：
   // 本段 id 是 'thinking-note'，已被 prompt.js 的 VOLATILE_SECTION_IDS
-  // 收进易变白名单，orchestrator 恒以 deferVolatile:true 调用 —— 它本来
-  // 就被渲染到**用户提示词末尾**，不占系统提示前缀、不影响缓存命中。
+  // 收进易变白名单，orchestrator 恒以 deferVolatile:true 调用，它本来
+  // 就被渲染到用户提示词末尾，不占系统提示前缀、不影响缓存命中。
   // 所以这里该追求的是"说得准"，不是"不说"。
   //
   // context 由 orchestrator 的 skillContext 提供（model / baseUrl /
@@ -145,14 +145,13 @@ export function promptSections(context = {}) {
   });
   if (req.mode === 'off') return [];
   return [{
-    // ⚠️ id 必须与 plugin.json 里那条**完全相同**（2026-09-20 修）。
-    //    原来是 'thinking-active' 而 manifest 是 'thinking-note'，于是
-    //    skillManager.getPromptSections 的按-id-去重认不出它们讲的是同一件事，
-    //    系统提示里「▸ 思考输出」出现两遍（一遍基础规则、一遍带当前模式），
-    //    每次调用白付约 100 字符。
-    //    同 id 后由 manager 的去重逻辑保证**后者（本条，信息更全）胜出**；
-    //    而当 mode === 'off'（上面提前 return）时，manifest 里那条仍然生效，
-    //    所以"关闭思考时仍有一句基本说明"的行为保持不变。
+    // id 必须与 plugin.json 里那条完全相同。原来是 'thinking-active' 而 manifest
+    // 是 'thinking-note'，于是 skillManager.getPromptSections 的按 id 去重
+    // 认不出它们讲的是同一件事，系统提示里「▸ 思考输出」出现两遍
+    // （一遍基础规则、一遍带当前模式），每次调用白付约 100 字符。
+    // 同 id 后由 manager 的去重逻辑保证后者（本条，信息更全）胜出；
+    // 而当 mode === 'off'（上面提前 return）时，manifest 里那条仍然生效，
+    // 所以"关闭思考时仍有一句基本说明"的行为保持不变。
     id: 'thinking-note',
     title: '思考输出',
     priority: 30,

@@ -33,11 +33,9 @@ export class ReminderStore {
 
   /** 新增一条提醒。返回该提醒。 */
   add({ chatKey, text, dueAt, createdBy = '' }) {
-    // ⚠️ dueAt 必须是**有限的**时间戳（2026-10-07 修）。
-    //   原写 `Number(dueAt)` 不校验：传进来非法值（空串/坏日期）会变成 NaN，
-    //   而 due() 的筛选用 `r.dueAt <= now` —— NaN 的比较恒为 false，
-    //   于是这条提醒**永远不触发**，却一直留在 reminders.json 里，
-    //   prune() 只管已 fired 的，也不会清它 → 永久残留条目。
+    // dueAt 必须是有限的时间戳。不校验的话，非法值（空串/坏日期）会变成 NaN，
+    // 而 due() 的筛选用 `r.dueAt <= now`，NaN 的比较恒为 false，于是这条提醒
+    // 永远不触发，却一直留在 reminders.json 里；prune() 只管已 fired 的，也不会清它。
     const ts = Number(dueAt);
     if (!Number.isFinite(ts)) {
       throw new Error('提醒时间不合法（dueAt 必须是时间戳）');

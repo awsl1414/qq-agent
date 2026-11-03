@@ -1,20 +1,20 @@
 // 匿名用量遥测：周期性把"调用次数 + token 用量"快照发到 `config.telemetry.reportUrl`。
 //
 // 默认关闭（`config.telemetry.enabled=false`）：不装任何定时器，进程零网络请求。
-// 曾经硬编码发往上游项目的服务器且无开关 —— 本仓库是从上游 fork 出来独立维护的，
+// 曾经硬编码发往上游项目的服务器且无开关。本仓库是从上游 fork 出来独立维护的，
 // 继续往上游发数据既无意义也不合适，所以改为「开关 + 地址」都可配。
 // 要自己收数据时在 config.json 里填 reportUrl。
 //
-// 隐私红线：payload 只有 随机 installId + 版本号 + 四个计数器。
-//   不含 QQ 号、群号、昵称、聊天内容、机器信息、IP（IP 只在服务器内存里做限流，不落库）。
-// 去重原理：服务器按 installId 覆盖式 upsert —— 同一客户端无论发多少次都只算一份，
-//   彻底避免"一个用户的客户端发送多份"。覆盖安装/重装系统后 data 目录还在 → installId 不变。
+// 隐私红线：payload 只有随机 installId + 版本号 + 四个计数器。
+// 不含 QQ 号、群号、昵称、聊天内容、机器信息、IP（IP 只在服务器内存里做限流，不落库）。
+// 去重原理：服务器按 installId 覆盖式 upsert，同一客户端无论发多少次都只算一份。
+// 覆盖安装/重装系统后 data 目录还在，installId 不变。
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { DATA_DIR, ROOT, getConfig } from './config.js';
 
-const INTERVAL_MS = 6 * 3600 * 1000;   // 之后每 6 小时一次
+const INTERVAL_MS = 6 * 3600 * 1000;   // 首次之后每 6 小时一次
 const FIRST_DELAY_MS = 90 * 1000;      // 启动 90 秒后发第一次（避开启动高峰）
 
 /** 当前遥测配置：{ enabled, reportUrl }。未启用或缺地址时调用方应直接跳过。 */
@@ -54,15 +54,14 @@ function loadTotals() {
   try { return JSON.parse(fs.readFileSync(TOTALS_FILE, 'utf8')); } catch { /* 需要重建 */ }
   const t = { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, toolCounts: {} };
 
-  // 优先走会话索引缓存（2026-10-07 改）。
+  // 优先走会话索引缓存。
   //
-  // 原实现是**全量重扫 sessions/**：readdirSync + 逐个 readFileSync + JSON.parse。
-  // 实测当前 data/sessions 已是 185MB / 1963 个文件 —— sessions.js 自己的注释就写着
-  // "2277 个文件 / 178MB 要 25 秒"。而 loadTotals() 是在 report() 的 setTimeout
-  // 回调里跑的，也就是**同步阻塞主线程 20+ 秒**，期间界面完全无响应。
+  // 全量重扫 sessions/ 是 readdirSync + 逐个 readFileSync + JSON.parse。
+  // 实测 data/sessions 已达 185MB / 1963 个文件，耗时 20 秒以上，而 loadTotals()
+  // 在 report() 的 setTimeout 回调里跑，会同步阻塞主线程，期间界面完全无响应。
   //
-  // session-index-cache.json（v2）里已经包含每条会话的 usage 与 toolCalls 摘要 ——
-  // 这正是为此准备的，不需要读全文。它不可用时（老版本缓存 / 损坏）才回退到全量重扫。
+  // session-index-cache.json（v2）里已包含每条会话的 usage 与 toolCalls 摘要，
+  // 不需要读全文。它不可用时（老版本缓存 / 损坏）才回退到全量重扫。
   const fromIndex = loadTotalsFromIndex();
   if (fromIndex) {
     try { fs.writeFileSync(TOTALS_FILE, JSON.stringify(fromIndex), 'utf8'); } catch { /* 下次再试 */ }
@@ -110,7 +109,7 @@ function loadTotalsFromIndex() {
     t.promptTokens += Number(u.promptTokens) || 0;
     t.completionTokens += Number(u.completionTokens) || 0;
     t.totalTokens += Number(u.totalTokens) || 0;
-    // 索引只存了工具调用**次数**，没存名字明细 → 这一项无法从索引还原。
+    // 索引只存了工具调用次数，没存名字明细，这一项无法从索引还原。
     // 匿名遥测只上报 calls / prompt / completion / total 四个总数
     // （见文件头声明的 payload），toolCounts 不在 payload 里，
     // 所以缺它不影响上报口径，也就不该为此退回慢路径。
@@ -176,7 +175,7 @@ let firstTimer = null;
 let loopTimer = null;
 
 export function startTelemetryLoop(log = console.log) {
-  // 未启用就不装定时器 —— 不是"装了定时器再早退"，那样 report() 仍会被周期性唤醒，
+  // 未启用就不装定时器。不是"装了定时器再早退"：那样 report() 仍会被周期性唤醒，
   // 每次都要读配置判一遍。这里在入口处一次性决定。默认关闭是常态，不写日志免得刷屏。
   if (!telemetryEnabled()) return;
   const first = setTimeout(() => {

@@ -1,19 +1,16 @@
 // 对话排查的**只读工具层**：让诊断模型自己去看代码、日志、体检单。
 //
-// ── 为什么需要它 ──
-//   原来「对话排查」只把一张预先算好的体检单文本塞进 system prompt，模型是"盲"的：
-//   它只能复述体检单，问到体检单没覆盖的东西（某个插件为何没加载、昨天 3 点报了什么错）
-//   就只能猜或说"不知道"。而项目里其实**什么都有** —— 源码、日志、体检数据。
-//   差的就是"让它自己去读"的能力。
+// 为什么需要它：只把一张预先算好的体检单文本塞进 system prompt，模型是"盲"的：
+// 问到体检单没覆盖的东西（某个插件为何没加载、昨天 3 点报了什么错）就只能猜。
+// 而项目里其实什么都有：源码、日志、体检数据。差的就是"让它自己去读"的能力。
 //
 // ── 安全边界（三件事必须同时成立）──
 //   1. **只读**。本文件不 import fs.write*，一个写操作都没有。
 //   2. **沙箱**。所有路径必须解析到白名单根目录之内（realpath 后再比，防符号链接逃逸）。
-//   3. **限额**。单次返回字节数、行数、grep 命中数都有硬上限 ——
+//   3. **限额**。单次返回字节数、行数、grep 命中数都有硬上限：
 //      否则一次 grep 整个 2.4MB 日志就能把上下文和钱包一起烧穿。
 //
-// ── 与 CC/其它 harness 的差别 ──
-//   不做"会话式"多轮编辑，也不给写权限。诊断场景要的是"取证"，不是"改造"。
+// 不做"会话式"多轮编辑，也不给写权限。诊断场景要的是"取证"，不是"改造"。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -121,9 +118,9 @@ export function readFileTool(ctx, args) {
   const render = () => slice.map((l, i) => `${String(sliceStart + i).padStart(5)}| ${l}`).join('\n');
   // 超限时往哪边砍，取决于这份内容"哪一头更关键"：
   //   · 日志：最新在尾部 → 保尾砍头（排除故障时"刚刚发生了什么"最重要）
-  //   · 源码/数据：声明（import/export/常量/类定义）在头部 → 保头砍尾
-  //     ⚠️ 早期版本一律保尾，导致读 orchestrator.js 这种近 2000 行的文件时，
-  //        模型看到的全是文件末尾的工具函数，而不是它要找的定义 —— 方向反了。
+  //   · 源码/数据：声明（import/export/常量/类定义）在头部 → 保头砍尾。
+  //     一律保尾的话，读近 2000 行的文件时模型看到的全是末尾的工具函数，
+  //     而不是它要找的定义，方向反了。
   const keepHead = kind !== 'logs';
   while (Buffer.byteLength(render(), 'utf8') > LIMITS.readFileBytes && slice.length > 1) {
     const drop = Math.max(1, Math.ceil(slice.length / 4));   // 每次砍 1/4，收敛快
@@ -161,7 +158,7 @@ export function listFilesTool(ctx, args) {
   } else {
     const rr = resolveSafe(dirRaw, kind, ctx);
     if (!rr.ok) {
-      // 目录没有后缀，resolveSafe 的后缀闸会拦 —— 这里对目录放宽：只查目录存在性
+      // 目录没有后缀，resolveSafe 的后缀闸会拦：这里对目录放宽：只查目录存在性
       const spec = READ_ROOTS[kind];
       const first = dirRaw.split('/')[0];
       if (!spec.dirs.includes(first)) return { content: `列目录失败：kind=${kind} 只允许 ${spec.dirs.join('/ ')}`, isError: true };
@@ -229,11 +226,10 @@ export function grepTool(ctx, args) {
   const spec = READ_ROOTS[kind];
   const pattern = String(args.pattern || '').trim();
   if (!pattern) return { content: '缺少 pattern', isError: true };
-  // ⚠️（2026-10-14 修 M8）ReDoS 防护：这个正则来自**模型**，且同步跑在主进程上 ——
+  // ReDoS 防护：这个正则来自**模型**，且同步跑在主进程上。
   //   嵌套量词形态（(a+)+ / (x*)* / (d+){2,}）在长行上会指数级回溯，一次调用就能把
-  //   整个应用冻住（同仓库 dev-orders/executor.js 已为同类问题重写过文本解析并留了实测）。
-  //   只拦高置信形态：无内部量词的 (a|b)+ 这类正常写法不拦，避免误伤诊断。
-  //   兜底还有 TIME_BUDGET_MS —— 扫描累计超时即停并如实报告"结果不完整"。
+  //   整个应用冻住。只拦高置信形态：无内部量词的 (a|b)+ 这类正常写法不拦，避免误伤诊断。
+  //   兜底还有 TIME_BUDGET_MS：扫描累计超时即停并如实报告"结果不完整"。
   if (/\([^()]*[+*][^()]*\)\s*(?:[+*]|\{\d+,\d*\})/.test(pattern)) {
     return {
       content: '这个正则含嵌套量词（形如 (a+)+），在长行上会指数级回溯、卡死进程，已拒绝执行。'
@@ -250,7 +246,7 @@ export function grepTool(ctx, args) {
   let filesScanned = 0;
   let skippedBig = 0;          // 因单文件 >2MB 跳过的
   let budgetOut = false;       // 扫描预算是否耗尽（决定了结果是否"完整"）
-  const TIME_BUDGET_MS = 10000;   // M8：扫描累计墙钟预算（防病态正则长跑）
+  const TIME_BUDGET_MS = 10000;   // 扫描累计墙钟预算（防病态正则长跑）
   const startedAt = Date.now();
   let timeOut = false;
   const fileFilter = String(args.filter || '').trim();
@@ -275,7 +271,7 @@ export function grepTool(ctx, args) {
       const rel = path.relative(kind === 'logs' ? ctx.dataRoot : ctx.appRoot, fp).replace(/\\/g, '/');
       const lines = text.split('\n');
       for (let i = 0; i < lines.length; i++) {
-        // M8：每 256 行查一次墙钟预算 —— 病态正则单行就可能很慢，这里保证"整体有界"，
+        // 每 256 行查一次墙钟预算。病态正则单行就可能很慢，这里保证"整体有界"，
         // 超时即停并让下面的提示如实说明"结果不完整"（而不是假装扫完了）。
         if ((i & 255) === 0 && Date.now() - startedAt > TIME_BUDGET_MS) { timeOut = true; break; }
         if (re.test(lines[i])) {
@@ -288,9 +284,9 @@ export function grepTool(ctx, args) {
   };
   for (const r of roots) walk(r, 0);
   // ── 扫描范围必须如实报告 ──
-  // 为什么重要：日志里"没有匹配"可能是真没有，也可能是**没扫到**（预算耗尽/单文件太大跳过）。
-  // 早期版本两者返回一模一样的 `没有匹配「xxx」的内容`，模型无法分辨，会当成"确认不存在"，
-  // 于是得出一个看起来很确定、其实是"我没看完"的结论。诊断工具最不该犯这种错。
+  // 日志里"没有匹配"可能是真没有，也可能是**没扫到**（预算耗尽/单文件太大跳过）。
+  // 两者返回一模一样的"没有匹配"时，模型无法分辨，会当成"确认不存在"，
+  // 得出一个看起来很确定、其实是"我没看完"的结论。诊断工具最不该犯这种错。
   const notes = [];
   if (hits.length >= LIMITS.grepHits) notes.push(`已达 ${LIMITS.grepHits} 条命中上限，请缩小 pattern`);
   if (budgetOut) notes.push(`扫描预算 ${(LIMITS.grepScanBytes / 1024 / 1024).toFixed(0)}MB 已耗尽，**后面的文件没扫**`);

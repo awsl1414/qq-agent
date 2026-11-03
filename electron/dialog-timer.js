@@ -1,9 +1,9 @@
-// 原生对话框的超时自消（2026-10-16 外部审查 #2）
+// 原生对话框的超时自消。
 //
-// 与 dialog-safe.js 拆开的理由：那个文件要 `import { app, dialog } from 'electron'`，
-// 而 electron 只在打包环境里装得上 —— 混在一起就意味着这套逻辑**没有任何自动化测试**。
-// 而它恰恰是最容易写错的地方，两个坑：
-//   ① 用户点了按钮却**没清定时器** → 进程想退时被未决的 timer 拖着（180s 档能拖三分钟），
+// 与 dialog-safe.js 拆开的原因：那个文件要 import electron，而 electron 只在打包
+// 环境里装得上，混在一起就意味着这套逻辑没有任何自动化测试。它恰恰是最容易写错
+// 的地方，两个坑：
+//   ① 用户点了按钮却没清定时器 → 进程想退时被未决的 timer 拖着（180s 档能拖三分钟），
 //      表现为"点了退出但进程半天不退"；
 //   ② 超时回调里再抛一次 → 退出路径上多一条未处理拒绝，反而更难查。
 //
@@ -26,14 +26,14 @@ export function scheduleAutoClose(p, {
   if (!(autoCloseMs > 0)) return null;
 
   let done = false;                 // true = 已收场（用户点了 / 已超时 / 手动取消）
-  let timer = null;                 // 先声明：finish 里要清它，避免 TDZ 疑虑
+  let timer = null;                 // 先声明：finish 里要清它
   const finish = (act) => {
     if (done) return;
     done = true;
-    // ① 无论哪种收场，定时器都必须清掉 —— 否则进程退出被未决 timer 拖着
+    // ① 无论哪种收场，定时器都必须清掉，否则进程退出被未决 timer 拖着
     try { clearTimer(timer); } catch { /* 已触发过的定时器清不掉无所谓 */ }
     if (typeof act !== 'function') return;
-    // ② 动作抛错时**吞掉**：这是退出路径，再抛只会变成未处理拒绝、把真正的退出
+    // ② 动作抛错时吞掉：这是退出路径，再抛只会变成未处理拒绝、把真正的退出
     //    原因盖住。调用方（dialog-safe）传入的兜底动作本身是 app.quit()，不会再抛。
     try { act(); } catch { /* 退出路径上不添乱 */ }
   };

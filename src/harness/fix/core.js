@@ -1,33 +1,33 @@
 // 自动修复的**行为层**：工单存储、暂存区、快照、落地、回滚、路径分级。
 //
-// ── 为什么单独一个插件，而不是塞进 self-doctor ──
+// ── 为什么独立成模块，而不是塞进 self-doctor ──
 //   self-doctor 的清单与文件头都写死「全程只读，不写任何被检对象」，
 //   把写能力塞进去会直接违背它自己的身份契约（而"扩展契约自洽"正是 self-doctor 自己查的东西）。
-//   本项目约定每个扩展自包含、不跨插件 import —— 所以修复能力独立成 self-fix，
+//   本项目约定每个扩展自包含、不跨插件 import。所以修复能力独立成 self-fix，
 //   通过软依赖 api.capability('doctor.report' / 'doctor.scan-project') 取诊断信息。
 //
 // ── 红线（与 forge-tools.js 同构，方向是"写"）──
 //   1. 所有写盘只落在 <DATA_DIR>/plugin-data/self-fix/ 之下（暂存区 / 快照 / 工单 / 沙箱）。
-//      绝不写 plugins/ 之外…… 更准确地说：**只有 fix.commit 这一个函数**才允许
-//      把暂存区内容搬回真实路径，且搬运前必须先落快照 + fsync。
+//      **只有 fix.commit 这一个函数**才允许把暂存区内容搬回真实路径，
+//      且搬运前必须先落快照 + fsync。
 //   2. 路径解析四道闸：语法干净 → 无 `..` / 绝对路径 → realpath 后仍在允许根内 → 后缀白名单。
 //   3. 分级：L0 元部件一票否决（连人工都不能一键放行）。
 //
-// ⚠️ 这里拦得住"路径逃逸"，拦不住"改动本身有问题" —— 后者靠 checks.js 的协议闸 + 人工闸。
+// 这里拦得住"路径逃逸"，拦不住"改动本身有问题"：后者靠 checks.js 的协议闸 + 人工闸。
 
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 // 内置基线重算：fix.commit / fix.rollback 动到内置模块目录时，把指纹刷新回
 // builtin-modules.json（不管的话，下轮热重扫会把改动过的内置模块当"占名顶替"拦下）。
-// 细节见 plugin-loader.js 的 refreshBuiltinEntry 注释（2026-10-08 修的闭环缺口）。
+// 细节见 plugin-loader.js 的 refreshBuiltinEntry 注释。
 import { refreshBuiltinEntry } from '../../plugin-loader.js';
 
 // ── 允许写入的后缀 ────────────────────────────────────────────────────────
 export const ALLOWED_EXT = /\.(js|mjs|cjs|json|md|txt|css|html|yml|yaml)$/i;
 
 /**
- * L0「元部件」—— 一票否决，模型不得修改。
+ * L0「元部件」：一票否决，模型不得修改。
  *
  * 判据不是"重要"，而是**「模型若能改它，就等于改掉了约束本身」**：
  *   · 本模块自身（self-fix）：能改自己就能拆掉闸门与令牌校验；
@@ -36,9 +36,9 @@ export const ALLOWED_EXT = /\.(js|mjs|cjs|json|md|txt|css|html|yml|yaml)$/i;
  *   · 加载器沙箱与清单校验（plugin-loader.js）：能改它就能让写盘不受限；
  *   · 审计、备份、暂存目录：能改它们就能抹掉痕迹。
  */
-// ⚠️ 2026-11-02：四个开发工具链模块已内置化到 src/harness/（见 src/harness/index.js），
-//    `plugins/` 下的同名目录是历史残留、已删除。这份前缀表若继续写旧路径，
-//    L0 会**全部落空** —— 模型可以改掉闸门本身，等于约束失效。改目录结构时这里必须同步。
+// 四个开发工具链模块已内置化到 src/harness/（见 src/harness/index.js），
+// `plugins/` 下的同名目录已删除。这份前缀表若继续写旧路径，L0 会**全部落空**：
+// 模型可以改掉闸门本身，等于约束失效。改目录结构时这里必须同步。
 export const L0_PREFIXES = [
   'src/harness/fix/',
   'src/harness/doctor/',
@@ -66,7 +66,7 @@ export function classify(rel) {
 
 /**
  * 「运行态用户数据」禁区（P5）。
- * 判据：这是**用户的资产**，不是程序的逻辑 —— 改坏了不可逆，而且正确做法是走
+ * 判据。这是**用户的资产**，不是程序的逻辑，改坏了不可逆，而且正确做法是走
  * 既有的迁移/导入通道（那些通道自带备份与回滚），不是让修复链路顺手改。
  */
 export function isUserDataPath(rel) {
@@ -204,7 +204,7 @@ export function writeRecord(root, id, rec) {
 export function readVerify(root, id) { return readJsonSafe(verifyFile(root, id)); }
 export function writeVerify(root, id, data) { writeJsonAtomic(verifyFile(root, id), data); }
 
-/** 列出全部工单（新的在前）。损坏的文件跳过但不隐藏 —— 计数里体现。 */
+/** 列出全部工单（新的在前）。损坏的文件跳过但不隐藏：计数里体现。 */
 export function listRecords(root) {
   const dir = fixesDir(root);
   let names = [];
@@ -221,7 +221,7 @@ export function listRecords(root) {
   return { records, corrupt };
 }
 
-/** 删除一笔审计。**不连删快照** —— 快照是回滚的唯一依据，要删必须显式指定。 */
+/** 删除一笔审计。**不连删快照**：快照是回滚的唯一依据，要删必须显式指定。 */
 export function deleteRecord(root, id, { deleteBackup = false } = {}) {
   const rec = readRecord(root, id);
   if (!rec) return { ok: false, error: '工单不存在' };
@@ -235,7 +235,7 @@ export function deleteRecord(root, id, { deleteBackup = false } = {}) {
   if (deleteBackup) {
     try { fs.rmSync(backupDir(root, id), { recursive: true, force: true }); } catch { /* ignore */ }
   }
-  // 删除动作本身也要记账 —— 否则"审计被谁清了"无从追溯（审计系统的全部意义就是可追溯）
+  // 删除动作本身也要记账，否则"审计被谁清了"无从追溯（审计系统的全部意义就是可追溯）
   try {
     ensureDir(fixesDir(root));
     fs.appendFileSync(path.join(root, 'fixes', '_deleted.log'),
@@ -322,7 +322,7 @@ export function sha1(s) {
 /**
  * 把"本次落地 / 回滚触碰到的模块目录"里属于内置模块的那些，重算一遍基线指纹。
  * 只认 plugins/ 与 skills/ 下的一级目录（src/、ui/ 这些不在基线清单里，自然跳过）。
- * @returns {Array<{dir:string, files:number}>} —— 给上层记日志 / 测试断言用
+ * @returns {Array<{dir:string, files:number}>}：给上层记日志 / 测试断言用
  */
 function refreshTouchedBuiltins(paths, appRoot) {
   const out = [];
@@ -344,7 +344,7 @@ function refreshTouchedBuiltins(paths, appRoot) {
 
 /**
  * 落地：**先快照，再写真实文件**。
- * 顺序不能反 —— 反了的话崩溃窗口会留下"改了一半且无法回滚"的状态。
+ * 顺序不能反：反了的话崩溃窗口会留下"改了一半且无法回滚"的状态。
  * 返回 { ok, files:[{scope,path,backupRel,hash,isNew}], error? }。
  */
 export function commit(root, id, appRoot, dataRoot, rec) {
@@ -418,7 +418,7 @@ export function rollback(root, id, appRoot, dataRoot, rec) {
       return { ok: false, error: `回滚失败：${f.path} —— ${e.message}` };
     }
   }
-  // 回滚把文件换回旧版本 —— 基线若在落地时重算过，这里要同步重算回来。
+  // 回滚把文件换回旧版本：基线若在落地时重算过，这里要同步重算回来。
   const baseline = refreshTouchedBuiltins(snap.map((f) => f.path), appRoot);
   return { ok: true, restored, removed, baseline };
 }

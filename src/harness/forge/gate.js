@@ -5,34 +5,34 @@
 //
 // ── 为什么不用 self-doctor/scan.js 的规则 ──
 //   1. **语义不同**。scan.js 是 lint（severity: info/warning，"你可能想看看"），
-//      对 `eval` 的态度是注释里明写的"计算器技能属预期用法"——刻意宽松。
+//      对 `eval` 的态度是注释里明写的"计算器技能属预期用法"，刻意宽松。
 //      这里要的是**安全策略**（block/confirm/allow），尺度必须更严。
 //   2. **项目约定**：每个 Skill 自包含，不跨插件 import
 //      （plugin-loader.js 明确把"逃出自包含模型"列为要防的事）。
 //   3. 两者的重叠部分（child_process / dynamic-eval / process-exit）在这里都覆盖到了，
 //      并额外补上了凭据读取、符号链接等在**生成代码**场景下才特别危险的项。
 //
-// ⚠️ 静态扫描是启发式的，不是沙箱。它挡的是"模型顺手写出危险调用"，
-//    挡不住精心构造的绕过。所以它必须与**人工确认**配合使用 —— 见 index.js 的注释。
+// 静态扫描是启发式的，不是沙箱。它挡的是"模型顺手写出危险调用"，
+// 挡不住精心构造的绕过。所以它必须与**人工确认**配合使用，见 index.js 的注释。
 
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';   // M6（2026-10-14）：语法闸结果缓存的哈希
+import crypto from 'node:crypto';   // 语法闸结果缓存的哈希
 import { spawnSync } from 'node:child_process';
 import { draftDir } from './forge-tools.js';
 
 // 闸门的文件数上限。**注意与写盘时的防跑飞上限（forge-tools 的 20）是两件事**：
 // 写盘那道上限管的是"模型别一次生成上百个文件"；这道只管"这个包是不是离谱地大"。
-// 用 20 会拦死正常的第三方包 —— 2026-10-08 实测：27 个文件的包（emotion-core）
-// 在「改别人的包」里被拦死，且结构闸一失败后面四道检查全跳过，用户以为"配置坏了"。
+// 用 20 会拦死正常的第三方包：27 个文件的包（emotion-core）在「改别人的包」里被拦死，
+// 且结构闸一失败后面四道检查全跳过，用户以为"配置坏了"。
 export const GATE_MAX_FILES = 200;
 
 // ── 闸门 2 的策略表 ────────────────────────────────────────────────────────
 //
 // level 的含义：
-//   block   —— 一票否决。模型必须换实现，用户也无法放行。
-//   confirm —— 标红，但用户在界面上可以显式放行（有些是正当用法）。
-//   notice  —— 只提示，不拦。
+//   block：一票否决。模型必须换实现，用户也无法放行。
+//   confirm：标红，但用户在界面上可以显式放行（有些是正当用法）。
+//   notice：只提示，不拦。
 //
 // why 会直接展示给模型，所以要写成"为什么不行 + 怎么改"。
 const DANGER_RULES = [
@@ -57,9 +57,9 @@ const DANGER_RULES = [
     id: 'credential-read',
     level: 'block',
     // 必须覆盖**真实存放凭据的文件名**，而不只是"代码里硬编码了一个字面量"。
-    // 教训（2026-10-07 审查）：原规则只认 account.json，于是
+    // 教训（审查）：只认 account.json 时，
     //   JSON.parse(fs.readFileSync('data/config.json')).apiKey
-    // 完整地穿了过去 —— 而 apiKey 恰恰就存在 data/config.json 里（不是 account.json）。
+    // 完整地穿了过去，而 apiKey 恰恰就存在 data/config.json 里（不是 account.json）。
     // `apiKey\s*[:=]\s*['"]…` 只能挡住"硬编码字面量"，挡不住"读文件再取字段"这一真实攻击形态。
     re: /account\.json|config\.json|\.env\b|apiKey\s*[:=]\s*['"][^'"]{8,}|dshProviderKeys|accessToken|httpAccessToken|\bcookie\b/i,
     title: '读取凭据',
@@ -68,9 +68,9 @@ const DANGER_RULES = [
   },
   {
     // ── 能力闸（比字符串黑名单更可靠的一条路）────────────────────────────
-    // 为什么加这条：`credential-read` 这类正则永远追不上等价写法
+    // `credential-read` 这类正则永远追不上等价写法
     // （require('f'+'s')、fs['readFileSync']、动态 import）。真正稳定的判据是
-    // **代码需不需要这些模块的能力** —— 出现了就说明要碰文件系统/进程/网络栈，
+    // **代码需不需要这些模块的能力**：出现了就说明要碰文件系统/进程/网络栈，
     // 而自动生成的扩展没有任何正当理由需要它们。
     id: 'dangerous-import',
     level: 'block',
@@ -82,7 +82,7 @@ const DANGER_RULES = [
       + '也正是凭据泄露（读 config.json）与命令执行的入口。请改用 api.* 能力。'
   },
   {
-    // ⚠️（2026-10-14 修 H4）process.getBuiltinModule 是 **Node 22+ 内置**的取模块通道：
+    // process.getBuiltinModule 是 **Node 22+ 内置**的取模块通道：
     //   它既不写 import 也不写 require，任何基于这两者的正则都结构性看不见它
     //   （`process.getBuiltinModule('child_process')` 即可拿到完整进程能力）。
     //   自动生成的扩展没有任何正当用途需要它 → 与导入高危模块同档，直接 block。
@@ -137,14 +137,14 @@ const DANGER_RULES = [
     id: 'dynamic-import',
     level: 'confirm',
     // import(变量)：import() 后面不是引号/反引号开头 → 运行期才决定加载什么，
-    // 静态分析全部失效（含本闸门的其它规则）—— 闸门拦不住你真正 import 的东西。
+    // 静态分析全部失效（含本闸门的其它规则），闸门拦不住你真正 import 的东西。
     re: /\bimport\s*\(\s*[^'"`)]/,
     title: '动态 import（加载目标在运行期才确定）',
     why: 'import(变量) 会绕过所有静态检查 —— 闸门无法知道你最终加载了什么代码。'
       + '请改为静态 import 声明，或 import 字符串字面量。'
   },
   {
-    // ⚠️（2026-10-14 修 H4）上一条规则只拦"import( 后面不是引号"的形态，
+    // 上一条规则只拦"import( 后面不是引号"的形态，
     //   而**引号里的拼接**同样让加载目标在运行期才确定：
     //     require('node:child' + '_process') / import('node:' + m)（拼接）
     //     await import(`node:${m}`)（模板串）
@@ -171,7 +171,7 @@ const DANGER_RULES = [
   {
     id: 'timer-leak',
     level: 'notice',
-    // 全文级规则（check 而非 re）：单看一行判断不了 —— setInterval 出现但
+    // 全文级规则（check 而非 re）：单看一行判断不了：setInterval 出现但
     // 同文件没有 clearInterval 才算泄漏；deactivate 里清了就是正经写法。
     check: (code) => /setInterval\s*\(/.test(code) && !/clearInterval\s*\(/.test(code),
     title: 'setInterval 没有 clearInterval（疑似定时器泄漏）',
@@ -209,7 +209,7 @@ const API_VERSION = 1;
  * 跑完五道闸门。
  *
  * 前四道（结构 / 语法 / 危险模式 / 声明-实现）回答的是"这东西**安全吗、能装上吗**"。
- * 第五道 `env`（本地环境适配）回答的是另一个问题：**装上之后能正常工作吗** ——
+ * 第五道 `env`（本地环境适配）回答的是另一个问题：**装上之后能正常工作吗**：
  * 第三方扩展常常用着本机没有的能力、或调用了本地不存在的 API。
  * 这一道只在调用方提供了 env 时才跑（纯函数不知道本机装了啥）。
  *
@@ -236,7 +236,7 @@ export function runGates(ctx, draftId, opts = {}) {
 
   const skip = (why) => ({ ok: false, issues: [{ level: 'block', code: 'skipped', title: why, why: '' }] });
 
-  // 结构不过就没必要往下扫 —— 连入口文件都没有，扫什么
+  // 结构不过就没必要往下扫。连入口文件都没有，扫什么
   const syntax = structure.ok
     ? gateSyntax(base, gopts)
     : skip('结构未通过，跳过语法检查');
@@ -262,7 +262,7 @@ export function runGates(ctx, draftId, opts = {}) {
     // 内容摘要：人工确认与落盘之间的"这份东西没被改过"凭据。
     // 闸门结论与安装之间隔着人看界面 + 点按钮，草稿完全可能在这段时间被改
     // （模型继续修改、另一个请求覆盖写）。只按 draftId 发许可，等于许可的是
-    // "这个名字"，不是"这份内容" —— 所以票要绑摘要，安装时再算一遍比对。
+    // "这个名字"，不是"这份内容"。所以票要绑摘要，安装时再算一遍比对。
     digest: draftDigest(base),
     notice: all.filter((i) => i.level === 'notice').length,
     gates: { structure, syntax, danger, contract, env },
@@ -275,26 +275,24 @@ export function runGates(ctx, draftId, opts = {}) {
 
 // ── 闸门 4：语法 ──────────────────────────────────────────────────────────
 //
-// 结构检查（以及原来的危险/契约两道）全是正则级检查，抓不住**语法错误** ——
+// 结构检查（以及原来的危险/契约两道）全是正则级检查，抓不住**语法错误**：
 // 而那是最坑小白的失败模式：模型写出一个 SyntaxError 的 index.js，全部闸过、
-// 装上、开启，
-// 然后 register() 在加载时直接抛错，用户看到的是"装了、开了、没反应"。
+// 装上、开启，然后 register() 在加载时直接抛错，用户看到的是"装了、开了、没反应"。
 //
 // 做法：node --check（只解析不执行，~100ms/文件）。两个关键细节：
 //   · Electron 主进程里 process.execPath 是 electron.exe，直接跑 --check
-//     会启动 GUI。必须带 ELECTRON_RUN_AS_NODE=1 让它以纯 Node 模式运行
-//     （Electron 官方支持的开关）。
+//     会启动 GUI。必须带 ELECTRON_RUN_AS_NODE=1 让它以纯 Node 模式运行。
 //   · 生成代码是 ESM（模板教的就是 export function register），所以 stdin
 //     模式配 --input-type=module。module 语法是 CJS 的严格超集，CJS 风格
-//     的草稿（require 调用）在这个模式下也能通过 —— require 只是普通标识符。
+//     的草稿（require 调用）在这个模式下也能通过：require 只是普通标识符。
 //
 // 检查器起不来（极端环境）时降级为 notice：语法闸缺失不能把整条安装链堵死，
 // 三道静态闸与人工确认仍然在。
 /**
- * 语法检查结果缓存（M6，2026-10-14）。
+ * 语法检查结果缓存。
  * key = 「输入模式 + 代码内容」的 sha1；value = { verdict, detail, at }。
  * verdict：'ok' | 'error'（有语法错，detail 是 node --check 的正文）| 'unavailable'（检查器起不来）。
- * 只缓存与文件名无关的信息 —— issue 的标题（含文件名）在使用处重建。
+ * 只缓存与文件名无关的信息：issue 的标题（含文件名）在使用处重建。
  * 上限 512 条，满了淘汰最久未访问的一半。
  */
 const SYNTAX_CACHE = new Map();
@@ -316,11 +314,11 @@ function gateSyntax(base, opts = {}) {
   const jsFiles = listAll(base).filter((f) => /\.(js|mjs|cjs)$/i.test(f));
   if (!jsFiles.length) return { ok: true, issues };
 
-  // ⚠️（2026-10-14 修 M6）两个防"主进程冻结"的加护：
+  // 两个防"主进程冻结"的加护：
   //   ① 结果按**代码内容哈希**记忆：spawnSync 是同步阻塞（~50-150ms/文件，
   //      检查器挂起时 8s/文件，200 个文件最坏能把主进程冻住几十分钟）。
   //      而 forge.list（被 UI、被 install 预检、被**每轮提示词组装** promptSections
-  //      调用）会对同一份草稿反复跑全套闸门 —— 内容没变就不该反复起进程。
+  //      调用）会对同一份草稿反复跑全套闸门：内容没变就不该反复起进程。
   //   ② 整轮时间预算：超出即停止起新进程，剩余文件如实记为"未检查"（notice），
   //      宁可标注"没查完"也不把应用冻死。
   const startAt = Date.now();
@@ -373,9 +371,9 @@ function gateSyntax(base, opts = {}) {
       issues.push({ level: 'notice', code: 'syntax-check-unavailable', title: '语法检查未运行（检查器不可用）', why: '本机无法启动语法检查器 —— 请人工确认代码能运行。' });
       continue;
     }
-    // ⚠️ spawnSync 不抛异常，错误在 res.error / res.status=null。
-    //    必须先分清"检查器没跑起来"（降级 notice，绝不能误报 block）
-    //    与"检查器跑了、代码真有语法错"（block）。
+    // spawnSync 不抛异常，错误在 res.error / res.status=null。
+    // 必须先分清"检查器没跑起来"（降级 notice，绝不能误报 block）
+    // 与"检查器跑了、代码真有语法错"（block）。
     if (res.error || res.status === null) {
       const why = res.error?.code === 'ETIMEDOUT'
         ? '检查器没在时限内返回 —— 请人工确认代码能运行。'
@@ -399,8 +397,8 @@ function gateSyntax(base, opts = {}) {
       why: `代码无法通过解析 —— 装上后扩展会加载失败。node --check 的报告：\n${firstLines}`
     };
     issues.push(issue);
-    // ⚠️ 出错结果**也缓存**（同一份坏代码反复触发时不必反复起进程）；
-    //    缓存的是与文件名无关的错误正文，标题按当前文件重建。
+    // 出错结果**也缓存**（同一份坏代码反复触发时不必反复起进程）；
+    // 缓存的是与文件名无关的错误正文，标题按当前文件重建。
     cacheSyntaxResult(cacheKey, 'error', issue.why);
   }
   return { ok: !issues.some((i) => i.level === 'block'), issues };
@@ -424,7 +422,7 @@ function gateStructure(base, opts = {}) {
     return { ok: false, issues, kind: null, manifest: null, entry: null };
   }
 
-  // 后缀白名单（写工具已经拦过，这里二次确认 —— 不信任任何单一环节）
+  // 后缀白名单（写工具已经拦过，这里二次确认：不信任任何单一环节）
   for (const f of files) {
     if (!/\.(js|mjs|cjs|json|md|txt|css|html)$/i.test(f)) {
       push('block', 'bad-ext', `不允许的文件类型：${f}`, '只能放 js/mjs/cjs/json/md/txt/css/html。');
@@ -442,7 +440,7 @@ function gateStructure(base, opts = {}) {
     return { ok: false, issues, kind: null, manifest: null, entry: null };
   }
 
-  // 解析清单（含 BOM 处理 —— Windows 编辑器常写 BOM，JSON.parse 会直接抛）
+  // 解析清单（含 BOM 处理：Windows 编辑器常写 BOM，JSON.parse 会直接抛）
   let manifest = null;
   try {
     let text = fs.readFileSync(path.join(base, manifestRel), 'utf8');
@@ -471,16 +469,16 @@ function gateStructure(base, opts = {}) {
       `当前核心的扩展 API 版本是 ${API_VERSION}。`);
   }
 
-  // ── 清单字段结构校验（收包人报告③④⑤）────────────────────────────────
-  // 为什么要在这里拦：加载器对这些字段全部"宽进 + 静默降级"——
+  // ── 清单字段结构校验 ───────────────────────────────────────────────────
+  // 为什么要在这里拦：加载器对这些字段全部"宽进 + 静默降级"：
   // tools 写成字符串 → 声明-实现对账空转；prompt 写成字符串 → 静默丢弃；
   // permissions 写成字符串 → 零权限；category 拿错词表 → 回退 utility。
   // 运行时不报错、UI 无提示，模型与用户都毫无线索。闸门必须在装之前指出。
-  // （运行时侧的宽容化——字符串 prompt 转 instruction、permissions 归一化——
+  // （运行时侧的宽容化：字符串 prompt 转 instruction、permissions 归一化：
   //   已在 src/skills/manifest.js 落地；这里拦的是"作者明显写错了"，教他改对。）
 
   // tools：字符串数组或 {id,...} 对象数组。它是"声明-实现对账"与人工确认的输入，
-  // 结构错了对账就空转 —— 报告⑥"静默错配"的温床之一。
+  // 结构错了对账就空转："静默错配"的温床之一。
   if (manifest.tools !== undefined && !Array.isArray(manifest.tools)) {
     push('block', 'bad-tools', 'tools 必须是数组',
       `当前是 ${Array.isArray(manifest.tools) ? '' : `${typeof manifest.tools} 类型`}。`
@@ -496,7 +494,7 @@ function gateStructure(base, opts = {}) {
 
   // prompt：加载器只认 { instruction } 或 { sections: [...] }。
   // 字符串写法在运行时已被宽容成 instruction（manifest.js），但金标准示例与
-  // 生成约定都是对象 —— 写字符串多半是作者没看懂格式，当场纠正比静默收下好。
+  // 生成约定都是对象：写字符串多半是作者没看懂格式，当场纠正比静默收下好。
   if (manifest.prompt !== undefined) {
     if (typeof manifest.prompt !== 'object' || manifest.prompt === null || Array.isArray(manifest.prompt)) {
       push('block', 'bad-prompt', 'prompt 必须是对象（不能是字符串/数组）',
@@ -509,7 +507,7 @@ function gateStructure(base, opts = {}) {
   }
 
   // permissions：必须是字符串数组（当前白名单只有 web_fetch）。
-  // 写成字符串在旧版会静默变零权限（报告④）；写不认识的值也不会生效（见第 4 道闸）。
+  // 写成字符串会静默变零权限；写不认识的值也不会生效（见第 4 道闸）。
   if (manifest.permissions !== undefined && !Array.isArray(manifest.permissions)) {
     push('block', 'bad-permissions', 'permissions 必须是字符串数组',
       `当前是 ${typeof manifest.permissions} 类型。正确写法：permissions: ["web_fetch"]。`
@@ -517,10 +515,10 @@ function gateStructure(base, opts = {}) {
   }
 
   // category：清单级白名单（与 src/skills/manifest.js 的 VALID_CATEGORIES 同口径）。
-  // ⚠️ 与工具的 category 是**两套词表**：清单级 = model/message/knowledge/media/utility/fun/query；
+  // 与工具的 category 是**两套词表**：清单级 = model/message/knowledge/media/utility/fun/query；
   //    工具级（tools[] 里）= messaging/sticker/query/memory/web/system/media/knowledge/utility/...
-  //    金标准示例两级并存，模型最容易把 "system"（工具级）抄到清单级 —— 装上后被
-  //    静默回退成 utility（收包人报告⑤的混淆来源），在这里拦住并讲清区别。
+  //    金标准示例两级并存，模型最容易把 "system"（工具级）抄到清单级：装上后被
+  //    静默回退成 utility，在这里拦住并讲清区别。
   const VALID_CATEGORIES = new Set(['model', 'message', 'knowledge', 'media', 'utility', 'fun', 'query']);
   if (manifest.category !== undefined && !VALID_CATEGORIES.has(manifest.category)) {
     push('block', 'bad-category', `清单级 category 非法：${manifest.category}`,
@@ -543,12 +541,11 @@ function gateStructure(base, opts = {}) {
 
   // 限额（写工具已按文件拦过，这里按整体再确认一次）
   //
-  // ⚠️ maxFiles 是"防跑飞启发式"，**不是安全边界** —— 真正的防跑飞在**写盘时**
+  // maxFiles 是"防跑飞启发式"，**不是安全边界**：真正的防跑飞在**写盘时**
   //    （forge-tools 的 write-new：生成草稿时第 21 个文件就被拒）。闸门这道只该拦
-  //    "离谱的大包"，不该拦正常的第三方包。
-  //    2026-10-08 实测报障：`emotion-core`（27 个文件）在「改别人的包」里被这里拦死，
-  //    而且因为结构闸先失败，后面语法/危险/契约/环境四道检查全被跳过 ——
-  //    用户看到的是"配置一样，全是阻断"，三个扩展一个都装不了。默认 20 → 200。
+  //    "离谱的大包"，不该拦正常的第三方包。`emotion-core`（27 个文件）曾在
+  //    「改别人的包」里被这里拦死，而且因为结构闸先失败，后面语法/危险/契约/环境
+  //    四道检查全被跳过：用户看到的是"配置一样，全是阻断"，三个扩展一个都装不了。
   const maxFiles = Number(opts.maxFiles) || GATE_MAX_FILES;
   if (files.length > maxFiles) push('block', 'too-many-files', `文件过多（${files.length}）`, `一个扩展不该有这么多文件（上限 ${maxFiles}）。`);
 
@@ -557,14 +554,14 @@ function gateStructure(base, opts = {}) {
 
 // ── 闸门 2：危险模式 ──────────────────────────────────────────────────────
 //
-// ⚠️ 两档尺度（2026-10-22）：同一把尺子量不了两种东西。
-//   · generated（模型现写的代码）：fs / child_process / net 一票否决 —— 自动生成的扩展
+// ⚠️ 两档尺度：同一把尺子量不了两种东西。
+//   · generated（模型现写的代码）：fs / child_process / net 一票否决：自动生成的扩展
 //     没有正当理由读文件、起进程。
 //   · third-party（别人打的包 / 市场下载的）：这三类降为 **confirm**（勾选可放行）。
 //     原因很实际：本机自带的 media-download 要 fs 落盘、video-frames 要调 ffmpeg、
-//     sticker 要读素材 —— 真实插件几乎都需要。一律 block 的结果不是"更安全"，
+//     sticker 要读素材：真实插件几乎都需要。一律 block 的结果不是"更安全"，
 //     而是市场包 100% 装不上，用户只会把整条链路关掉。
-//   不可降的两条：credential-read（读 config.json / apiKey）、process-exit（杀进程）——
+//   不可降的两条：credential-read（读 config.json / apiKey）、process-exit（杀进程）：
 //   它们没有任何第三方扩展的正当用途。
 const THIRD_PARTY_CONFIRM = new Set(['child-process', 'dangerous-import']);
 const THIRD_PARTY_NOTE = '\n第三方扩展包通常需要这些能力（本机自带插件大多如此），因此这里降为「需确认」：你勾选后仍可安装。';
@@ -593,7 +590,7 @@ function gateDanger(base, manifest, entryRel, opts) {
       why = `${rule.why}${THIRD_PARTY_NOTE}`;
     }
 
-    // 全文级规则：check(fullText) —— 单看一行判断不了的模式（见 timer-leak 注释）
+    // 全文级规则：check(fullText)：单看一行判断不了的模式（见 timer-leak 注释）
     if (rule.check) {
       for (const s of srcs) {
         if (!rule.check(s.text)) continue;
@@ -647,19 +644,19 @@ function gateContract(manifest, entryRel, base) {
   try { entrySrc = fs.readFileSync(path.join(base, entryRel), 'utf8'); } catch { /* 上面已拦 */ }
 
   // 静态找 registerTool({ id: 'xxx' })
-  // ⚠️ 这是启发式：抓 `<...id: 'xxx'...>` 且附近有 registerTool。
-  //    抓不到 ≠ 没实现（可能是变量拼接）—— 所以"抓不到就报 confirm 让人看一眼"，
+  // 这是启发式：抓 `<...id: 'xxx'...>` 且附近有 registerTool。
+  //    抓不到 ≠ 没实现（可能是变量拼接）。所以"抓不到就报 confirm 让人看一眼"，
   //    绝不静默放行。这正是 self-doctor 那条"声明了工具但入口未注册"的规则精神。
   //
-  // 块提取：**等长脱敏**后按括号配对取整个 registerTool(...) 调用 ——
+  // 块提取：**等长脱敏**后按括号配对取整个 registerTool(...) 调用：
   // 字符串内容换成 X 占位、注释换成空格，长度不变、索引与原 src 一一对应：
   //   · 括号配对在脱敏文本上做（不受字符串里的怪括号干扰）；
-  //   · 返回的块从**原 src** 按同一区间切 —— id 提取要的是真实字符串内容。
+  //   · 返回的块从**原 src** 按同一区间切：id 提取要的是真实字符串内容。
   //
-  // ⚠️ 2026-10-10 收包人报告⑥的根源：旧实现把字符串剥成 ''/""/`` 后**从剥过的
-  //    文本里提 id**，`id: 'foo'` 早已变成 `id: ''` —— registered 集合恒为空，
+  // 必须等长脱敏：把字符串剥成 ''/""/`` 后**从剥过的文本里提 id** 的话，
+  //    `id: 'foo'` 早已变成 `id: ''`：registered 集合恒为空，
   //    possibly-missing / registered-not-declared 两道对账从此全部空转，
-  //    "清单声明 A、代码注册 B"静默穿过。等长脱敏后两头都对得上。
+  //    "清单声明 A、代码注册 B"静默穿过。
   const extractRegisterBlocks = (src) => {
     const scrubbed = src
       .replace(/\/\/[^\n]*/g, (m) => ' '.repeat(m.length))
@@ -692,8 +689,8 @@ function gateContract(manifest, entryRel, base) {
   const sawRegisterCall = blocks.length > 0 || /registerTool\s*\(/.test(entrySrc);
 
   // 注册块缺 execute：回调键名写错（如 handler: / run:）会让工具在加载器注册失败，
-  // **整个扩展**加载失败，UI 只能看到 v0.0.0 占位 —— 实战事故（2026-10-06 bmi-helper
-  // 适配）：模型写了 handler:，五道闸全放行，装上去才炸。闸门必须拦在装之前。
+  // **整个扩展**加载失败，UI 只能看到 v0.0.0 占位：实战事故（bmi-helper 适配）：
+  // 模型写了 handler:，五道闸全放行，装上去才炸。闸门必须拦在装之前。
   const noExecute = blocks.filter((b) => !/\bexecute\b/.test(b) && /['"`]?[a-zA-Z_$][\w$]*['"`]?\s*:/.test(b));
   for (const b of noExecute) {
     const idm = b.match(/id\s*:\s*['"`]([^'"`]+)['"`]/);
@@ -719,9 +716,9 @@ function gateContract(manifest, entryRel, base) {
     const undeclared = [...registered].filter((r) => !declared.includes(r));
 
     if (missing.length === declared.length) {
-      // 声明与注册**完全错位**（零交集）—— 这不是"可能漏了"，是 id 写岔了：
-      // 装上后清单与实现永久脱节，人工确认看清单、运行时跑的是另一套 id
-      // （收包人报告⑥"静默错配"）。两边都是字面量、可信度高，直接 block。
+      // 声明与注册**完全错位**（零交集）。这不是"可能漏了"，是 id 写岔了：
+      // 装上后清单与实现永久脱节，人工确认看清单、运行时跑的是另一套 id。
+      // 两边都是字面量、可信度高，直接 block。
       issues.push({
         level: 'block', code: 'id-mismatch',
         title: `清单声明的工具与实际注册的完全对不上`,
@@ -737,7 +734,7 @@ function gateContract(manifest, entryRel, base) {
       });
     }
 
-    // 反向：注册了但清单没声明 —— 不影响功能，但清单与实现对不上会误导后续维护
+    // 反向：注册了但清单没声明。不影响功能，但清单与实现对不上会误导后续维护
     if (undeclared.length) {
       issues.push({
         level: 'notice', code: 'registered-not-declared',
@@ -762,21 +759,20 @@ function gateContract(manifest, entryRel, base) {
 // ── 闸门 4：本地环境适配 ─────────────────────────────────────────────────
 //
 // 与前三道的分工：那三道判"安全 / 能不能装上"，这一道判"装上后能不能工作"。
-// 对**第三方**扩展尤其重要 —— 它们往往对着另一套环境写的：
+// 对**第三方**扩展尤其重要，它们往往对着另一套环境写的：
 //   · requires 声明了一个本机没人提供的能力 → 核心判定它不可用，永远不激活
 //   · 调用了本地 createSkillApi 没有的 api.xxx → 运行时 TypeError
 //   · id 与已装扩展撞车 → 会被自动加 _1 后缀，但扩展自身若硬编码自己的 id 就会行为异常
 //
-// ⚠️ 这一道只在调用方给了 env 时才跑。gate.js 是纯模块，不知道本机装了什么 ——
+// 这一道只在调用方给了 env 时才跑。gate.js 是纯模块，不知道本机装了什么：
 //    硬要它猜只会产生假结论，不如明确地"不检查"。
 
 /** createSkillApi 实际提供的成员（src/plugin-loader.js）。
- *  改动核心 API 时这里要同步 —— 漏了只表现为"少报一个不适配"，不会误伤。
- *  ⚠️ 三处必须同步：本表 / extension-forge index.js 的 envBrief.knownApis /
- *     plugin-loader.js 的 createSkillApi 本体。2026-10-10 收包人报告①②的教训：
- *     闸门文案推荐 api.storage()，但 createSkillApi 与本表都没有它 —— 模型按文案改
- *     用 storage 反而撞上 unknown-api，两头死路。现在 storage 已真实实现，
- *     表里必须保留。 */
+ *  改动核心 API 时这里要同步：漏了只表现为"少报一个不适配"，不会误伤。
+ *  三处必须同步：本表 / extension-forge index.js 的 envBrief.knownApis /
+ *     plugin-loader.js 的 createSkillApi 本体。教训：闸门文案推荐 api.storage()，
+ *     但 createSkillApi 与本表都没有它：模型按文案改用 storage 反而撞上
+ *     unknown-api，两头死路。现在 storage 已真实实现，表里必须保留。 */
 const KNOWN_APIS = new Set([
   'registerTool', 'config', 'isSkillActive', 'capability', 'hasCapability',
   'storage', 'log', 'warn', 'error', 'fetch', 'utils'
@@ -786,7 +782,7 @@ function gateEnv(base, manifest, entryRel, env) {
   const issues = [];
   if (!env?.envReady) return { ok: true, issues, skipped: true };
 
-  // ① 硬依赖要有提供者 —— 否则该扩展永远不会被激活（装了等于没装）
+  // ① 硬依赖要有提供者，否则该扩展永远不会被激活（装了等于没装）
   const requires = Array.isArray(manifest.requires) ? manifest.requires.map(String) : [];
   if (requires.length && typeof env.hasCapability === 'function') {
     for (const need of requires) {
@@ -803,7 +799,7 @@ function gateEnv(base, manifest, entryRel, env) {
     }
   }
 
-  // ② id 撞车 —— 会被自动改成 xxx_1，但扩展自身写死 id 的地方会错位
+  // ② id 撞车：会被自动改成 xxx_1，但扩展自身写死 id 的地方会错位
   if (env.existingIds && env.existingIds.has(String(manifest.id || ''))) {
     issues.push({
       level: 'notice',
@@ -814,11 +810,11 @@ function gateEnv(base, manifest, entryRel, env) {
     });
   }
 
-  // ③ 调用了本地没有的 api 成员 —— 运行时才会炸，是最典型的"水土不服"
+  // ③ 调用了本地没有的 api 成员：运行时才会炸，是最典型的"水土不服"
   //
-  // ⚠️ 认定"哪个标识符是 skill API 对象"不能只看名字。
-  //    原来写死匹配 `api.xxx`，但本仓库 37 个扩展里**只有 3 个**用 `register(api)`，
-  //    其余用 `setup(x)` 之类 —— 这条检查对它们**完全失效**（假阴性：明明有问题却报"没问题"）。
+  // 认定"哪个标识符是 skill API 对象"不能只看名字：
+  //    写死匹配 `api.xxx` 时，仓库里只有少数扩展用 `register(api)`，其余用
+  //    `setup(x)` 之类，这条检查对它们**完全失效**（假阴性）。
   //    改成按行为认定：**谁身上调过 registerTool，谁就是 api 对象**
   //    （那是 createSkillApi 独有的方法，别的对象不会有）。
   //    这个判据不依赖命名习惯，也不会因为作者把形参叫 ctx/a/theApi 就漏掉。
@@ -849,7 +845,7 @@ function gateEnv(base, manifest, entryRel, env) {
     });
   }
 
-  // ④ permissions 里有本地不认的值 —— 声明了也不会生效，容易让人误以为"已授权"
+  // ④ permissions 里有本地不认的值：声明了也不会生效，容易让人误以为"已授权"
   const perms = Array.isArray(manifest.permissions) ? manifest.permissions.map(String) : [];
   const knownPerms = new Set(['web_fetch']);
   const badPerms = perms.filter((p) => !knownPerms.has(p));
@@ -889,7 +885,7 @@ function listAll(base) {
  * 为什么需要它：**闸门通过 ≠ 安装许可**。两者之间隔着"人看界面、点确认"的
  * 时间窗，而草稿在这段时间里可能被模型改（修改轮）、被另一个请求覆盖写。
  * 只凭 draftId 发许可，许可的是"这个名字"，不是"这份字节"。
- * 所以确认动作要签发一张**绑摘要**的一次性票，落盘前重算比对 —— 内容变了票自动失效。
+ * 所以确认动作要签发一张**绑摘要**的一次性票，落盘前重算比对：内容变了票自动失效。
  *
  * 路径也进摘要：只哈希内容的话，把 a.js 改名成 b.js 能绕过
  * （而文件名恰恰参与入口判定 / 契约校验）。

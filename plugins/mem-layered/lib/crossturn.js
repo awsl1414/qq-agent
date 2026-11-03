@@ -1,18 +1,17 @@
 // 跨轮工作记忆：上一轮说了什么、有没有没说完。
 //
-// ── 它解决的是什么 ───────────────────────────────────────────────────────
-// 只解决一件事：**防复读**。连续两轮里机器人不该把同一句话再说一遍，
+// 只解决一件事：防复读。连续两轮里机器人不该把同一句话再说一遍，
 // 也不该在自己刚说过「我查一下」之后当没说过。
-// 它不是"记住内容" —— 那是长时记忆（blocks/）的职责，两者别混。
+// 它不是"记住内容"，那是长时记忆（blocks/）的职责，两者别混。
 //
-// ── 相对内置 lib/cross-turn.js 的两处实质改动 ────────────────────────────
+// 相对内置 cross-turn 的两处实质改动：
 //   1. 内置版的 saveAfterRun 支持 outcome/lastQuery/unfinished/note，
-//      但它的 index.js 只传了 sent 与 draft —— 也就是说「上一轮查过什么」
-//      「有没有没说完」这两个字段**永远是空的**，渲染出来只剩一句"刚发过"。
+//      但它的 index.js 只传了 sent 与 draft，也就是说「上一轮查过什么」
+//      「有没有没说完」这两个字段永远是空的，渲染出来只剩一句"刚发过"。
 //      本插件在 after-response 里把 recalled（上一轮注入过哪些旧事）也一起存下来，
 //      下一轮就不会把同一件旧事再提一遍。
 //   2. TTL 到期的文件会被 sweep() 真正删掉。内置版只靠 load() 判断过期，
-//      文件永远留在磁盘上 —— 会话多起来就是一个只增不减的目录。
+//      文件永远留在磁盘上，会话多起来就是一个只增不减的目录。
 import fs from 'node:fs';
 import path from 'node:path';
 import { ensureDir, readJson, writeJson, removeFile, safeName, num } from './util.js';
@@ -63,7 +62,7 @@ export class CrossTurn {
 
     const body = String(draft || '').replace(/\s+/g, ' ').trim().slice(0, maxChars);
 
-    // 上一轮注入过哪些旧事 —— 用来避免下一轮复读同一件
+    // 上一轮注入过哪些旧事，用来避免下一轮复读同一件
     const recalledLines = (Array.isArray(recalled) ? recalled : [])
       .map((t) => String(t || '').replace(/\s+/g, ' ').trim())
       .filter(Boolean)
@@ -123,8 +122,8 @@ export class CrossTurn {
 
   /**
    * 删掉过期档案。
-   * ⚠️ 内置版没有这一步：TTL 只在 load() 里判断，文件永远不删 ——
-   *    会话越多这个目录越涨，而且从外面看不出"哪些其实已经作废"。
+   * 内置版没有这一步：TTL 只在 load() 里判断，文件永远不删，
+   * 会话越多这个目录越涨，而且从外面看不出哪些其实已经作废。
    */
   sweep() {
     // 口径与 load() 完全一致：过了 TTL 就是"已经不算数了"，没有留着的理由。

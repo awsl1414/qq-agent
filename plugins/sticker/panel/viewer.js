@@ -1,23 +1,23 @@
 /*
   表情库查看器（plugins/sticker/panel/viewer.js）
 
-  ── 这个页面是怎么拿到数据的 ───────────────────────────────────────────────
+  这个页面是怎么拿到数据的：
   它跑在设置弹窗的 iframe 里，只有两条只读通道（契约见 src/skills/panel.js）：
     · ../panel/viewer.html 同目录资源  → 本页自己（插件目录）
     · ../@data/storage.json            → plugin-data/sticker/storage.json
-  表情库真身在 <DATA_DIR>/stickers.json，页面读不到，也不需要读 ——
-  插件侧（plugins/sticker/index.js 的 writeViewSnapshot）会把一份**只读快照**
+  表情库真身在 <DATA_DIR>/stickers.json，页面读不到，也不需要读：
+  插件侧（plugins/sticker/index.js 的 writeViewSnapshot）会把一份只读快照
   写进 api.storage 的 `view` 键，本页 fetch 出来渲染即可。所以：
 
-  ⚠️ 唯一会写数据的动作是「详情弹层里点保存」（备注/标签/场景）：面板自己
-     仍然写不了任何东西 —— 它只是 postMessage 请宿主转发一次 sticker__note
-     工具调用，宿主侧有来源校验 + 工具白名单（src/routes.js 的 /api/plugin-tool）。
-     其余任何时候这里都是纯只读。
+  唯一会写数据的动作是「详情弹层里点保存」（备注/标签/场景）：面板自己
+  仍然写不了任何东西，它只是 postMessage 请宿主转发一次 sticker__note
+  工具调用，宿主侧有来源校验 + 工具白名单（src/routes.js 的 /api/plugin-tool）。
+  其余任何时候这里都是纯只读。
 
-  ── 两条宿主 CSP 约束（踩过坑的点）────────────────────────────────────────
-    · script-src 'self'  → 内联 <script> 不执行，onclick= 这类内联事件处理器
+  两条宿主 CSP 约束（踩过坑的点）：
+    · script-src 'self'：内联 <script> 不执行，onclick= 这类内联事件处理器
       同样被拦。所以全部用 addEventListener。
-    · img-src 放行 http:/https: → 表情可以直接热链 p.qpic.cn（QQ 表情 CDN，
+    · img-src 放行 http:/https:：表情可以直接热链 p.qpic.cn（QQ 表情 CDN，
       不带 rkey、不会过期），不需要把图片 base64 内联进来。
 */
 
@@ -40,18 +40,18 @@
   /**
    * 快照入口。
    *
-   * ⚠️ 用**相对路径**，不要写成 `/plugin-panel/sticker/@data/storage.json`。
+   * 用相对路径，不要写成 `/plugin-panel/sticker/@data/storage.json`。
    * 本页的 URL 是 `/plugin-panel/<id>/panel/viewer.html`，`../@data/…` 会解析成
-   * `/plugin-panel/<id>/@data/…` —— 于是页面**不必知道自己的插件 id**，
+   * `/plugin-panel/<id>/@data/…`，于是页面不必知道自己的插件 id，
    * 整份 panel/ 目录可以原样复制给别的插件用（改个 plugin.json 就行）。
    * 硬编码 id 的话，复制过去就静默白屏了。
    * 这套 URL 形态是宿主的契约，见 src/skills/panel.js。
    */
   var SNAPSHOT_URL = '../@data/storage.json';
 
-  // ⚠️ 「全部」是**排除已删除**的 —— 插件的删除是软删除，快照里仍然带着被删的
-  //    条目（打 `hidden:true`），默认不显示才符合"我删掉了"的直觉。
-  //    要看删过什么，点「已删除」那个 chip（有东西时才会出现）。
+  // 「全部」是排除已删除的：插件的删除是软删除，快照里仍然带着被删的
+  // 条目（打 `hidden:true`），默认不显示才符合"我删掉了"的直觉。
+  // 要看删过什么，点「已删除」那个 chip（有东西时才会出现）。
   var FILTERS = [
     { key: 'all', label: '全部', test: function (it) { return !it.hidden; } },
     { key: 'annotated', label: '有备注', test: function (it) { return !it.hidden && Boolean(it.note || it.desc); } },
@@ -291,9 +291,9 @@
 
     var list = visible();
     if (!list.length) {
-      // ⚠️ 区分两种情况（R130 修）：库里还有东西但**全被删了**，和"搜索没命中"。
-      //    以前都落到"没有匹配的表情 / 换个关键词"，用户把表情全删掉时会看到
-      //    一句完全对不上的提示。
+      // 区分两种情况：库里还有东西但全被删了，和"搜索没命中"。
+      // 以前都落到"没有匹配的表情 / 换个关键词"，用户把表情全删掉时会看到
+      // 一句完全对不上的提示。
       var aliveCount = state.items.filter(function (it) { return !it.hidden; }).length;
       if (aliveCount === 0) {
         main.appendChild(msgBox('表情都被删掉了', [
@@ -409,10 +409,10 @@
     $('ov').hidden = true;
   }
 
-  // ── 编辑备注/标签（2026-10-18）─────────────────────────────────────────
+  // ── 编辑备注/标签 ────────────────────────────────────────────────────────
   // 面板是只读静态页，自己写不了数据。用户点「保存」→ 请宿主转发一次
   // sticker__note 工具（宿主有来源校验 + 工具白名单，见 /api/plugin-tool）。
-  // 这是**用户明确点击**才发生的写操作，与"页面能随便改数据"是两回事。
+  // 这是用户明确点击才发生的写操作，与"页面能随便改数据"是两回事。
   var pendingCmd = null;   // { reqId, resolve }
   var cmdSeq = 0;
 
@@ -488,7 +488,7 @@
 
     fetch(SNAPSHOT_URL, { cache: 'no-store' })
       // 链尾已有 .catch（状态/渲染都在 catch 之后统一收尾）；
-      // 自检规则会因 then 回调内的 } 误判"链已结束"——显式豁免，2026-10-18。
+      // 自检规则会因 then 回调内的 } 误判"链已结束"，显式豁免。
       // scan-ignore-next-line: unhandled-promise
       .then(function (res) {
         if (res.status === 404) {
@@ -511,7 +511,7 @@
         state.failed = String((error && error.message) || error);
       })
       // 链尾已有 .catch（状态/渲染都在 catch 之后统一收尾）；
-      // 自检规则会因 then 回调内的 } 误判"链已结束"——显式豁免，2026-10-18。
+      // 自检规则会因 then 回调内的 } 误判"链已结束"，显式豁免。
       // scan-ignore-next-line: unhandled-promise
       .then(function () {
         btn.disabled = false;

@@ -1,13 +1,12 @@
-// 「发言即收尾」的收尾精细化（P3，2026-10-22）—— 纯函数，无 IO、无外部依赖。
+// 「发言即收尾」的收尾精细化：纯函数，无 IO、无外部依赖。
 //
 // 为什么单独一个模块：这段判定决定"要不要多跑一轮 LLM"，一轮就是一次全价 prompt
-// （本机实测约 19K token）。逻辑放这里是为了能脱离 electron / OneBot 单测 ——
+// （本机实测约 19K token）。放这里是为了能脱离 electron / OneBot 单测，
 // 编排器那边只负责取事实（插件能力 + 冷却表）再把结果接上。
 //
-// 背景见《表情包发送偏少的成因分析与优化计划-2026-10-22》：10-01 上线的
 // autoEndAfterSend 会把"纯发送批"直接收尾，于是"先说话、下一轮补表情"这条路
-// 物理上不存在。提示词层（P1/P2）只能提高遵从率，模型一旦没同批调用就永久丢失
-// 那次表情；这里是机制层的兜底，但**不是无条件宽限**。
+// 物理上不存在。提示词层只能提高遵从率，模型一旦没同批调用就永久丢失那次表情；
+// 这里是机制层的兜底，但不是无条件宽限。
 
 /** 同一会话两次宽限的最小间隔。 */
 export const STICKER_GRACE_COOLDOWN_MS = 5 * 60 * 1000;
@@ -31,7 +30,7 @@ function safeParse(text) {
  * 这一批一共"说了多少字"（宽限判"短回应"用）。
  *
  * 只认 send_message 的 messages（字符串 / 字符串数组），剥掉 CQ 码、空白与 markdown
- * 修饰符 —— 模型常把 `[CQ:face,id=13]`、`**乐了**`、尾部空格带进来，不剥的话两个字
+ * 修饰符，模型常把 `[CQ:face,id=13]`、`**乐了**`、尾部空格带进来，不剥的话两个字
  * 会被算成十几二十字，短回应永远判不中。
  *
  * 参数解析不出来（坏 JSON / 没有 messages 字段）返回 Infinity（=不是短回应）：
@@ -58,7 +57,7 @@ export function batchSpokenLength(toolCalls) {
 }
 
 /**
- * 宽限轮里的提醒文案。明确"不要重发刚才那句话"—— 宽限轮里模型最常见的动作
+ * 宽限轮里的提醒文案。明确"不要重发刚才那句话"，宽限轮里模型最常见的动作
  * 是把原句再发一遍，群里就会出现重复消息。
  */
 export const STICKER_GRACE_NUDGE =
@@ -96,7 +95,7 @@ export function stickerGraceDecision({
   if (!state || state.enabled === false) return null; // 插件不在场
   const count = state.count === null || state.count === undefined ? null : Number(state.count);
   const level = Number(state.level);
-  // count=null 表示库还没同步上来。拿不准就别宽限 —— 宁可这次少个表情，
+  // count=null 表示库还没同步上来。拿不准就别宽限，宁可这次少个表情，
   // 也不要在"其实没图可发"的时候白烧一轮 prompt。
   if (count === null || !Number.isFinite(count) || count <= 0) return null;
   // 0/1 档是用户明确要"少发"，宽限会跟配置对着干。

@@ -36,9 +36,9 @@ export function isPairingKeyword(keyword) {
 }
 
 /**
- * 构造 Pixiv 搜索词：关键词 + solo（可选）+ 质量标签（可选）。
- * 抽成纯函数便于测试 —— 拼错了整条搜索链路都会搜出错的图。
- * femaleOnly 参数保留但不参与拼词 —— 女性角色过滤完全走客户端 isMaleCharacterIllust。
+ * 构造 Pixiv 搜索词：关键词 + solo（可选）。抽成纯函数便于测试。
+ * 质量标签走客户端 OR 过滤（hasQualityTag），不追加到搜索词，避免 AND 逻辑过严。
+ * femaleOnly 参数保留但不参与拼词，女性角色过滤完全走客户端 isMaleCharacterIllust。
  */
 export function buildSearchWord(tags, soloOnly, _femaleOnly, qualityTags = '') {
   let word = tags;

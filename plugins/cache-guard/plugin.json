@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "apiVersion": 1,
   "category": "model",
-  "description": "纯观测型插件：统计每次调用的前缀缓存命中率，指纹化系统提示并在其漂移（被任何插件/配置改掉一段）时告警归因，把『谁在偷偷击穿缓存』变成可查的报表。不改变任何行为，零风险。",
+  "description": "纯观测型插件：统计每次调用的前缀缓存命中率，给系统提示做分段指纹，并在其漂移（被任何插件/配置改掉一段）时告警归因。不改变任何行为。",
   "author": "QQ Agent",
   "enabledByDefault": true,
   "capabilities": [],

@@ -1,22 +1,19 @@
-// 〔市场页：应用内浏览 / 搜索 / 筛选 / 一键安装〕——M9 拆分第 12 段
+// 〔市场页：应用内浏览 / 搜索 / 筛选 / 一键安装〕
 // ---------------------------------------------------------------------------
-// 背景（2026-10-10 r87）：
-//   此前「添加技能」只有一个「看看技能市场」按钮 —— 点它跳到官网外链，
-//   回来还得走「复制口令 → 粘贴 → 校验 → 安装」四步。绝大多数用户卡在这里：
-//   ① 到了网页不知道该装什么；② 不会走口令流程；③ 懒得来回切窗口。
-//   反馈原话是「下载很难用」。参照 PCL 的 Mod 下载页，把市场**搬进应用内**：
-//   左栏分类 + 顶部搜索 + 多条件筛选 + 卡片列表（彩色块图标 / 名称 / 分类 /
-//   简介 / 下载量 / 更新时间 / 作者），点卡片直接装。
+// 以前「添加技能」只有一个「看看技能市场」按钮，点它跳到官网外链，回来还得走
+// 「复制口令 → 粘贴 → 校验 → 安装」四步。绝大多数用户卡在这里：到了网页不知道
+// 该装什么、不会走口令流程、懒得来回切窗口。参照 PCL 的 Mod 下载页，把市场搬进
+// 应用内：左栏分类 + 顶部搜索 + 多条件筛选 + 卡片列表（彩色块图标 / 名称 / 分类 /
+// 简介 / 下载量 / 更新时间 / 作者），点卡片直接装。
 //
 // 数据来源：后端 GET /api/market/list?kind=skill|plugin（src/routes.js），
 //   由 src/market.js 代理官网 /skills 或 /plugins 并做字段白名单裁剪。
-//   官网**忽略** sort/q 参数（返回全量），所以搜索/筛选/排序全在客户端做 ——
-//   126 条量级下无压力，且切筛选零延迟。
+//   官网忽略 sort/q 参数（返回全量），所以搜索/筛选/排序全在客户端做，
+//   百来条量级下无压力，且切筛选零延迟。
 //
-// ⚠️ 图标：官网列表里**没有** icon/logo 字段（已核实 140 条无一带图）。
-//   照 PCL 做彩色块：按 id 哈希出一组稳定色相（同一技能永远同色，不跳变），
-//   取名称首字符。这是零成本、零请求、视觉达标的最优解；将来官网若加了真图标，
-//   在 tileHtml 里优先用它即可（已预留注释位置）。
+// 图标：官网列表里没有 icon/logo 字段（已核实无一带图）。照 PCL 做彩色块：
+//   按 id 哈希出一组稳定色相（同一技能永远同色，不跳变），取名称首字符。
+//   将来官网若加了真图标，在 marketTileHtml 里优先用它即可。
 //
 // 安全：下载安装仍走既有 /api/market/verify + /api/market/install 链路
 //   （type 由服务器决定、zip 结构与路径穿越校验都在后端），本文件不自造下载。
@@ -32,14 +29,13 @@ const MARKET_KINDS = {
 };
 
 // kind → { all, categories, q, cat, status, sort, loaded, loading, error }
-// ⚠️ status 默认 'approved'：pending 条目还没有安装口令，混在列表里只会让人
-//    点不动然后困惑。默认只看已上架的，想看全部随时切。
+// status 默认 'approved'：pending 条目还没有安装口令，混在列表里只会让人
+// 点不动然后困惑。默认只看已上架的，想看全部随时切。
 const marketState = {
-  // rendered：这份数据**已经画到 DOM 上了吗**。切页时靠它跳过重复重建 ——
-  //   2026-10-22：此前只要 st.loaded 就无条件 renderMarketShell()，而市场条目
-  //   动辄三四百条（/plugins 实测 402 条），每点一次顶栏「下载」就把整页
-  //   （警告块 + 工具栏 + 3 个 select + 全部卡片）拆了重建一遍，用户感知就是
-  //   "先卡一下才出界面"。数据没变就没必要重画。
+  // rendered：这份数据已经画到 DOM 上了吗。切页时靠它跳过重复重建：
+  // 市场条目动辄三四百条（/plugins 实测 402 条），每点一次顶栏「下载」就把整页
+  // （警告块 + 工具栏 + 3 个 select + 全部卡片）拆了重建一遍，用户感知就是
+  // "先卡一下才出界面"。数据没变就没必要重画。
   skill:  { all: [], categories: {}, q: '', cat: 'all', status: 'approved', sort: 'downloads', loaded: false, loading: false, error: '', rendered: false },
   plugin: { all: [], categories: {}, q: '', cat: 'all', status: 'approved', sort: 'downloads', loaded: false, loading: false, error: '', rendered: false }
 };
@@ -57,7 +53,7 @@ const MARKET_STATUS = [
 ];
 
 /* ══════════════════════════════════════════════════════════════
-   彩色块图标 —— 按 id 稳定哈希出一组色相
+   彩色块图标，按 id 稳定哈希出一组色相
    ══════════════════════════════════════════════════════════════ */
 /**
  * 由字符串算出 0~359 的色相。用 FNV-1a 变体，分布比简单累加均匀，
@@ -82,8 +78,8 @@ function marketInitialOf(name, id) {
 
 /**
  * 生成彩色块 HTML。
- * ⚠️ 若官网将来在条目里给出真图标字段（icon/logo/avatar），在这里优先使用 —— 
- *    目前核实列表接口无此字段，故走生成的字母块。
+ * 若官网将来在条目里给出真图标字段（icon/logo/avatar），在这里优先使用；
+ * 目前核实列表接口无此字段，故走生成的字母块。
  */
 function marketTileHtml(item) {
   const hue = marketHueOf(item?.id || item?.name);
@@ -123,16 +119,16 @@ function marketFmtDownloads(n) {
 
 /**
  * 该 item 装在哪一类里（'skill' | 'plugin'），本机没有则 null。
- * R102：从 marketIsInstalled 拆出来 —— 卡片上那颗「管理」钮要跳到**对应的**
- *   管理页，光知道"装过"不够，得知道装的是技能还是插件。
+ * 卡片上那颗「管理」钮要跳到对应的管理页，光知道"装过"不够，
+ * 得知道装的是技能还是插件。
  *
- * ⚠️ 这里有个必须记住的坑：**state.skills 里技能与插件是混在一起的**。
- *   /api/skills 全量返回两类条目，靠各自的 kind 字段区分（loadSkillsStatus
- *   一次写进 state.skills；renderModulePage 也是拿 state.skills 再按 kind 过滤）。
- *   所以**不能**写成"在 state.skills 里找到就算技能" —— 那会把插件判成技能、
- *   点「管理」跳到技能页，然后找不到卡（还看不出为什么）。
- *   正确做法：读命中那一条**自己的 kind**，规则与 renderModulePage 逐字一致
- *   （kind 为 null / 缺省 → 算技能）。
+ * 这里有个必须记住的坑：state.skills 里技能与插件是混在一起的。
+ * /api/skills 全量返回两类条目，靠各自的 kind 字段区分（loadSkillsStatus
+ * 一次写进 state.skills；renderModulePage 也是拿 state.skills 再按 kind 过滤）。
+ * 所以不能写成"在 state.skills 里找到就算技能"，那会把插件判成技能、
+ * 点「管理」跳到技能页，然后找不到卡（还看不出为什么）。
+ * 正确做法：读命中那一条自己的 kind，规则与 renderModulePage 逐字一致
+ * （kind 为 null / 缺省 → 算技能）。
  */
 function marketInstalledKind(item) {
   try {
@@ -289,7 +285,7 @@ function renderMarketList(kind) {
 
   box.innerHTML = list.map((x) => {
     const approved = x.status === 'approved';
-    // R102：拿到"装在哪一类"，才能让「管理」钮跳到对的管理页
+    // 拿到"装在哪一类"，才能让「管理」钮跳到对的管理页
     const installedKind = approved ? marketInstalledKind(x) : null;
     const installed = !!installedKind;
     const cat = x.categoryName || st.categories[x.category] || '其他';
@@ -323,7 +319,7 @@ function renderMarketList(kind) {
       </article>`;
   }).join('');
 
-  // 列表区（含"重试"按钮）的委托 —— 每次重画后重挂，因为 innerHTML 被整体替换
+  // 列表区（含"重试"按钮）的委托，每次重画后重挂，因为 innerHTML 被整体替换
   bindMarketList(kind);
 }
 
@@ -338,7 +334,7 @@ function bindMarketShell(kind) {
 
   root.addEventListener('click', (e) => {
     const t = e.target;
-    // R102：市场卡片上的「管理」→ 切到带开关的管理页，并高亮那一张卡
+    // 市场卡片上的「管理」→ 切到带开关的管理页，并高亮那一张卡
     const mg = t.closest?.('[data-mk-manage]');
     if (mg) { marketJumpToInstalled(mg.dataset.mkManage); return; }
     const ref = t.closest?.('[data-mk-refresh]');
@@ -386,7 +382,7 @@ function bindMarketShell(kind) {
 }
 
 /* ══════════════════════════════════════════════════════════════
-   R102：从市场卡片跳到「已安装」的管理页，并定位到那一张卡
+   从市场卡片跳到「已安装」的管理页，并定位到那一张卡
    ══════════════════════════════════════════════════════════════ */
 /** 把任意字符串安全地放进 `[attr="…"]` 选择器（只转义 CSS 字符串字面量里的两个特殊字符）。 */
 function marketCssStr(s) {
@@ -395,9 +391,9 @@ function marketCssStr(s) {
 
 /**
  * spec = "skill|<id>" / "plugin|<id>"。
- * 管理页的渲染是**异步**的（switchTab → loadModulePage 要等 /api/skills 回来），
+ * 管理页的渲染是异步的（switchTab → loadModulePage 要等 /api/skills 回来），
  * 所以这里轮询等那张卡出现，最多 ~2s；等不到就明说一句，不做静默失败。
- * ⚠️ id 本身可能含 '|' → 只按**第一个** '|' 切，其余原样拼回去。
+ * id 本身可能含 '|'，只按第一个 '|' 切，其余原样拼回去。
  */
 function marketJumpToInstalled(spec) {
   const raw = String(spec || '');
@@ -466,13 +462,13 @@ async function loadMarket(kind, { force = false } = {}) {
   }, 6000);
   try {
     // 先画一次骨架（含"正在加载"），让切页立刻有反馈。
-    // 2026-10-20：这句原来在 try **之外** —— 渲染一旦抛异常，st.loading 永远停在 true，
+    // 这句必须在 try 之内：渲染一旦抛异常，st.loading 永远停在 true，
     // 本次运行期间这个市场页再也加载不出来（点刷新也会被 `if (st.loading) return` 挡掉）。
     renderMarketShell(kind);
     // 超时 115s：后端自己给上游 90s（一次瞬时错误重试，总预算不叠加），
-    // 前端再留 25s 余量。2026-10-20 之前这里是 15s，比后端的 30s 还短 ——
-    // 上游稍慢就必然先被前端掐断，用户看到「请求超时（15 秒无响应）」，
-    // 而后台还在正常拉取。实测该接口到本机 6~54 秒不等（/plugins 402 条用了 53.9s）。
+    // 前端再留 25s 余量。以前这里是 15s，比后端的 30s 还短，上游稍慢就必然
+    // 先被前端掐断，用户看到「请求超时（15 秒无响应）」，而后台还在正常拉取。
+    // 实测该接口到本机 6~54 秒不等（/plugins 402 条用了 53.9s）。
     // force=1 让后端跳过 5min 列表缓存（装完 / 点刷新时要看到新状态）。
     const r = await api(`/api/market/list?kind=${encodeURIComponent(meta.apiKind)}${force ? '&force=1' : ''}`, { timeoutMs: 115000 });
     st.all = Array.isArray(r?.items) ? r.items : [];
@@ -518,9 +514,9 @@ async function installFromMarket(kind, id, btn) {
       method: 'POST',
       body: JSON.stringify({ code, entry: hit })
     });
-    // ③ 2026-10-22：后端不再"下载即安装"。
+    // ③ 后端不再"下载即安装"。
     //    下载的包先进「扩展锻造台」暂存区 → 过五道闸门 → 等你人工确认才落盘。
-    //    这里必须如实说"待确认"，不能再弹"已安装" —— 那正是黑盒感的来源。
+    //    这里必须如实说"待确认"，不能再弹"已安装"，那正是黑盒感的来源。
     if (r?.pending) {
       const g = r.gate || {};
       const head = g.ok
@@ -540,8 +536,8 @@ async function installFromMarket(kind, id, btn) {
       }
       return;
     }
-    // ③' 兼容性回执（2026-10-19）：安装成功 ≠ 能用。后端在落地后已真实加载过
-    //    这个模块并把结果随响应带回 —— 这里把笼统的"已安装"细分成三档，
+    // ③' 兼容性回执：安装成功 ≠ 能用。后端在落地后已真实加载过
+    //    这个模块并把结果随响应带回，这里把笼统的"已安装"细分成三档，
     //    不再让加载失败的包也弹绿字，用户不用自己去模块页翻红字。
     const kindLabel2 = r?.kind === 'plugin' ? '插件' : '技能';
     const load = r?.load;
@@ -557,11 +553,9 @@ async function installFromMarket(kind, id, btn) {
     // 刷新两个模块页（安装类型可能与被浏览的 kind 不同）+ 重画列表（标记"已安装"）
     await loadModulePage('skill', { rescan: true }).catch(() => {});
     await loadModulePage('plugin', { rescan: true }).catch(() => {});
-    // ⚠️ 2026-10-22：重画列表**必须保住滚动位置**。
-    // 群友反馈原话：「安装插件/skills 会重置页面」「每次安装完都得重新划下去」——
-    // 市场动辄三四百条，装完弹回顶部等于白翻一遍。innerHTML 重建子节点时容器的
-    // scrollTop 会被清零（内容高度瞬间为 0），所以先存一份再写回。
-    // 注意：只在"安装完"这条路径保持滚动；筛选/搜索/排序变化时**不**保持 ——
+    // 重画列表必须保住滚动位置。市场动辄三四百条，装完弹回顶部等于白翻一遍。
+    // innerHTML 重建子节点时容器的 scrollTop 会被清零（内容高度瞬间为 0），
+    // 所以先存一份再写回。注意：只在"安装完"这条路径保持滚动；筛选/搜索/排序变化时不保持。
     // 那时内容整个变了，回到顶部才是对的（renderMarketList 内部不处理，区分在调用处）。
     const listEl = document.querySelector('#mk-list-' + kind);
     const keepTop = listEl ? listEl.scrollTop : 0;
@@ -574,7 +568,7 @@ async function installFromMarket(kind, id, btn) {
   }
 }
 
-/* 轻量提示（自绘，避免 alert 阻塞渲染进程 —— 与全项目一致） */
+/* 轻量提示（自绘，避免 alert 阻塞渲染进程，与全项目一致） */
 function marketToast(text, tone) {
   let el = document.getElementById('mk-toast');
   if (!el) {
@@ -599,7 +593,7 @@ function marketToast(text, tone) {
   const orig = window.switchTab;
 
   /* 市场页要判断「这一条本机装没装」，依据是 state.skills / state.plugins。
-     但这两个数组只有**进过技能页/插件页**（loadModulePage）才会填上 ——
+     但这两个数组只有**进过技能页/插件页**（loadModulePage）才会填上，
      用户在设置里直接点「技能市场」，或深链直达，state 里还是空的，
      结果就是所有卡片都显示「安装」，已装的还能再点一次。
      这里在进入市场页时补拉一次（失败静默：取不到只是少个徽标，不影响浏览）。 */
@@ -610,16 +604,15 @@ function marketToast(text, tone) {
   async function ensureModuleState(kind) {
     const seg = MODULE_IFACE[kind];
     if (!seg) return false;
-    /* R110：guard 与取数都只认 /api/skills。原实现按 MODULE_IFACE 拼出
+    /* guard 与取数都只认 /api/skills。原实现按 MODULE_IFACE 拼出
        '/api/plugins' 去请求，而后端根本没有这条路由（技能与插件全走
-       /api/skills 一个出口，靠各自的 kind 区分，见 src/routes.js）——
+       /api/skills 一个出口，靠各自的 kind 区分，见 src/routes.js），
        于是每次进市场页先白吃一个 404，再掉进 loadSkillsStatus() 兜底，
        既污染控制台又多绕一圈。另外 state.plugins 全工程没有任何一处赋值，
        真正的判据只有 state.skills（marketInstalledKind 读的就是它），
        所以 guard 也统一按 state.skills 判，不再按 seg 分流。 */
-    // 返回 true 表示"这次真的把 state.skills 填上了" —— 调用方据此决定要不要
-    // 重画列表。2026-10-22：此前无论有没有变化都会 .then(renderMarketShell)，
-    // 于是每次进市场页都要多付一次全量重建（几百张卡）。
+    // 返回 true 表示"这次真的把 state.skills 填上了"，调用方据此决定要不要
+    // 重画列表。否则每次进市场页都要多付一次全量重建（几百张卡）。
     if (Array.isArray(state.skills) && state.skills.length) return false;
     try {
       const d = await api('/api/skills');
@@ -641,10 +634,9 @@ function marketToast(text, tone) {
     const r = orig.apply(this, arguments);
     if (name === 'skillmarket' || name === 'pluginmarket') {
       const kind = name === 'skillmarket' ? 'skill' : 'plugin';
-      /* 2026-10-20：原来是 `ensureModuleState(kind).then(() => loadMarket(kind))` ——
-         市场列表被 /api/skills 串行挡住。那条接口一慢或一挂，市场页就永远停在
-         「正在连接市场…」（用户报的"有时候加载不出来"正是这个形态）。
-         现在改成**并行**：列表先拉、骨架先出；"本机装了什么"回来后再补一次渲染，
+      /* 原来是 `ensureModuleState(kind).then(() => loadMarket(kind))`，市场列表被
+         /api/skills 串行挡住。那条接口一慢或一挂，市场页就永远停在「正在连接市场…」。
+         现在改成并行：列表先拉、骨架先出；"本机装了什么"回来后再补一次渲染，
          把已装徽标刷上去。代价只是首帧可能闪一下"安装"按钮，比整页加载不出来好得多。 */
       try { loadMarket(kind); } catch (e) { /* 不得影响正常切页 */ }
       ensureModuleState(kind)

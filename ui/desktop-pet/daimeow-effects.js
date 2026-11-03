@@ -178,7 +178,6 @@ function chipsPlaybackMs() {
 }
 
 // 特殊道具动作的生命周期注册表：start 时点亮，stop 时清理，活动状态统一维护。
-// 具体几何计算拆到独立 renderer，动作生命周期只负责选中和清理。
 let activePropAction = null;
 
 function createChipsPropHandler(cycles) {
@@ -296,7 +295,7 @@ function resolvePawDrawables() {
 
 /**
  * 两只手在窗口里的中心点：[[左手 x, y], [右手 x, y]]。
- * 顶点用引擎给的 getDrawableVertices（画布像素），再用 PIXI 的 toGlobal 换成窗口像素 ——
+ * 顶点用引擎给的 getDrawableVertices（画布像素），再用 PIXI 的 toGlobal 换成窗口像素：
  * 缩放、位置、锚点都由 PIXI 算，模型怎么缩放/移动，道具都跟着手走。
  */
 function pawCentersOnScreen() {
@@ -546,13 +545,11 @@ function setPropVisible(el, visible) {
   if (!visible && el.style.opacity !== '') el.style.opacity = '';
 }
 
-/**
- * 每帧摆放所有道具贴图：啦啦球贴左右手、薯片袋子/小猪/手柄跟着手走。
- * 球和手的位置由引擎的 getDrawableVertices + toGlobal 换算成窗口像素，
- * 所以模型怎么缩放/移动，道具都跟着走。
- */
-// 每个动作的逐帧道具渲染器：只负责把已经调好的几何计算画到 DOM 上。
-// updateProps 只负责选中当前渲染器，不再把所有动作分支串在一个函数里。
+/* ---------------- 逐帧道具渲染 ---------------- */
+
+// 每个动作的渲染器只负责把已经调好的几何算到 DOM 上；updateProps 只负责选中当前
+// 渲染器，不再把所有动作分支串在一个函数里。道具位置由引擎的 getDrawableVertices +
+// toGlobal 换算成窗口像素，所以模型怎么缩放/移动，道具都跟着走。
 function renderCheerProps(now, centers) {
     const size = PROP_CANVAS_SIZE * currentScale;
     for (let k = 0; k < 2; k++) {
@@ -797,8 +794,8 @@ function renderIdeaProps(now, centers) {
 }
 
 function renderThinkingProps(now, centers) {
-    // 思考手势复用“灵光一闪”的横向往返，模型原手由同尺寸贴图接管。
-    // 注意：每个 renderer 自行声明 elapsed；漏掉会在 ticker 回调里抛错，
+    // 思考手势复用「灵光一闪」的横向往返，模型原手由同尺寸贴图接管。
+    // 每个 renderer 自行声明 elapsed；漏掉会在 ticker 回调里抛错，
     // 异常一旦从 ticker 回调里冒出去，PIXI 的渲染循环就不会再排下一帧，
     // 表现是「模型卡住不动、但其他功能都正常」，只能重启恢复。
     const elapsed = now - thinkingStartAt;

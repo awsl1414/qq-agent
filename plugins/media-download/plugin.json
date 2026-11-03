@@ -37,7 +37,7 @@
     "quality": {
       "type": "string",
       "label": "画质偏好",
-      "description": "low 或 high；B站优先选择低码率或高码率。"
+      "description": "low 或 high，B站优先选择低码率或高码率。"
     },
     "douyinCookie": {
       "type": "string",

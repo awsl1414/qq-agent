@@ -20,24 +20,24 @@ const DEFAULT_MAX_PER_HOUR = DEFAULT_CONFIG.send.maxPerHour;
  * 为什么要转换而不是直接传路径：裸 Windows 路径（反斜杠 + 盘符）在 OneBot
  * 各实现里支持不一致，而 `file:///C:/a/b.png` 是规范里明确的形式。
  * 空格/中文要编码（协议端会 decodeURIComponent），`#` `?` 在 URI 里是分隔符，
- * 必须手动转义 —— encodeURI 不处理它们。
+ * 必须手动转义，encodeURI 不处理它们。
  */
 export function toFileUri(input) {
-  // ⚠️ 本函数刻意不使用任何正则转义（用 String.fromCharCode(92) 取反斜杠、
+  // 本函数刻意不使用任何正则转义（用 String.fromCharCode(92) 取反斜杠、
   // 用 split/join 代替路径分隔符替换）。原因：这段代码最初是用脚本批量写入的，
   // 多层转义把 `\/` 吃成了 `/`，写出了一个非法的正则字面量，
-  // 而 `node --check` 的结果被 shell 的 `&&` 链掩盖成"通过" ——
+  // 而 `node --check` 的结果被 shell 的 `&&` 链掩盖成"通过"，
   // 结果整个 sender.js 加载即崩，比原本要修的 bug 严重得多。
   // 零反斜杠写法让"写错字符"这件事根本不可能发生。
   const BS = String.fromCharCode(92);                    // 反斜杠字符本身
   let s = String(input || '').trim().split(BS).join('/');
   if (!s) return '';
-  if (s.slice(0, 7).toLowerCase() === 'file://') return s;   // 已是 URI → 幂等
+  if (s.slice(0, 7).toLowerCase() === 'file://') return s;   // 已是 URI，幂等
   const unc = s.startsWith('//');                        // UNC：\\server\share
   // 去掉前导斜杠（逐个 split 掉，避免再用正则转义）
   const body = unc ? s.slice(2) : s.split('/').filter(Boolean).join('/');
   if (!body) return '';
-  // encodeURI 会处理空格/中文，但不转义 `#` `?` —— 它们在 URI 里是分隔符，必须手动转
+  // encodeURI 会处理空格/中文，但不转义 `#` `?`，它们在 URI 里是分隔符，必须手动转
   const encoded = encodeURI(body).replace(/[?#]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
   return unc ? 'file://' + encoded : 'file:///' + encoded;
 }
@@ -77,7 +77,7 @@ export class SendQueue {
     const cfg = getConfig().send;
     const minute = (this.minuteTimes.get(chatKey) || []).filter((t) => now - t < 60000);
     const hour = (this.hourTimes.get(chatKey) || []).filter((t) => now - t < 3600000);
-    // 回退值必须与 config.js 的默认值一致（80）。此前这里是 8，
+    // 回退值必须与 config.js 的默认值一致（80）。这里写成 8 的话，
     // 配置缺失/为 0 时限频突然收紧 10 倍，行为不可预测。
     if (minute.length >= Math.max(1, Number(cfg.maxPerMinute) || DEFAULT_MAX_PER_MINUTE)) {
       throw new Error(`发送频率超限（每分钟最多 ${cfg.maxPerMinute || DEFAULT_MAX_PER_MINUTE} 条），请等一会再发`);
@@ -97,7 +97,7 @@ export class SendQueue {
    * 背景（重复消息的根因之一）：模型在一次会话里可能重复调用 send_message
    * 传入相同内容（尤其是内联工具调用解析 + 原生 tool_calls 并存时），
    * 或 OneBot 超时看似失败但实际已发出、上层重试再发一遍。
-   * 这里在真正发出前做一道内容指纹去重：窗口期内 identical 文本直接跳过。
+   * 这里在真正发出前做一道内容指纹去重：窗口期内相同的文本直接跳过。
    */
   #dedupeWindow() {
     const raw = getConfig().send?.dedupeWindowMs;
@@ -109,7 +109,7 @@ export class SendQueue {
 
   /**
    * 只读判断：窗口期内是否已发出过相同内容。
-   * ⚠️ 绝不在发送前记账 —— 发送失败（OneBot 报错/限频）的消息必须允许重试，
+   * 绝不在发送前记账：发送失败（OneBot 报错/限频）的消息必须允许重试，
    * 提前记账会把合法重试误判为重复、导致消息静默丢失。
    */
   #isDuplicate(chatKey, text) {
@@ -135,13 +135,13 @@ export class SendQueue {
 
   /**
    * 把媒体段里"协议端可能读不到"的本地图片文件转成 base64 内联，绕开跨机/沙箱
-   * 读不到本机路径的问题 —— 与 sendImage/sendSticker 的 file:/// → base64 兜底对称。
+   * 读不到本机路径的问题，与 sendImage/sendSticker 的 file:/// → base64 兜底对称。
    *
    * 规则：
-   *   · 只处理 image 类型（视频/音频/文件段内联 base64 会过大，可能上百 MB，撞发送
+   *   - 只处理 image 类型（视频/音频/文件段内联 base64 会过大，可能上百 MB，撞发送
    *     超时，反而更糟），其余段原样保留；
-   *   · 单段 ≤15MB（与 sendImage/sendSticker 一致的上限）；
-   *   · 没有任何段可转换时返回 null（调用方据此判断"重发无意义"，直接抛原始错误）。
+   *   - 单段 ≤15MB（与 sendImage/sendSticker 一致的上限）；
+   *   - 没有任何段可转换时返回 null（调用方据此判断"重发无意义"，直接抛原始错误）。
    *
    * @param {Array} segs OneBot 段数组
    * @returns {Array|null} 转换后的段数组（changed=true）或 null
@@ -188,11 +188,11 @@ export class SendQueue {
    */
 
   /**
-   * 白名单硬闸（2026-10-16 修「群聊移除白名单后机器人仍在该群发言」）。
+   * 白名单硬闸。
    *
    * 消息入口早有闸（app.js ingestMessage 的 allowed()），但发送侧没有：
    * 之前在群里设的提醒/闹钟，群被移出白名单后到点照样发；会话运行中途被移出时
-   * 回复/表情/媒体也照发。闸放在发送队列入口 —— 覆盖回复、表情、图片、媒体、
+   * 回复/表情/媒体也照发。闸放在发送队列入口，覆盖回复、表情、图片、媒体、
    * 拍一拍、提醒全部出站路径，作为"白名单外不发言"的最终不变量。
    * 判定统一走 config.js 的 isChatAllowed（全库唯一实现，勿在此处另写）。
    */
@@ -214,7 +214,7 @@ export class SendQueue {
     for (const m of list) {
       const plain = mdToPlain(String(m ?? ''));
       if (!plain) continue;
-      // 兜底剥壳（2026-10-20）：模型偶尔照着上下文里的 [图片]/[引用…] 媒体标记，
+      // 兜底剥壳：模型偶尔照着上下文里的 [图片]/[引用…] 媒体标记，
       // 把自己的整条回复包进一层方括号（实锤：send_message 参数 "[那不就是纯躺平了]"）。
       // unwrapStrayBrackets 只处理"整条 = 一个短方括号组"这一种形态，其它内容不动。
       const cleaned = unwrapStrayBrackets(plain);
@@ -235,12 +235,12 @@ export class SendQueue {
       promises.push(chain(async () => {
         this.#checkRate(chatKey);
         if (gap > 0) await sleep(gap);
-        // 发送去重：窗口期内 identical 文本跳过（防模型重复调用/超时重试造成的重复发言）
+        // 发送去重：窗口期内相同文本跳过（防模型重复调用/超时重试造成的重复发言）
         //
-        // ⚠️ `options.dedupe === false` 可关掉（2026-10-08 加）：
-        //   "进度提示"这类内容**天生就该重复**（开发模式的「正在连接 X…」每轮都发同一句），
-        //   走默认去重会被 8 秒窗口静默吃掉 —— 表现就是"有时有提示、有时没有"。
-        //   调用方（插件 notify）自己负责限流，所以这里放行是安全的。
+        // `options.dedupe === false` 可关掉："进度提示"这类内容天生就该重复
+        // （开发模式的「正在连接 X…」每轮都发同一句），走默认去重会被 8 秒窗口
+        // 静默吃掉，表现就是"有时有提示、有时没有"。
+        // 调用方（插件 notify）自己负责限流，所以这里放行是安全的。
         const dedupeOn = options.dedupe !== false;
         if (dedupeOn && this.#isDuplicate(chatKey, text)) {
           console.warn(`[sender] 跳过重复消息（${this.#dedupeWindow()}ms 内已发过相同内容）：${String(text).slice(0, 30)}`);
@@ -267,20 +267,18 @@ export class SendQueue {
       const r = settled[i];
       if (r.status === 'fulfilled') sent.push(r.value);
       // 带上 index 和原文：调用方需要知道"哪一条"失败了（才能重发或告知模型）。
-      // 原先 failed 里只有 error，没有任何定位信息。
-      // raw：保留原始错误对象（带 retcode 等结构化字段），F4 禁言签名识别要用 ——
+      // raw：保留原始错误对象（带 retcode 等结构化字段），F4 禁言签名识别要用，
       // 聚合成字符串后 retcode 就丢了，只能靠 message 兜底匹配。
       else failed.push({ index: i, text: parts[i], error: String(r.reason?.message ?? r.reason), raw: r.reason ?? null });
     }
-    // 部分成功也要让调用方知道：原先只在"全败"时抛错，部分成功会静默丢消息
+    // 部分成功也要让调用方知道：只在"全败"时抛错的话，部分成功会静默丢消息
     if (failed.length > 0) {
       const detail = failed.map((f) => `第${f.index + 1}条「${String(f.text).slice(0, 20)}」：${f.error}`).join('；');
-      // ── 禁言兜底（2026-10-22 F4）────────────────────────────────────────
-      // 发送被拒且签名是"禁言"（result=120）时立即把该群标记禁言：下一个唤醒
-      // 直接跳过，不再白跑一轮 token。2026-10-22 实测（v0488）：禁言后连跑
-      // 4 个会话、净烧约 19.5 万 prompt token、5 次发送全被拒、0 条送达，
+      // 禁言兜底：发送被拒且签名是"禁言"（result=120）时立即把该群标记禁言，
+      // 下一个唤醒直接跳过，不再白跑一轮 token。实测禁言后连跑 4 个会话、
+      // 净烧约 19.5 万 prompt token、5 次发送全被拒、0 条送达，
       // 而这一切只是因为"通知丢了 + 缓存还是旧的"。
-      // 风控可能返回同码（模型自己的判断也是"可能是被禁言或风控"）——
+      // 风控可能返回同码（模型自己的判断也是"可能是被禁言或风控"）：
       // 按禁言处理的代价是跳过若干轮回复（可恢复），好过继续烧 token；
       // 日志注明存疑，事后可区分。
       let banHit = null;
@@ -298,13 +296,13 @@ export class SendQueue {
       if (sent.length === 0) {
         const e = new Error(detail);
         // 全败且是禁言签名：给调用方（tools.js）一个结构化信号，
-        // 让它把错误作为**终态**返回给模型 —— 停止重试风暴。
+        // 让它把错误作为终态返回给模型，停止重试风暴。
         if (banHit) { e.muteRejection = true; e.chatKey = chatKey; }
         throw e;
       }
       console.warn(`[sender] 部分发送失败（${failed.length}/${parts.length}）：${detail}`);
       // 同时进应用日志：QQ 侧的拒发（如 result=241）原来只在协议端日志里出现，
-      // 控制台「日志」页看不到，排障时容易误判为"发成功了"（体检 F8）。
+      // 控制台「日志」页看不到，排障时容易误判为"发成功了"。
       this.log?.(`[sender] 部分发送失败（${failed.length}/${parts.length}）：${detail}`);
     }
     return { sent, failed };
@@ -318,12 +316,12 @@ export class SendQueue {
       this.#ensureAllowed(chatKey);   // 白名单硬闸
       this.#checkRate(chatKey);
       await sleep(randInt(600, 1500)); // 发表情前真人式的短暂停顿
-      // ── 发送回退链（修"表情包经常发送失败"）────────────────────────────
+      // 发送回退链（修"表情包经常发送失败"）。
       // 表情库里的 url 有三种形态，稳定性天差地别：
-      //   1. file:/// 本地转存（收藏功能写入，永久有效）—— 最优先
-      //   2. http(s) QQ 图床直链 —— rkey/时效大约 1 小时，过期后 403/404，
+      //   1. file:/// 本地转存（收藏功能写入，永久有效），最优先
+      //   2. http(s) QQ 图床直链，rkey/时效大约 1 小时，过期后 403/404，
       //      这是"经常失败"的主力（老库存里 60/66 条都是这种）
-      //   3. 空地址 —— 直接报错给模型
+      //   3. 空地址，直接报错给模型
       // 失败自愈：http 直链失败时，用 OneBot get_image（拿协议端本地缓存）
       // 重发一次；再不行转成 base64 内联发（体积上限 15MB，超限明确报错）。
       const sendVia = (ref) => this.onebot.sendSticker(kind, id, ref, {
@@ -339,7 +337,7 @@ export class SendQueue {
       } catch (firstError) {
         if (isFile) {
           // 本地文件被协议端拒绝（跨机/沙箱读不到本机路径、权限不足）：我们手里
-          // 就有字节，读回来走 base64 内联 —— 与 sendImage 一致，不该比 http 还脆弱。
+          // 就有字节，读回来走 base64 内联。与 sendImage 一致，不该比 http 还脆弱。
           // 上限 15MB，防超大图拖垮发送。
           try {
             const p = fileUriToPath(primary);
@@ -355,7 +353,7 @@ export class SendQueue {
         } else {
           // 回退 1：get_image 拿协议端本地缓存（仅对"消息里的图片"有效；收藏列表条目
           // 多半无效，但留着无害）。注意 fileKey 用的是 md5/resId/id，不是消息缓存文件 id，
-          // 所以收藏表情走这条基本必败 —— 真正能救的是回退 2 的直链下载，而直链过期时
+          // 所以收藏表情走这条基本必败。真正能救的是回退 2 的直链下载，而直链过期时
           // 也救不回来，所以确保 send 前的 ensureSendable 已把直链转成本地 file:///。
           try {
             const fileKey = sticker.md5 || sticker.resId || sticker.id || '';
@@ -388,9 +386,9 @@ export class SendQueue {
    *
    * 和 sendSticker 一样走完整发送管道：限频 → 去重 → 发送 → 留档。
    * 这三步一个都不能省：
-   *   · 限频：图比文字更容易刷屏，必须和文字共享同一套配额
-   *   · 去重：模型可能对同一个 URL 连发两次（实测过），按 URL 指纹挡掉
-   *   · 留档：不留档的话，下一次运行不知道自己发过图，可能重复发
+   *   - 限频：图比文字更容易刷屏，必须和文字共享同一套配额
+   *   - 去重：模型可能对同一个 URL 连发两次（实测过），按 URL 指纹挡掉
+   *   - 留档：不留档的话，下一次运行不知道自己发过图，可能重复发
    *
    * @param {object} img { url } 或 { dataUrl }（二选一）
    * @param {object} options { note, replyToMessageId, atUserId }
@@ -400,17 +398,17 @@ export class SendQueue {
     const chain = this.#chain(chatKey);
     const url = String(img?.url ?? '').trim();
     const dataUrl = String(img?.dataUrl ?? '').trim();
-    // ── 本地文件路径优先（修过一个真实故障）──────────────────────────────
+    // ── 本地文件路径优先 ────────────────────────────────────────────────
     // 原来只会传 `url` 或 `dataUrl`。而 `dataUrl` 是 base64 内联进 HTTP body 的：
     // 一张 1.9MB 的图 → base64 后 2.5MB 要 POST 给协议端，协议端再解码、再上传腾讯，
-    // 15 秒超时窗口经常走不完 → 表现为「图画出来了但发不出去」。
+    // 15 秒超时窗口经常走不完，表现为「图画出来了但发不出去」。
     //
-    // 图本来就已经落盘了（生成/下载后都有本地路径），所以传路径让**协议端自己读磁盘**：
+    // 图本来就已经落盘了（生成/下载后都有本地路径），所以传路径让协议端自己读磁盘：
     // body 从 2.5MB 降到约 100 字节，等于把传输量去掉三个数量级。
     // 前端不因此变小：协议端读的是同一个文件系统的同一个文件。
     //
-    // ⚠️ 前提是协议端与本进程同机（本项目默认 127.0.0.1）。不同机时协议端读不到该
-    // 路径 —— 所以下面保留 dataUrl 作回退，file 失败后自动改用 base64 再试一次。
+    // 前提是协议端与本进程同机（本项目默认 127.0.0.1）。不同机时协议端读不到该
+    // 路径，所以下面保留 dataUrl 作回退，file 失败后自动改用 base64 再试一次。
     const file = String(img?.file ?? '').trim();
     if (!url && !dataUrl && !file) return Promise.reject(new Error('图片地址为空'));
 
@@ -432,7 +430,7 @@ export class SendQueue {
           atUserId: options.atUserId ?? null
         });
       } catch (error) {
-        // 本地路径被协议端拒绝（跨机 / 沙箱读不到本机路径 / 权限不足）：分级兜底 ——
+        // 本地路径被协议端拒绝（跨机 / 沙箱读不到本机路径 / 权限不足）：分级兜底
         // 1) 手里就有字节，读回来转 base64 内联（与 sendSticker 对称，上限 15MB）；
         // 2) 否则若调用方还给了 dataUrl 备份，用 base64 内联（原行为，不能丢）；
         // 3) 都没有则抛原始错误。
@@ -477,13 +475,13 @@ export class SendQueue {
   }
 
   /**
-   * 发送一批媒体段（视频 / 一次多图）—— 走完整发送管道：串行 → 限频 → 去重 → 留档。
+   * 发送一批媒体段（视频 / 一次多图），走完整发送管道：串行 → 限频 → 去重 → 留档。
    *
    * 为什么需要它：`sendImage` 一次只能发一张（一图一气泡），而"抖音图文帖一次 9 张"
    * 或"转发一段视频"没法用单图 API 表达。media-download 这类插件下载完拿到的是
    * 本地路径数组，必须能一次性成段发出去。
    *
-   * ⚠️ 插件**不得**绕过本方法直接调 `onebot.sendSegments` —— 那样会跳过限频与留档，
+   * 插件不得绕过本方法直接调 `onebot.sendSegments`，那样会跳过限频与留档，
    * 表现为"媒体把文字配额吃光后突然发不出话"和"下一次运行忘了自己发过，重复发"。
    * 所以 provider 拿到的依赖里应该带 `sender`，用 ctx 传进来的这个对象发送。
    *
@@ -513,7 +511,7 @@ export class SendQueue {
         data = await this.onebot.sendSegments(kind, id, segs);
       } catch (error) {
         // 本地文件段被协议端拒绝（跨机 / 沙箱读不到本机路径）：把其中的图片段读回字节
-        // 转 base64 内联重发一次 —— 与 sendImage/sendSticker 对称。视频/音频/文件段内联
+        // 转 base64 内联重发一次，与 sendImage/sendSticker 对称。视频/音频/文件段内联
         // base64 会过大（可能上百 MB，撞发送超时），不做内联、保持原段；若整体仍失败则
         // 抛原始错误。
         const retrySegs = this.#localSegmentsToBase64(segs);
@@ -532,12 +530,13 @@ export class SendQueue {
     });
   }
 
-  /** 拍一拍。发送成功后留档（self 记录），否则下一次运行不知道自己拍过。 */  poke(chatKey, targetUserId) {
+  /** 拍一拍。发送成功后留档（self 记录），否则下一次运行不知道自己拍过。 */
+  poke(chatKey, targetUserId) {
     const [kind, id] = String(chatKey).split(':');
     const chain = this.#chain(chatKey);
     return chain(async () => {
       this.#ensureAllowed(chatKey);   // 白名单硬闸
-      // 拍一拍同样占发送配额 —— 曾经不调 #checkRate，模型连发 poke
+      // 拍一拍同样占发送配额。不调 #checkRate 的话，模型连发 poke
       // 可以绕过 maxPerMinute/maxPerHour 刷屏
       this.#checkRate(chatKey);
       await sleep(randInt(300, 900));

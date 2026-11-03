@@ -1,7 +1,6 @@
 /* 今日用量卡片：与桌宠气泡同一套视觉（白底、圆角、淡阴影），
-   窗口本身 380×84 透明，卡片内缩 4px 给阴影留边。
-   2026-10-24：改为一式两行的一行式用量串（主串 + 搜索次数），
-   数字每 5 秒刷新一次，tabular-nums 防止宽度跳动。 */
+   窗口本身透明，卡片内缩 4px 给阴影留边。
+   两行：主串 + 搜索次数；数字每 5 秒刷新一次，tabular-nums 防止宽度跳动。 */
 * { box-sizing: border-box; }
 html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
 body { font: 13px/1.5 "Microsoft YaHei", "Segoe UI", sans-serif; color: #1a2a3a; -webkit-user-select: none; user-select: none; }

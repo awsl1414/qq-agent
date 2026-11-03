@@ -1,16 +1,15 @@
 // ── harness：软件自带的开发工具链（不再是插件）─────────────────────────────
 //
-// 2026-10-21 内置化：self-doctor / self-fix / extension-forge / dev-orders
-// 从 `plugins/` 搬到 `src/harness/`，由 core 在启动时直接注册。
-// 2026-10-23：壁纸套件（`src/wallpaper/`，用户功能）也走同一套注册机制 ——
-// 它不在本目录，用 MODULES 的 dir 字段指过去，机制完全复用。
+// self-doctor / self-fix / extension-forge / dev-orders 从 `plugins/` 搬到
+// `src/harness/`，由 core 在启动时直接注册。壁纸套件（`src/wallpaper/`，用户功能）
+// 走同一套机制，用 MODULES 的 dir 字段指过去。
 //
-// 为什么这么改（用户诉求："变成软件自带功能，和插件脱离"）：
-//   · 不再经过插件加载器的目录扫描与内置基线校验 —— 改一行不需要重算指纹，
+// 效果：
+//   · 不再经过插件加载器的目录扫描与内置基线校验：改一行不需要重算指纹，
 //     也不会因为指纹失配被当成"内置模块被顶替"而拒载；
 //   · 不可禁用、不可卸载、不出现在插件/Skill 列表（manifest.kind = 'core'）；
 //   · 仍然复用 createSkillApi()，所以工具前缀（self-fix__*）、配置键
-//     （config.skills['self-fix']）、storage 路径、能力名全部保持原样 ——
+//     （config.skills['self-fix']）、storage 路径、能力名全部保持原样：
 //     63 条路由与前端四个页签零改动。
 //
 // 代价（明确接受）：不再热重载。改 harness 代码必须重启应用。
@@ -19,27 +18,26 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSkillApi } from '../plugin-loader.js';
 import { SKILL_API_VERSION } from '../skills/manifest.js';
-// 数据目录唯一真源。注入给模块的 dataRoot 曾写成 `QQ_AGENT_DATA_DIR || '.'`，
-// 而该 env 只有 electron/main.js 会设 —— headless 下会变成进程 cwd。
+// 数据目录唯一真源。注入给模块的 dataRoot 不能写成 `QQ_AGENT_DATA_DIR || '.'`：
+// 该 env 只有 electron/main.js 会设，headless 下会变成进程 cwd。
 import { DATA_DIR } from '../config.js';
 
 import * as doctor from './doctor/index.js';
 import * as fix from './fix/index.js';
 import * as forge from './forge/index.js';
 import * as dev from './dev/index.js';
-// 壁纸套件（2026-10-23 内置化）：用户功能，不是开发工具链，所以放在 src/wallpaper/
-// 而不是本目录 —— 由下面的 dir 字段指定位置，注册机制完全复用。
+// 壁纸套件是用户功能，不是开发工具链，所以放在 src/wallpaper/ 而不是本目录：
+// 由下面的 dir 字段指定位置，注册机制完全复用。
 import * as wallpaper from '../wallpaper/index.js';
 
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /**
- * 五个模块。id 保持原插件 id —— 这样：
+ * 五个模块。id 保持原插件 id：这样：
  *   · 工具名仍是 `self-doctor__scan_project` 这类，模型与提示词里已有的引用不作废；
  *   · 老用户的 config.skills['self-fix'] 等配置继续生效（含 fixEnabled 开关）；
  *   · plugin-data/<id>/ 目录沿用，报告/备份/工单不丢。
- * dir：模块目录（相对 src/）。缺省 = harness/<key>；wallpaper 是用户功能而非
- * 开发工具链，单独放 src/wallpaper/，不混在本目录里。
+ * dir：模块目录（相对 src/）。缺省 = harness/<key>。
  */
 const MODULES = [
   { key: 'doctor', id: 'self-doctor', mod: doctor, permissions: [], toolIds: [] },
@@ -65,8 +63,8 @@ function buildManifest(module, meta) {
     name: String(meta.name || module.id),
     version: String(meta.version || '1.0.0'),
     apiVersion: Number(meta.apiVersion) || SKILL_API_VERSION,
-    // ⚠️ kind='core' 是这套迁移的关键：manager.isEnabled 见到它就恒为启用，
-    //    前端按 kind 过滤所以不会出现在插件/Skill 列表里。
+    // kind='core' 是这套机制的关键：manager.isEnabled 见到它就恒为启用，
+    // 前端按 kind 过滤所以不会出现在插件/Skill 列表里。
     kind: 'core',
     category: String(meta.category || 'harness'),
     description: String(meta.description || '内置开发工具链'),
@@ -74,7 +72,7 @@ function buildManifest(module, meta) {
     enabledByDefault: true,
     requires: [],
     capabilities: Array.isArray(meta.capabilities) ? meta.capabilities : [],
-    // 默认值来自 plugin.json.settings —— settingsOf() 用它和用户配置合并
+    // 默认值来自 plugin.json.settings：settingsOf() 用它和用户配置合并
     settings: meta.settings || {},
     configSchema: meta.configSchema || {},
     // 内置模块不提供插件面板（页面在主控制台里，不走 /plugin-panel 通道）
@@ -86,7 +84,7 @@ function buildManifest(module, meta) {
 /**
  * 注册全部内置工具链模块。由 app.js 在 loadPlugins() 之后调用。
  *
- * 幂等：手动重扫（/api/skills/reload）也会走到这里，但 setup/activate 只跑一次 ——
+ * 幂等：手动重扫（/api/skills/reload）也会走到这里，但 setup/activate 只跑一次：
  * 模块里的定时器、store 加载、沙箱初始化都不是可重入的，跑两遍会双份副作用。
  * 后续调用只重新登记 skill 对象（若注册表被清空能恢复），不重跑 setup。
  *
@@ -106,7 +104,7 @@ export function registerHarness({ skillManager, log = console.log } = {}) {
       const api = {
         ...base,
         // 收集本次 setup 注册的工具 id：skill.toolIds 是孤儿清扫的唯一依据，
-        // 不填的话重扫时这 2 个工具会被当成"旧版本遗留"删掉（实测 50→48）。
+        // 不填的话重扫时这些工具会被当成"旧版本遗留"删掉。
         registerTool: (def) => {
           const id = base.registerTool(def);
           if (!module.toolIds.includes(id)) module.toolIds.push(id);
@@ -137,9 +135,9 @@ export function registerHarness({ skillManager, log = console.log } = {}) {
       };
       const r = skillManager.register(skill);
       if (!r.ok) throw new Error(r.error || '注册失败');
-      // ⚠️ activate 必须每次注册都跑：重扫时 manager.register 会先对旧实例调
-      //    deactivate（停掉 doctor 的周期体检定时器），不重新激活就永久停了。
-      //    setup 则只在首次执行（模块内的 store 加载 / 沙箱初始化不可重入）。
+      // activate 必须每次注册都跑：重扫时 manager.register 会先对旧实例调
+      // deactivate（停掉 doctor 的周期体检定时器），不重新激活就永久停了。
+      // setup 则只在首次执行（模块内的 store 加载 / 沙箱初始化不可重入）。
       if (typeof mod.activate === 'function') mod.activate({ reason: bootstrapped ? 'core-rescan' : 'core-boot' });
       results.push({ id: module.id, ok: true });
       if (!bootstrapped) log(`[harness] ✅ ${manifest.name}（${module.id} ${manifest.version}，${manifest.capabilities.length} 项能力）`);

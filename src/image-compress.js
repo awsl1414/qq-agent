@@ -1,11 +1,11 @@
 // 图片压缩：把过大的图片缩到模型可接受的尺寸/体积，降低 token 成本与传输开销。
 //
-// 背景：QQ 图床的原图可能几 MB 甚至十几 MB，直接 base64 给模型既贵又慢，
+// QQ 图床的原图可能几 MB 甚至十几 MB，直接 base64 给模型既贵又慢，
 // 很多视觉模型对超大图还会拒收或报错。这里在下载后、给模型前做一道压缩。
 //
-// 实现：项目没有图像处理库（无 sharp/jimp），用 ffmpeg 做缩放。
+// 项目没有图像处理库（无 sharp/jimp），用 ffmpeg 做缩放：
 //   - 有 ffmpeg：按最长边缩到 maxDim，并重编码为 JPEG（质量可调）
-//   - 无 ffmpeg：原样返回（不压缩，保持旧行为）
+//   - 无 ffmpeg：原样返回（不压缩）
 // 判断"是否过大"：优先按像素（需 ffprobe 读尺寸），读不到尺寸时按字节数兜底。
 import fs from 'node:fs';
 import path from 'node:path';
@@ -34,10 +34,9 @@ function run(cmd, args, timeoutMs = 20000) {
 /**
  * 取当前可用的 ffmpeg / ffprobe。
  *
- * 2026-11-03：随包 ffmpeg 下线，路径解析统一交给 ffmpeg-resolve.js
- * （手填 > 环境变量 > 设置页下载的 > 旧随包 > PATH/注册表/WinGet）。
- * 这里只保留「探不到时告警一次」这条本模块特有的行为 —— 静默原样返回会让
- * "图片没被压缩"完全不可见，2026-10-16 那次 6.5MB 的请求体就是这么查的。
+ * 路径解析统一交给 ffmpeg-resolve.js（手填 > 环境变量 > 设置页下载的 > 旧随包 >
+ * PATH/注册表/WinGet）。这里只保留「探不到时告警一次」这条本模块特有的行为：
+ * 静默原样返回会让"图片没被压缩"完全不可见。
  */
 let _warnedNoFfmpeg = false;
 async function ensureFf() {

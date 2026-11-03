@@ -1,24 +1,21 @@
-// 文生图 Skill —— 把自然语言描述渲染成图片，并直接发到当前会话。
+// 文生图 Skill：把自然语言描述渲染成图片，并直接发到当前会话。
 //
-// ── 设计要点（为什么这么写）──────────────────────────────────────────────
-//   · Base URL / API Key / 模型 id 全部走配置项，代码里不写死任何地址与密钥
+// 几条约束：
+//   · Base URL / API Key / 模型 id 全部走配置项，代码里不写死地址与密钥
 //   · 联网先声明 permissions: ["web_fetch"]，再用 api.fetch（不是全局 fetch）
 //   · 配置一律在执行时用 cfg() 读；setup 时快照会导致「改了设置不生效」
 //   · 图片交付统一走 ctx.sender.sendImage（自带发送队列 / 限频 / 去重）
 //   · available() 必须是同步函数（可用性判定走同步调用链）
 //
-// ── 为什么要把图片「下载回来再发」（实测教训）────────────────────────────
-// 第一版是直接把接口返回的图片 URL 交给协议端，让它自己去下载。
-// 实测 gpt-image-2 返回的是海外图床地址（disk.aipais.de），协议端要
-// 「下载海外图 → 上传腾讯服务器」走完才响应，整条链路超过 onebot.call()
-// 里写死的 15 秒超时 —— 表现为「图画出来了但发送失败：fetch failed」，
-// 而那个 15 秒是核心默认值，技能层改不了。
+// 为什么要把图片「下载回来再发」：第一版直接把接口返回的图片 URL 交给协议端，
+// 让它自己去下载。但 gpt-image-2 返回的是海外图床地址（disk.aipais.de），协议端要
+// 「下载海外图 → 上传腾讯服务器」走完才响应，整条链路超过 onebot.call() 里写死的
+// 15 秒超时，表现为「图画出来了但发送失败：fetch failed」，而那个 15 秒是核心
+// 默认值，技能层改不了。
 //
-// 所以改成：我们自己把图下回来（网络可控、能限量、能校验），转成
-// base64:// 交给协议端。协议端只处理本地不到 1MB 数据，不再碰海外网络。
-//
-// 附带收益：魔数校验能挡掉「图片链接其实返回的是防盗链 HTML 页」，
-// 也能在超限时提前拦截，而不是把协议端搞挂。
+// 所以改成：我们自己把图下回来（网络可控、能限量、能校验），转成 base64://
+// 交给协议端。协议端只处理本地不到 1MB 数据，不再碰海外网络。魔数校验还能挡掉
+// 「图片链接其实返回的是防盗链 HTML 页」，并在超限时提前拦截。
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -46,7 +43,7 @@ const RETRY_DELAY_MS = 2500;
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 60000;
 const MIN_DOWNLOAD_TIMEOUT_MS = 5000;
 const MAX_DOWNLOAD_TIMEOUT_MS = 300000;
-// 下载重试次数。**下载是幂等且免费的**（花钱的只有生成），所以重试是净收益；
+// 下载重试次数。下载是幂等且免费的（花钱的只有生成），所以重试是净收益；
 // 这一点和"生成超时不重试"（图可能已计费）是相反的，别把两者混为一谈。
 const DOWNLOAD_ATTEMPTS = 2;
 const DOWNLOAD_RETRY_DELAY_MS = 1200;
@@ -56,8 +53,7 @@ const RESPONSE_FORMATS = ['auto', 'url', 'b64_json'];
 /**
  * 构建标记：加载时打进日志。
  *
- * 为什么需要它：修好 bug 但用户仍报同样错误时，"是修复没生效还是修复不对"
- * 必须能一眼区分。没有这行标记就只能靠推理（本次为此绕了好几轮）。
+ * 用途：用户报同样错误时，要能一眼区分「修复没生效」和「修复不对」。
  * 看到这行日志 = 新代码已加载；看不到 = 进程还是旧的，重启即可。
  */
 const BUILD_TAG = 'v1.2.0-local-file-send';
@@ -222,7 +218,7 @@ export const providers = {
 
 /**
  * 依赖自检：缺配置就直说，别让界面显示「生效中」而调用时才发现画不了。
- * ⚠️ 必须是同步函数 —— 可用性判定走同步调用链，返回 Promise 会被当成「可用」。
+ * ⚠️ 必须是同步函数：可用性判定走同步调用链，返回 Promise 会被当成「可用」。
  * 这里只读内存里的配置，没有 IO，所以同步判断是安全的。
  */
 export function available() {
@@ -299,7 +295,7 @@ function parseExtraBody(raw) {
 }
 
 function buildBody(settings, prompt, size, count) {
-  // 顺序有讲究：额外字段放前面，核心字段后面覆盖 ——
+  // 顺序有讲究：额外字段放前面，核心字段后面覆盖，
   // 免得用户在 extraBody 里手抖把 prompt / model 写没了
   const body = { ...settings.extraBody };
   body.model = settings.model;
@@ -317,7 +313,7 @@ function buildBody(settings, prompt, size, count) {
  * 为什么必须这么区分（对用户是钱的问题）：
  *   · 接口明确回 4xx/5xx（比如中转站的「上游服务暂时不可用」）→ 这次请求没被受理，
  *     重试不会产生第二次计费，安全。
- *   · 超时 / 连接中断 → 图**可能已经生成并计费**了，再试就是花双份钱换一张图。
+ *   · 超时 / 连接中断 → 图可能已经生成并计费了，再试就是花双份钱换一张图。
  *     这种情况宁可把失败如实报出去。
  */
 async function callWithRetry(settings, body) {
@@ -362,9 +358,9 @@ async function requestImages(settings, body) {
     }
     throw new Error(`连不上接口：${humanizeError(error)}`);
   }
-  // ⚠️ 计时器**不能在这里清**（原来写在 finally 里，是个真 bug）。
+  // ⚠️ 计时器不能在这里清（原来写在 finally 里，是个真 bug）。
   // 生成接口常见"响应头先回、结果 JSON 后到"：清早了就等于给读 body 这一步
-  // 摘掉超时 —— 对方一卡住，这一轮就**永久挂起**（没有超时、没有报错、会话不返回）。
+  // 摘掉超时，对方一卡住，这一轮就永久挂起（没有超时、没有报错、会话不返回）。
   // 所以清 timer 的动作放到读完 body 之后。
 
   let text = '';
@@ -394,7 +390,7 @@ async function requestImages(settings, body) {
 
 /**
  * 判断「这次失败要不要重试」。
- * 5xx / 429 一律可重试；400 要看文案 —— 中转站的「上游服务暂时不可用」也是 400，
+ * 5xx / 429 一律可重试；400 要看文案，中转站的「上游服务暂时不可用」也是 400，
  * 但它本质是瞬时故障，和「模型名写错了」这种参数错误必须区别对待。
  */
 function isTransientStatus(status, text) {
@@ -476,16 +472,12 @@ async function materialize(settings, ref, index) {
 /**
  * 下载一张图（带一次免费重试）。
  *
- * ⚠️ 这里修过一个真实故障：用户看到
- *     「图片拿到了但无法使用：[23] The operation was aborted due to timeout」
+ * 超时作用域必须覆盖整条请求（响应头 + 响应体）。海外图床常见「响应头秒回、
+ * body 慢慢滴」，若只把 fetch() 包在 catch 里，abort 会发生在读 body 时，
+ * 抛出的原始 DOMException（code 23 = TIMEOUT_ERR）就漏到用户面前，既看不出
+ * 是超时，也看不出卡在哪一步。
  *
- * 根因是**超时作用域**：AbortSignal 的计时覆盖整条请求（响应头 + 响应体），
- * 但原来的 catch 只包住 fetch() 那一步。而"响应头秒回、body 慢慢滴"正是海外图床的常态，
- * 于是 abort 发生在读 body 时，抛出的原始 DOMException（code 23 = TIMEOUT_ERR）
- * 直接漏到用户面前 —— 既看不出是超时，也看不出卡在哪一步。
- *
- * 现在：超时覆盖整个下载，并明确报出**阶段**与**已收字节数**。
- * 这两条信息决定处置方式，不是装饰：
+ * 所以失败时要报出阶段与已收字节数，这两条决定处置方式：
  *   · 响应头都没回  → 多半是路由/被墙，换网络或换图床
  *   · body 只收到一点 → 对方是活的只是慢，调大 downloadTimeoutMs 有意义
  */
@@ -504,10 +496,8 @@ async function downloadImage(url, settings) {
       const secs = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
       problem = { readable: describeDownloadError(error, timeoutMs, progress.bytes), retryable: error?.retryable === true };
 
-      // 诊断日志：把"原始错误长什么样"落到日志里。
-      // 为什么必须记：这类失败在用户端只看到一句人话文案，
-      // 而定位根因需要 name/code(23 还是别的)/是否有 cause 链/卡在哪个阶段。
-      // 没有这行，下次再出问题只能靠猜（本次就绕了几轮）。
+      // 诊断日志：用户端只看到一句人话文案，定位根因需要 name / code /
+      // 是否有 cause 链 / 卡在哪个阶段，这些只在这里可见。
       const o = error?.original || {};
       log(`下载失败诊断：phase=${error?.phase || '?'} bytes=${progress.bytes}`
         + ` name=${o.name || error?.name || '?'} code=${o.code ?? error?.code ?? '?'}`
@@ -520,8 +510,8 @@ async function downloadImage(url, settings) {
     }
   }
 
-  // 必须让用户和模型都明白：**图已经生成并计费了**，失败只在"下载"这一环。
-  // 否则模型的自然反应是"重新生成一张"——那是再花一份钱，而问题根本不在生成。
+  // 必须让用户和模型都明白：图已经生成并计费了，失败只在"下载"这一环。
+  // 否则模型的自然反应是"重新生成一张"，那是再花一份钱，而问题根本不在生成。
   log(`图片下载失败，原始链接（可手动重试下载）：${url}`);
   throw new Error(`${problem.readable}。图已生成（可能已计费），**不要重新生成**；`
     + `下载失败不影响图片本身，稍后可用这个链接重取：${url}`);
@@ -530,22 +520,15 @@ async function downloadImage(url, settings) {
 /**
  * 判定一个错误是否为「超时 / 中断」语义（含 cause 链）。
  *
- * ⚠️ 这是真实事故的修复点，两次踩同一处，所以单独抽出来并写清原因。
- *
- * 第一版只认 `controller.signal.aborted`，理由是"信号被我们自己的定时器 abort 了
- * 这件事最确定"。但现实里 abort 还有别的来源：底层 undici、图床侧主动断、代理/中间盒，
- * 以及 fetch 内部对某一段应用的超时。**这些情况下 signal.aborted 仍是 false** ——
- * 于是原始 DOMException 原样漏给用户，看到的就是
- * `[23] The operation was aborted due to timeout`（code 23 = TIMEOUT_ERR）。
- *
- * 所以判定要**同时**看两条证据，任一命中都按超时处理：
+ * 不能只看 controller.signal.aborted：abort 还可能来自底层 undici、图床主动断开、
+ * 代理/中间盒，这些情况下 signal.aborted 仍是 false，原始 DOMException 就会
+ * 原样漏给用户（`[23] The operation was aborted due to timeout`）。所以两条证据
+ * 任一命中都按超时处理：
  *   a) 信号确实被 abort 了（我们自己的 timer 干的）
  *   b) 错误语义是超时/中断（name / DOMException.code / message，逐层挖 cause）
  *
- * 取舍很明确：宁可把"看起来像超时"的错误当超时处理（给出的建议依然可操作：
- * 调大超时、换图床、手动重取链接），也绝不把原始错误码甩到用户面前 ——
- * 那是完全不可操作的信息，而且和"重新生成一张"之间没有任何提示，
- * 会诱导模型再花一次钱。
+ * 宁可把「看起来像超时」的错误当超时处理，也不把原始错误码甩到用户面前：
+ * 那是不可操作的信息，还会诱导模型「重新生成一张」再花一次钱。
  */
 function isTimeoutLike(error) {
   const TIMEOUT_CODES = new Set([23, 20]);                  // DOMException: TIMEOUT_ERR / ABORT_ERR
@@ -572,7 +555,7 @@ function humanizeError(error) {
   const msg = String(error.message || '');
   // ⚠️ "无信息 message" 必须挖 cause，不能原样返回。
   // fetch 网络层失败时 message 恒为 "fetch failed"，真因（TimeoutError /
-  // ECONNREFUSED / socket hang up）全在 cause 里 —— 直接返回 message 等于把
+  // ECONNREFUSED / socket hang up）全在 cause 里，直接返回 message 等于把
   // 排查线索扔掉（实测：用户看到的就是一句光秃秃的 "fetch failed"）。
   const VAGUE = /^(fetch failed|terminated|other side closed|socket hang up|network error|the operation was aborted)$/i;
   if (msg && !/^\[\d+\]/.test(msg) && !VAGUE.test(msg.trim())) return msg;
@@ -596,7 +579,7 @@ function describeDownloadError(error, timeoutMs, receivedBytes) {
 
 /**
  * 人类可读的字节数。
- * 为什么不能一律用 MB：实测"只下载到 2000 字节"会被渲染成「0.00MB」——
+ * 不一律用 MB 的原因：实测"只下载到 2000 字节"会被渲染成「0.00MB」，
  * 等于什么都没说，用户无法判断是"一个字没收到"还是"收到一多半"。
  */
 function formatBytes(bytes) {
@@ -607,7 +590,7 @@ function formatBytes(bytes) {
 }
 
 /**
- * 单次下载。超时**覆盖响应头与响应体两个阶段**。
+ * 单次下载。超时覆盖响应头与响应体两个阶段。
  * 分阶段标记 phase，让上层能给出不同的处置建议。
  */
 async function downloadOnce(url, settings, timeoutMs, progress) {
@@ -624,7 +607,7 @@ async function downloadOnce(url, settings, timeoutMs, progress) {
     wrapped.phase = phase;
     wrapped.retryable = true;
     // 把判定依据一起带上：诊断日志需要它，而 controller 只在 downloadOnce 作用域里，
-    // 上层拿不到 —— 之前在日志里直接写 controller.signal.aborted 直接抛了
+    // 上层拿不到，之前在日志里直接写 controller.signal.aborted 直接抛了
     // ReferenceError，把整条错误处理链搞崩（加日志反而弄坏正常路径，很典型）。
     wrapped.signalAborted = controller.signal.aborted;
     wrapped.original = { name: error?.name, code: error?.code, message: String(error?.message || '').slice(0, 200) };
@@ -757,7 +740,7 @@ function pruneLocal(dir) {
 // ── 错误描述：把 cause 链挖出来 ───────────────────────────────────────────
 /**
  * Node 的 fetch 失败只会给一句「fetch failed」，真正的原因（ECONNRESET /
- * 连接被对端关闭 / DNS 失败）藏在 error.cause 里 —— 不挖出来就没法定位。
+ * 连接被对端关闭 / DNS 失败）藏在 error.cause 里，不挖出来就没法定位。
  */
 function describeError(error, depth = 0) {
   if (!error) return '未知错误';
@@ -808,9 +791,9 @@ function safeParse(text) {
 export const internals = {
   resolveEndpoint, buildBody, extractImages, detectMime, decodeBase64, clamp,
   readSettings, isTransientStatus, describeError, materialize, readLimited,
-  // 导出 downloadImage 是为了让回归测试能用**受控的短超时**验证分阶段报错与重试逻辑；
+  // 导出 downloadImage 是为了让回归测试能用受控的短超时验证分阶段报错与重试逻辑；
   // 走工具层跑一次要 11 秒（5s 下限 × 2 次尝试 + 退避），测试会慢到没人愿意跑。
-  // 注意它是直接吃 settings 的，所以调用方可以绕过 readSettings 的钳制 ——
+  // 注意它是直接吃 settings 的，所以调用方可以绕过 readSettings 的钳制。
   // 配置钳制本身由 readSettings 的断言单独覆盖，两件事分开测。
   downloadImage, downloadOnce, describeDownloadError, formatBytes,
   isTimeoutLike, humanizeError

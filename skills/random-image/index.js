@@ -1,7 +1,7 @@
-﻿// 二次元随机图片（LLM 型）—— 注册工具供模型调用。
+﻿// 二次元随机图片（LLM 型）：注册工具供模型调用。
 //
-// 定位说明：本模块在 skills/ 下，属于 **LLM 型**（由模型决定何时发图），
-// 所以必须有 registerTool；只提供 image.random 能力是没人消费的（核心不认这个能力名）。
+// 本模块在 skills/ 下，属于 LLM 型（由模型决定何时发图），必须有 registerTool；
+// 只提供 image.random 能力是没人消费的（核心不认这个能力名）。
 // 能力仍然保留：别的模块想复用取图逻辑时可以软依赖它。
 import fs from 'node:fs';
 import { runSetuRequest } from './setu.js';

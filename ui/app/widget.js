@@ -2,7 +2,7 @@
 //
 // 职责边界（刻意收窄）：
 //   · 只读：GET /api/config（拿主题与刷新间隔）+ 轮询 GET /api/status；
-//   · 不发任何写请求 —— 置顶/穿透/尺寸/关闭/打开主界面全在主进程的右键菜单里，
+//   · 不发任何写请求：置顶/穿透/尺寸/关闭/打开主界面全在主进程的右键菜单里，
 //     页面与主进程之间不架 IPC 桥（少一个桥就少一类"渲染进程指哪打哪"的面）。
 //   · 所有 DOM 查询都做空值兜底：卡片在窗口极小/显示异常时也不该整页抛白。
 'use strict';
@@ -41,7 +41,7 @@
   const pad2 = (n) => String(n).padStart(2, '0');
   const hhmm = (ts) => { const d = new Date(ts); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
 
-  /** 文本写入（节点不存在就静默跳过 —— 见文件头兜底约定）。 */
+  /** 文本写入（节点不存在就静默跳过，见文件头兜底约定）。 */
   const setText = (id, text) => { const n = $(id); if (n) n.textContent = text; };
   const show = (id, on) => { const n = $(id); if (n) n.hidden = !on; };
 
@@ -60,17 +60,17 @@
   }
 
   /**
-   * 拉一次配置：只取三项 —— 主题、刷新间隔、背景不透明度。
+   * 拉一次配置：只取三项，主题、刷新间隔、背景不透明度。
    * GET /api/config 是只读接口，无来源信息也放行（后端 originAllowed 的口径），
    * 浏览器里直接开 /widget.html 也能正常工作。
    * 不透明度也要周期性重拉（见 pollOnce）：用户在设置里拖滑条，小窗不该
-   * 等到重启才变 —— mica 背板由主进程管，卡片 alpha 由这里管。
+   * 等到重启才变。mica 背板由主进程管，卡片 alpha 由这里管。
    */
   let lastPrefsAt = 0;
   async function loadPrefs(force = false) {
     const now = Date.now();
-    // R140：3000 → 1000。这个去重原本只是"别被 2.5s 轮询打得太密"的保险，
-    // 但它同时会吃掉主进程 widget:prefs-changed 推送带来的那次补拉 ——
+    // 去重窗口取 1000ms。它原本只是"别被 2.5s 轮询打得太密"的保险，
+    // 但也会吃掉主进程 widget:prefs-changed 推送带来的那次补拉：
     // 用户拖完设置页滑条，推送到了、去重还没过期，卡片继续不更新。
     // 主进程现在只在配置真的变了才推，1000ms 已经足够挡掉重复请求。
     if (!force && now - lastPrefsAt < 1000) return;   // 1s 内不重复拉
@@ -92,9 +92,9 @@
       const pct = Number.isFinite(rawOpa) && rawOpa > 0
         ? Math.min(100, Math.max(30, Math.round(rawOpa))) : 50;
       document.documentElement.style.setProperty('--card-alpha', (pct / 100).toFixed(2));
-      // 圆角来源切换（2026-10-23）：透明窗口的圆角归页面画（12px，默认值），
-      // 不透明窗口的圆角归 Win11 DWM 画（系统 8px），页面必须让出直角 → 挂 .wd。
-      // 两套圆弧同时存在就会在角上露出一片窗口底色 —— 见 electron/main.js
+      // 圆角来源切换：透明窗口的圆角归页面画（12px，默认值），
+      // 不透明窗口的圆角归 Win11 DWM 画（系统 8px），页面必须让出直角，挂 .wd。
+      // 两套圆弧同时存在就会在角上露出一片窗口底色，见 electron/main.js
       // createWidgetWindow 与 widget.html 里 --wcard-radius 的注释。
       // 这里只切类，不碰别的样式。
       document.documentElement.classList.toggle('wd', !cfg?.widget?.transparent);
@@ -135,9 +135,9 @@
     //   ① 没匹配到价格 → "未计价"（弱化 + 悬停解释去哪填）；
     //   ② 有价且 >0    → 正常金额；
     //   ③ 有价但为 0   → ¥0（真实花费就是 0，不是"没配"）。
-    // ⚠️ matched 的口径（src/model-prices.js resolveModelPrice）：命中时是
-    //    模型 id 字符串，没命中的是 **null**（source='unmatched'）—— 不是 false，
-    //    所以判空用 !c.matched，写 === false 会漏掉真实数据。
+    // matched 的口径（src/model-prices.js resolveModelPrice）：命中时是
+    // 模型 id 字符串，没命中的是 null（source='unmatched'），不是 false，
+    // 所以判空用 !c.matched，写 === false 会漏掉真实数据。
     const c = s.cost || {};
     const costVal = Number(c.cost) || 0;
     if (!c.matched) {
@@ -171,7 +171,7 @@
     }
 
     setText('w-search', `搜索 ${Number(s.webSearchCount ?? u.webSearchCount) || 0} 次`);
-    // 2026-10-23：原「接入已停止」（注入暂停）随协议端解耦删除；小窗不再有这类附加状态。
+    // 原「接入已停止」（注入暂停）随协议端解耦删除，小窗不再有这类附加状态。
     setText('w-extra', '');
     show('w-extra', false);
     if (lastOkAt) { setText('w-time', hhmm(lastOkAt)); show('w-time', true); }
@@ -223,7 +223,7 @@
   // 只算一次（否则"开了又立刻关"= 点了没反应）。
   let menuToggleAt = 0;
   /** 窗口是不是"基本在屏幕外"（贴边收起态：只剩一条缝）。
-   *  这种时候弹菜单用户是看不见的 —— 先把它展开，下次右键才是菜单。 */
+   *  这种时候弹菜单用户是看不见的，先把它展开，下次右键才是菜单。 */
   function mostlyOffScreen() {
     try {
       const sw = window.screen?.availWidth || window.screen?.width || 0;
@@ -347,7 +347,7 @@
 
   (async function boot() {
     bindMenu();
-    // R140：主进程改了 widget 配置会主动推 widget:prefs-changed（旧外壳没有
+    // 主进程改了 widget 配置会主动推 widget:prefs-changed（旧外壳没有
     // 这个桥时这里静默跳过，退回"2.5 秒轮询 + 1 秒去重"的兜底链路）。
     // 不放进 loadPrefs 的 try 里：桥注册失败只是少一条快路，不影响其它启动。
     try {

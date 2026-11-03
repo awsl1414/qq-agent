@@ -81,7 +81,7 @@ export class MemoryStore {
     // 正在做旧版迁移的会话。#migrateLegacy 的调用链是
     //   #migrateLegacy → #appendRaw → #ensureChat → #migrateLegacy（回到自己）
     // 没有守卫时它会无限递归，只能靠 V8 栈溢出终止（实测 20 条印象 = 138 秒同步阻塞，
-    // 且栈溢出被catch 吞掉 → 迁移"看起来成功了"）。见 #migrateLegacy。
+    // 且栈溢出被 catch 吞掉 → 迁移"看起来成功了"）。见 #migrateLegacy。
     this.migrating = new Set();
   }
 
@@ -105,7 +105,7 @@ export class MemoryStore {
   /**
    * 失效某个会话的内存缓存（数据移植用）。
    * 磁盘上的成员文件被外部合并写入后，内存里的旧 Map 会在下次写回时
-   * 反向覆盖导入内容 —— 必须先丢弃，下次访问重读磁盘。
+   * 反向覆盖导入内容，必须先丢弃，下次访问重读磁盘。
    */
   invalidate(chatKey) {
     return this.cache.delete(String(chatKey));
@@ -114,18 +114,18 @@ export class MemoryStore {
   /**
    * 旧版单文件 → 新版每成员文件。迁移后旧文件移到 backups/。
    *
-   * ⚠️ 这里曾经有两个 P0（2026-10-07 审查实测复现）：
+   * 这里曾经有两个 P0（实测复现）：
    *
-   * 1) **无界递归**。调用链是本方法 → #appendRaw → #ensureChat → 本方法，
-   *    且 #ensureChat 里的 `cache.has()` 根本来不及生效——递归发生在填缓存**之前**。
+   * 1) 无界递归。调用链是本方法 → #appendRaw → #ensureChat → 本方法，
+   *    且 #ensureChat 里的 `cache.has()` 根本来不及生效，递归发生在填缓存之前。
    *    实测 20 条印象 = 138 秒同步阻塞 + 74 次 "Maximum call stack size exceeded"。
    *    修法：`migrating` 守卫（重入直接返回，交给外层帧继续）。
    *
-   * 2) **唯一备份被外层帧删掉**。原代码是
-   *      if (existsSync(backup)) rmSync(backup);   // :139
-   *      renameSync(legacy, backup);               // :140
-   *    最深层帧先完成 rename，回溯时 1272 个外层帧各自重新进入 :139 —— backup 已存在，
-   *    于是把**唯一一份备份** rmSync 掉，紧接着 :140 抛 ENOENT 被 catch 吞掉。
+   * 2) 唯一备份被外层帧删掉。原代码是
+   *      if (existsSync(backup)) rmSync(backup);
+   *      renameSync(legacy, backup);
+   *    最深层帧先完成 rename，回溯时每个外层帧各自重新执行第一行：backup
+   *    已存在，于是把唯一一份备份 rmSync 掉，紧接着第二行抛 ENOENT 被 catch 吞掉。
    *    实测终态：旧文件消失、backups/ 为空、零备份（不可逆数据丢失）。
    *    修法：备份路径带时间戳，永不复用同一路径，因此不再有"删除已有备份"这个动作。
    */
@@ -158,7 +158,7 @@ export class MemoryStore {
       }
       // 旧的 activeTopic/pendingThought 直接丢弃（本版只保留群友印象）
       // 注意顺序：先全部落盘（#appendRaw），成功后才把旧文件移走。
-      // 递归已由migrating 守卫掐断，所以这里的 #appendRaw 不会回头再触发迁移。
+      // 递归已由 migrating 守卫掐断，所以这里的 #appendRaw 不会回头再触发迁移。
       for (const m of migrated) this.#appendRaw(chatKey, m.userId, m.name, m.content, m.createdAt);
       const backupDir = path.join(MEMORY_DIR, 'backups');
       fs.mkdirSync(backupDir, { recursive: true });
@@ -326,10 +326,10 @@ export class MemoryStore {
     const finalName = String(name ?? '').trim().slice(0, 60) || String(old.name || '').trim() || uid;
     const list = Array.isArray(impressions) ? impressions : [impressions];
     const now = Date.now();
-    // 2026-10-23 修复：保留每条印象原有的 createdAt。
-    //   旧实现整表重建、一律写 now —— 用户改一个字保存，这个群友**所有**印象的
-    //   时间戳都变成"刚刚"，而 UI 是按条显示时间的（05-memory-settings.js 的记忆条目渲染），
-    //   整条时间线从此失真。现在按正文匹配沿用旧时间，只有新增的才盖 now。
+    // 保留每条印象原有的 createdAt。
+    //   整表重建、一律写 now 的话，用户改一个字保存，这个群友所有印象的时间戳
+    //   都变成"刚刚"，而 UI 是按条显示时间的（05-memory-settings.js 的记忆条目渲染），
+    //   整条时间线从此失真。按正文匹配沿用旧时间，只有新增的才盖 now。
     const prevAt = new Map();
     for (const e of (old.impressions || [])) {
       const c = String(e?.content ?? '');
@@ -371,7 +371,7 @@ export class MemoryStore {
 
   /**
    * 手动替换某成员的全部印象（管理端编辑用）。返回更新后的成员。
-   * ⚠️ 2026-10-16 起整理链路不再使用本方法（它要求数字 QQ 号、整体覆盖）：
+   * 整理链路不用本方法（它要求数字 QQ 号、整体覆盖）：
    *    - 整理写回 → replaceConsolidatedMember（支持无 QQ 号条目）
    *    - 名字反查合并 → mergeMemberInto（合并去重 + 即时删旧）
    * 本方法保留"必须数字 QQ 号"的严格语义，供管理端编辑类调用使用。
@@ -418,12 +418,11 @@ export class MemoryStore {
   }
 
   /**
-   * 整理路径写回（2026-10-16 新增，orchestrator 整理专用）：**允许"无 QQ 号"成员**。
+   * 整理路径写回（orchestrator 整理专用）：允许"无 QQ 号"成员。
    *
    * 背景：整理对历史遗留的 `_n_<名字>` 条目（userId 为空）写回时，旧实现直接走
-   * replaceMember —— 其"userId 必须是数字 QQ 号"校验对这类条目必抛错，表现为
-   * "N 位失败（已保留原印象）"：用户的旧印象永远无法被整理（实测 9 条印象 3 位
-   * 成员全部失败）。这是"整理无法更新"的直接根因。
+   * replaceMember，其"userId 必须是数字 QQ 号"校验对这类条目必抛错，表现为
+   * "N 位失败（已保留原印象）"：用户的旧印象永远无法被整理。
    *
    * 规则：
    *   - userId 是数字 → 与 replaceMember 完全同构（写 <QQ>.json，键为 QQ 号）。
@@ -453,7 +452,7 @@ export class MemoryStore {
       updatedAt: now,
       lastConsolidatedAt: old.lastConsolidatedAt || 0
     };
-    // 写前备份原文件（保留最近一次）——与 replaceMember 同款
+    // 写前备份原文件（保留最近一次），与 replaceMember 同款
     try {
       const backupDir = path.join(MEMORY_DIR, 'backups', chatDirName(chatKey));
       fs.mkdirSync(backupDir, { recursive: true });
@@ -475,16 +474,16 @@ export class MemoryStore {
   }
 
   /**
-   * 把一条记忆并入指定的 QQ 号（2026-10-16 新增，整理"名字反查"专用）。
+   * 把一条记忆并入指定的 QQ 号（整理"名字反查"专用）。
    *
    * 用途：Orchestrator.#resolveIdentity 用名字反查到目标 QQ 号后，把原条目并过去。
-   * 旧实现是 `replaceMember` **整体覆盖**目标文件：目标已有内容会被冲掉；且旧
+   * 旧实现是 `replaceMember` 整体覆盖目标文件：目标已有内容会被冲掉；且旧
    * `_n_` 文件留在磁盘上，同一个人在列表里出现两份（要重启应用才由
    * #mergeNameDuplicates 合并）。本方法：
    *   - 合并去重（目标原有内容保留，绝不覆盖）；
    *   - 即时删除旧文件与内存条目（不用等重启）；
-   *   - 安全阀：目标已有名字且与来源名字不一致时**不合并**（疑似同名不同人），
-   *     调用方保持原身份继续处理 —— 宁可晚一步，绝不混数据。
+   *   - 安全阀：目标已有名字且与来源名字不一致时不合并（疑似同名不同人），
+   *     调用方保持原身份继续处理，宁可晚一步，绝不混数据。
    *
    * @param {string} chatKey
    * @param {{userId?: string, name?: string}} from 来源条目身份（userId 可为空 = 无 QQ 号条目）
@@ -533,7 +532,7 @@ export class MemoryStore {
     target.updatedAt = Math.max(Number(target.updatedAt) || 0, Number(src.updatedAt) || 0, Date.now());
     writeJson(memberFile(chatKey, to, target.name), target);
     map.set(to, target);
-    // 删除旧条目（文件 + 内存）——即时生效，不再等重启时的 #mergeNameDuplicates
+    // 删除旧条目（文件 + 内存），即时生效，不再等重启时的 #mergeNameDuplicates
     try { fs.rmSync(memberFile(chatKey, fromUid, src.name || fromName), { force: true }); } catch { /* ignore */ }
     if (!fromUid && fromName && src.name !== fromName) {
       try { fs.rmSync(memberFile(chatKey, '', fromName), { force: true }); } catch { /* ignore */ }
@@ -557,7 +556,7 @@ export class MemoryStore {
   /**
    * 删除一个会话的**全部**记忆（记忆页「删除本会话记忆」按钮）。
    * 成员文件、_meta.json、旧版单文件与备份一并清掉；目录本身保留
-   * （可能是挂载点/被占用，删不掉也无妨——里面已空）。
+   * （可能是挂载点/被占用，删不掉也无妨，里面已空）。
    * @returns {boolean} 是否删掉了东西
    */
   removeChat(chatKey) {

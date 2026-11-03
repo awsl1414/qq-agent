@@ -2,19 +2,19 @@
 /**
  * electron-builder 的启动包装器：把本项目的四段式版本号转换成 semver。
  *
- * 为什么需要这一层：electron-builder 26 在 validateConfig 阶段用
- * `semver.valid(pkg.version, true)` 校验 package.json 的 version，四段式
- * （本项目的 `0.4.9.1`）直接抛 `Invalid version`，构建无法开始。这是上游的
- * 硬校验，没有配置开关能绕过（已核对 app-builder-lib 的 normalizePackageData.js）。
+ * electron-builder 26 在 validateConfig 阶段用 `semver.valid(pkg.version, true)`
+ * 校验 package.json 的 version，四段式（本项目的 `0.4.9.1`）直接抛
+ * `Invalid version`，构建无法开始。这是上游的硬校验，没有配置开关能绕过
+ * （已核对 app-builder-lib 的 normalizePackageData.js）。
  *
  * 做法：构建期间把 package.json 的 version 临时写成 semver 合法形式
  * （`0.4.9.1` → `0.4.9-1`），再用 -c.extraMetadata.version 把真实四段版本
  * 写回包内 package.json，让 src/app.js 的更新检查与界面看到的仍是 0.4.9.1。
  * 构建结束（含异常与 Ctrl-C）后恢复原文件内容。
  *
- * 为什么不用「直接把 package.json 改成三段」：版本号是用户可见的发布标识，
- * 且 src/app.js 的 compareSemver 按段数取最大值比较，少一段会让第四段的
- * 更新永远检测不到（见那里的注释）。改版本号属于改业务语义，不该由打包层做。
+ * 不直接把 package.json 改成三段：版本号是用户可见的发布标识，且 src/app.js 的
+ * compareSemver 按段数取最大值比较，少一段会让第四段的更新永远检测不到。
+ * 改版本号属于改业务语义，不该由打包层做。
  *
  * 用法：node scripts/run-builder.mjs --win [--dir]
  */

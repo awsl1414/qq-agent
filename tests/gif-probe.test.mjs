@@ -1,11 +1,10 @@
-// gif-to-video 的元数据解析（2026-10-23 体检补）
+// gif-to-video 的元数据解析。
 //
-// 背景：这台机器 PATH 里没有 ffmpeg/ffprobe，gif-to-video 原先只查 PATH，
-// 于是 findFfmpeg() 恒为 null → GIF 永远按图片发。现在改成「先随包、再 PATH」，
-// 并且没有 ffprobe 时用 ffmpeg 自报的 Duration/Stream 行兜底。
+// gif-to-video 原先只查 PATH，机器上没有 ffmpeg/ffprobe 时 findFfmpeg() 恒为 null，
+// GIF 永远按图片发。现在改成「先随包、再 PATH」，并且没有 ffprobe 时用 ffmpeg
+// 自报的 Duration/Stream 行兜底。
 //
-// 这里只测**纯解析函数**（不 spawn），因为真正的转换依赖二进制、不适合当单测。
-// 端到端那条路用 `node -e` 手工验过：96x72 的 1s GIF → 24 帧 mp4。
+// 这里只测纯解析函数（不 spawn），因为真正的转换依赖二进制、不适合当单测。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseFfmpegDuration, parseFfmpegVideoSize } from '../src/gif-to-video.js';

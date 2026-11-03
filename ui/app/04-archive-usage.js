@@ -1,4 +1,4 @@
-// 〔存档 / 用量〕——M9 拆分第 5 段
+// 〔存档 / 用量〕
 'use strict';
 // ── 存档视图 ──
 async function loadChats({ quiet = false } = {}) {
@@ -8,7 +8,7 @@ async function loadChats({ quiet = false } = {}) {
     renderChatList();
     if (state.currentChatKey) {
       // 打开着某群详情时也刷新该群消息。
-      // keepView=true：只更新内容，不动分页与滚动位置 ——
+      // keepView=true：只更新内容，不动分页与滚动位置，
       // 否则用户滚出来的内容会被每 15 秒的轮询刷回去。
       loadChatMessages(state.currentChatKey, { keepView: true });
     }
@@ -16,11 +16,10 @@ async function loadChats({ quiet = false } = {}) {
 }
 
 /**
- * 真实 QQ 头像 URL（2026-10-17，用户要求存档列表读取群聊真实头像）：
- * 腾讯公开 CDN，无需鉴权 ——
+ * 真实 QQ 头像 URL：腾讯公开 CDN，无需鉴权。
  *   群   → https://p.qlogo.cn/gh/<群号>/<群号>/100
  *   私聊 → https://q1.qlogo.cn/g?b=qq&nk=<QQ号>&s=100
- * ⚠️ 群头像**不能**用 b=qq&nk=群号（那是个人接口，对群号返回 404）。
+ * ⚠️ 群头像不能用 b=qq&nk=群号（那是个人接口，对群号返回 404）。
  * 与 15-chat-chrome.js 会话页左栏、05-memory-settings.js 记忆卡片同一套路
  * （15-chat-chrome 的实现闭在 IIFE 里拿不到，这里按同款规则再写一份）。
  * key 不是纯数字 ID 时返回 ''，由调用方退回首字。
@@ -37,7 +36,7 @@ function qqAvatarUrl(chatKey, size) {
 
 /**
  * 头像加载失败 → 揭开首字兜底（与 15-chat-chrome.js bindAvatarFallback 同款）。
- * ⚠️ error 事件**不冒泡**，必须捕获阶段监听；绑在长期容器上，
+ * ⚠️ error 事件不冒泡，必须捕获阶段监听；绑在长期容器上，
  *    innerHTML 重建不影响委托（渲染函数每次整体重画，不能逐节点绑）。
  */
 function bindArchiveAvatarFallback(box) {
@@ -53,9 +52,9 @@ function bindArchiveAvatarFallback(box) {
 }
 
 /**
- * 存档群聊列表（2026-10-17 改版）：结构与「会话」页左栏的聊天对象行**逐字同款**
+ * 存档群聊列表：结构与「会话」页左栏的聊天对象行逐字同款
  * （.bp-row + .bp-av 真实头像 + .bp-rt 群名 / .bp-ri 末条预览 + .cc-pill 计数），
- * 两类样式全是全局类、直接复用，不再自造一套。
+ * 样式全是全局类，直接复用，不另造一套。
  * 右侧 pill：有未读 → 红胶囊「N 条未读」；否则 → 灰胶囊「N 条」（消息总数）。
  * 元素上保留 .chat-item class：new-item 入场动画与 ? 主题的彩蛋规则还挂在它上面。
  */
@@ -85,9 +84,8 @@ function renderChatList() {
   }).join('') || '<div class="list-head muted">还没有消息存档（等白名单里的群/好友来消息）</div>';
   for (const c of state.chats) state.seenChatKeys.add(c.key);
   bindArchiveAvatarFallback(box);
-  // 2026-10-23：改事件委托（与 02-sse-sessions.js 的会话列表同一套做法）。
-  // 此前逐行 addEventListener：列表每次 SSE/轮询刷新都重建 HTML，N 行就产生 N 个闭包，
-  // 且与项目自己在会话列表里写下的"改委托"决策不一致。
+  // 事件委托（与 02-sse-sessions.js 的会话列表同一套做法）：列表每次 SSE/轮询
+  // 刷新都重建 HTML，逐行 addEventListener 会每次产生 N 个闭包。
   if (!box.__chatItemsBound) {
     box.__chatItemsBound = true;
     box.addEventListener('click', (e) => {
@@ -101,8 +99,8 @@ async function selectChat(key) {
   state.currentChatKey = key;
   if (state.quoteMode) state.quoteSelected = new Set();   // 金句按单段对话收录，换会话清空勾选
   renderChatList();
-  // R76：详情容器可能已被切页销毁（#chat-detail 只在存档页存在）—— 直接写
-  // innerHTML 会抛 TypeError（10/10 日志实测过一次）。切走时静默跳过即可。
+  // 详情容器可能已被切页销毁（#chat-detail 只在存档页存在），直接写 innerHTML
+  // 会抛 TypeError，切走时静默跳过即可。
   const detail = $('#chat-detail');
   if (detail) detail.innerHTML = '<div class="empty-hint">加载中…</div>';
   await loadChatMessages(key);
@@ -115,16 +113,14 @@ async function selectChat(key) {
  * @param {boolean} keepView  true = 保留当前分页与滚动位置（轮询刷新用）；
  *                            false = 重置为第一页并重建结构（切换会话用）。
  *
- * ⚠️ 这个参数是修"滚动被冲掉"的关键：
- *    轮询每 15 秒一次、每次 SSE 事件也会触发，如果都走"重置分页 + 重建 DOM"，
- *    用户辛辛苦苦滚出来的内容会瞬间被刷回前 500 条，滚动位置也回到顶部
- *    —— 表现为"明明滚下去了，过一会儿自己弹回上面"。
+ * ⚠️ 这个参数是修"滚动被冲掉"的关键：轮询和每次 SSE 事件都会触发这里，
+ *    如果都走"重置分页 + 重建 DOM"，用户滚出来的内容会瞬间被刷回前 500 条，
+ *    滚动位置也回到顶部，表现为"明明滚下去了，过一会儿自己弹回上面"。
  */
 async function loadChatMessages(key, { keepView = false } = {}) {
   try {
-    // 2026-10-23 修复：原先 limit=100000 —— 几万条的群会一次拉回数十 MB JSON，
-    // 主线程解析 + 排序造成明显卡顿与内存峰值。改为只取最近 5000 条（前端分页逻辑不变），
-    // 更早的消息在计数文案里明确提示"仅载入最近 N 条"。
+    // 上限 5000 条：几万条的群一次拉回数十 MB JSON，主线程解析 + 排序会造成
+    // 明显卡顿与内存峰值。更早的消息在计数文案里明确提示"仅载入最近 N 条"。
     const data = await api(`/api/chats/${key.replace(':', '_')}/messages?limit=5000`);
     // 期间用户可能切走了会话，那就别覆盖当前视图
     if (state.currentChatKey !== key) return;
@@ -148,13 +144,10 @@ async function loadChatMessages(key, { keepView = false } = {}) {
 /**
  * 存档消息列表：首次建结构 + 填充内容。
  *
- * ⚠️ 关键：这个只在"切换会话 / 首次打开"时调用，负责建出完整骨架并绑定工具栏事件。
- *    滚动加载更多时走 updateChatMessagesBody() —— 只替换 tbody 与底部文案，
- *    不碰外层结构。
- *
- *    曾经每次加载更多都走整个函数（innerHTML 全量重建），后果有两个：
- *      1. 浏览器丢失 scrollTop → 表现为"明明在往下滚，却自己弹回上面"
- *      2. 工具栏事件被反复绑定 → 点一次发好几条
+ * ⚠️ 这个只在"切换会话 / 首次打开"时调用，负责建出完整骨架并绑定工具栏事件。
+ *    滚动加载更多走 updateChatMessagesBody()，只替换 tbody 与底部文案，不碰外层结构。
+ *    加载更多也走整个函数（innerHTML 全量重建）的话，浏览器会丢失 scrollTop
+ *    （"明明在往下滚，却自己弹回上面"），工具栏事件也会被反复绑定。
  */
 function renderChatMessages() {
   const key = state.currentChatKey;
@@ -162,9 +155,8 @@ function renderChatMessages() {
   const detail = $('#chat-detail');
   if (!detail) return;
 
-  // 2026-10-23 修复：切到别的会话时清掉上一个会话的勾选。
-  //   chatDeleteSelected 存的是**消息 id**，跨会话残留会让「删除选中」把 A 群的 id
-  //   发给 B 群的删除接口 —— 用户以为在删 B 的，实际删的是 A 的。
+  // 切到别的会话时清掉上一个会话的勾选：chatDeleteSelected 存的是消息 id，
+  // 跨会话残留会让「删除选中」把 A 群的 id 发给 B 群的删除接口。
   if (state.chatDeleteKey !== key) {
     state.chatDeleteKey = key;
     if (state.chatDeleteSelected && state.chatDeleteSelected.size) state.chatDeleteSelected.clear();
@@ -198,10 +190,9 @@ function renderChatMessages() {
     <table class="archive-table"><tbody id="chat-msg-body"></tbody></table>
     <div class="list-more muted" id="chat-msg-more"></div>`;
 
-  // 工具栏事件：只在这里绑一次
-  // 2026-10-23 修复：这三个按钮此前完全没有错误处理 —— 后端未连接 / 白名单未配时，
-  // 点了毫无反应也不提示（用户会反复点，并误判"已生效"）。统一补
-  // 「禁用 → 执行 → 失败 qaAlert → 恢复」，顺带挡住连点。
+  // 工具栏事件只在这里绑一次。这三个按钮必须走 runChatAction：没有错误处理时，
+  // 后端未连接 / 白名单未配点了毫无反应也不提示，用户会反复点并误判"已生效"。
+  // 「禁用 → 执行 → 失败 qaAlert → 恢复」顺带挡住连点。
   const runChatAction = async (btn, fn, label) => {
     const old = btn.textContent;
     btn.disabled = true; btn.textContent = '处理中…';
@@ -228,7 +219,7 @@ function renderChatMessages() {
   // 清空存档：删除这个会话的全部消息（不可恢复）
   $('#chat-clear-btn').addEventListener('click', async () => {
     const meta = state.chats.find((c) => c.key === key) || {};
-    // ⚠️（2026-10-10 r86 修 P2）破坏性 → danger:true（红主按钮 + 明确按钮文案）
+    // 破坏性操作 → danger:true（红主按钮 + 明确按钮文案）
     if (!await qaConfirm({
       danger: true,
       confirmText: '清空存档',
@@ -250,9 +241,9 @@ function renderChatMessages() {
     $('#chat-del-count').textContent = `已选 ${state.chatDeleteSelected.size} 条`;
     delBar.style.display = state.chatDeleteMode ? 'flex' : 'none';
   };
-  // 2026-10-23 修复：模板里 #chat-del-bar 写死 display:none，而 state.chatDeleteMode
-  //   是全局的 —— 在删除模式下切会话，新会话的行首有勾选框、工具条却不出现，
-  //   用户勾完既删不掉也退不出删除模式。这里按当前状态同步一次。
+  // 模板里 #chat-del-bar 写死 display:none，而 state.chatDeleteMode 是全局的。
+  // 不按当前状态同步一次的话，在删除模式下切会话，新会话的行首有勾选框、
+  // 工具条却不出现，用户勾完既删不掉也退不出删除模式。
   updateDelBar();
   $('#chat-del-mode-btn').addEventListener('click', () => {
     state.chatDeleteMode = !state.chatDeleteMode;
@@ -269,7 +260,7 @@ function renderChatMessages() {
   $('#chat-del-confirm-btn').addEventListener('click', async () => {
     const ids = [...state.chatDeleteSelected];
     if (!ids.length) { qaAlert('请先勾选要删除的消息'); return; }
-    // ⚠️（2026-10-10 r86 修 P2）破坏性 → danger:true
+    // 破坏性操作 → danger:true
     if (!await qaConfirm({
       danger: true,
       confirmText: `删除 ${ids.length} 条`,
@@ -300,9 +291,9 @@ function renderChatMessages() {
       if (cnt) cnt.textContent = `已选 ${state.chatDeleteSelected.size} 条`;
     });
   }
-  // 2026-10-23 修复：手动发测试消息此前无 try/catch —— 发送失败（未连 OneBot /
-  // 白名单拦截）时按钮毫无反应，用户会以为"已经发出去了"。现在失败明确提示，
-  // 成功才清空输入框；并禁用按钮防连点（避免重复发两条）。
+  // 手动发测试消息必须带错误处理：发送失败（未连 OneBot / 白名单拦截）时
+  // 没有提示，用户会以为"已经发出去了"。失败明确提示，成功才清空输入框；
+  // 禁用按钮防连点（避免重复发两条）。
   $('#chat-testsend-btn').addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     const input = $('#test-send-text');
@@ -343,15 +334,13 @@ function renderChatMessages() {
 
 /**
  * 排序缓存：state.chatMessages 的引用不变就复用上次的排序结果。
+ * 每次 slice + sort + reverse（两遍全量拷贝 + O(n log n)）的话，滚动加载更多时
+ * 数据根本没变，每滚一批就白排一遍，几万条时卡在滚动事件里。
  *
- * 曾经在 updateChatMessagesBody 里每次都 slice + sort + 再 slice + reverse
- * （两遍全量拷贝 + O(n log n)）。轮询进来数据确实会变（新数组引用，重排一次），
- * 但滚动加载更多时数据根本没动 —— 每滚一批就白排一遍，几万条时卡在滚动事件里。
- *
- * 用"稳定排序"而不是简单 reverse：存档里 ts 是秒级精度（实测 2000 条中有 18 处
- * 同一秒内的消息毫秒级逆序）。直接 reverse 会把这些也翻过来，导致同一秒内的
- * 消息顺序不对。先按 ts 稳定升序排一遍（Array.sort 在现代引擎里是稳定的），
- * 再反转，就能保证"新的在上"且同秒内顺序也正确。
+ * 用"稳定排序 + 反转"而不是简单 reverse：存档里 ts 是秒级精度，同一秒内的
+ * 消息常有毫秒级逆序，直接 reverse 会把它们也翻过来，导致同秒内顺序不对。
+ * 先按 ts 稳定升序排一遍（Array.sort 在现代引擎里是稳定的）再反转，
+ * 就能保证"新的在上"且同秒内顺序也正确。
  */
 let chatMsgSortCache = { src: null, newestFirst: [] };
 function chatMessagesNewestFirst() {
@@ -400,7 +389,7 @@ function updateChatMessagesMeta(newestFirst) {
   if (cnt) {
     const meta = state.chats.find((c) => c.key === state.currentChatKey) || {};
     const t = meta.total || total || 0;
-    // 2026-10-23：拉取上限 5000，超出时明确告知"只载入了最近多少条"，
+    // 拉取有上限，超出时明确告知"只载入了最近多少条"，
     // 否则用户会把"看不到更早的"当成数据丢失。
     const clipped = t > total ? `（仅载入最近 ${total} 条，更早的在 data/messages 里）` : '';
     cnt.textContent = t
@@ -411,8 +400,8 @@ function updateChatMessagesMeta(newestFirst) {
 
 /**
  * 滚动加载更多的追加路径：只把新批次的行插到 tbody 末尾。
- * 不重排（走缓存）、不重建已有行、不碰滚动位置 —— 内容加在视口下方，
- * 浏览器天然保持视口稳定，所以这里**绝对不能**做 scrollTop 补偿。
+ * 不重排（走缓存）、不重建已有行、不碰滚动位置：内容加在视口下方，
+ * 浏览器天然保持视口稳定，所以这里绝对不能做 scrollTop 补偿。
  */
 function appendChatMessageRows(prevShown) {
   const tbody = $('#chat-msg-body');
@@ -427,12 +416,12 @@ function appendChatMessageRows(prevShown) {
 
 /**
  * 只更新消息表格的内容（不重建外层结构）。
- * 轮询刷新与首次填充走这里 —— 表格内容变长，但滚动容器没动，
+ * 轮询刷新与首次填充走这里：表格内容变长，但滚动容器没动，
  * 所以用户的滚动位置天然保持，不会再"自己弹回上面"。
  *
- * @param {boolean} keepScroll 轮询路径传 true：新消息从**顶部**进来，
+ * @param {boolean} keepScroll 轮询路径传 true：新消息从顶部进来，
  *        内容高度变化会把视口顶走，按增量补偿回阅读位置。
- *        （滚动加载更多不走这里，走 appendChatMessageRows —— 底部追加不需要补偿）
+ *        （滚动加载更多不走这里，走 appendChatMessageRows，底部追加不需要补偿）
  */
 function updateChatMessagesBody(keepScroll = false) {
   const detail = $('#chat-detail');
@@ -462,7 +451,7 @@ function updateChatMessagesBody(keepScroll = false) {
  用量页图表（按天折线 + 按会话/按模型横向条形）
 
  表格是"精确"，图表是"一眼看懂"：趋势、谁占大头、集中在哪几天，
- 这些扫一眼图就知道，扫表格得逐行做心算。图下面仍保留数值表（默认折叠）。
+ 扫一眼图就知道。图下面仍保留数值表（默认折叠）。
 
  ⚠️ 本项目 electron/main.js 关掉了硬件加速（软件渲染）：图表里
    不要用 backdrop-filter、不要给常驻元素加 animation。
@@ -496,12 +485,9 @@ function fmtMoneyChart(n) {
 
 /**
  * 坐标轴刻度用的紧凑格式（太长会把图挤变形）。
- *
- * ⚠️ token 分支已改为复用 fmtTokShort：过去这里是 `n >= 10000 ? round(n/1000)+'k'`
- * —— 没有 M 档且 Math.round 丢精度，1687 万 token 会在坐标轴上显示成
- * 「16872k」。现在与顶部概览条、卡片完全同一套换算。
- *
- * 成本分支同理补了 ¥1 万 / ¥100 万 档：一天成本上万时旧版会输出「¥12345」。
+ * ⚠️ token 分支必须复用 fmtTokShort，与顶部概览条、卡片保持同一套换算，
+ *    否则同一个量在不同位置显示成不同写法。
+ * 成本分支带 ¥1 万 / ¥100 万 档，一天成本上万时不会输出「¥12345」。
  */
 function fmtMetricShort(v, metric = usageMetric()) {
   const n = Number(v) || 0;
@@ -528,7 +514,7 @@ function niceMax(v) {
  * 平滑曲线路径（单调三次 Hermite，Fritsch–Carlson 限幅）。
  * ⚠️ 刻意不用普通的 Catmull-Rom：它在陡升陡降处会「过冲」，把曲线甩到 0 以下
  * 或刻度上界以上，数据图里看着像假数据。这里的算法保证曲线始终落在相邻两点
- * 的取值区间内 → 既没有折角，又不会冒出假的峰谷。点数 < 2 时返回空串。
+ * 的取值区间内，既没有折角，又不会冒出假的峰谷。点数 < 2 时返回空串。
  */
 function smoothPath(pts) {
   const n = pts.length;
@@ -565,13 +551,13 @@ function smoothPath(pts) {
  * viewBox 用真实像素尺寸（= 实测容器宽 × 固定高），所以线宽与字号不会被拉伸。
  * 窗口缩放后由 bindUsageResize() 重画一次。
  *
- * 「一眼看懂」靠三件事：
+ * 可读性靠三件事：
  *   1. 曲线平滑，趋势比折线好读（且不过冲）；
  *   2. 图上方摘要条直接给出 峰值（带日期）/ 日均 / 合计，不用在图上找数字；
- *   3. 峰值点带虚线下引线、最新一点实心高亮，位置一目了然。
+ *   3. 峰值点带虚线下引线、最新一点实心高亮。
  * ⚠️ 所有文字都放在 SVG 外的摘要条里：页面背景是渐变光晕，SVG 文字没法靠纯色描边
  *    挖底，压在线/面积上会糊成一团。图上只留形状。
- * ⚠️ 圆点提示用 data-tip 而不是 SVG <title> —— 窗口是 transparent 的，
+ * ⚠️ 圆点提示用 data-tip 而不是 SVG <title>：窗口是 transparent 的，
  *    原生 tooltip 会渲染成淡黄色色块（见 tooltip.js）。
  */
 function usageLineChart(points, metric, width, height = 156) {
@@ -664,10 +650,10 @@ function usageLineChart(points, metric, width, height = 156) {
  * 横向条形图（分类排名用）。会话/模型是并列关系，折线会误导"前后有趋势"，
  * 条形一眼看出谁多谁少。
  *
- * 「一眼看懂」靠三件事：
+ * 可读性靠三件事：
  *   1. 左侧名次徽标 + 条色随名次递减（第一名最实），不用逐行比长度；
  *   2. 每行右侧给百分比；条形按最大值归一化，第一名永远满格；
- *   3. 底部汇总「合计 + 前 N 项占比」，直接看出集中度（少数会话吃掉大部分用量）。
+ *   3. 底部汇总「合计 + 前 N 项占比」，直接看出集中度。
  */
 function usageBars(list, metric, labelOf, limit = 8) {
   // key 做二级比较项，保证排序稳定（同指标值的条目不随刷新跳动）
@@ -686,9 +672,8 @@ function usageBars(list, metric, labelOf, limit = 8) {
 
   const rows = shown.map((x, i) => {
     const v = metricOf(x, metric);
-    // ⚠️ 曾经是 Math.max(2, (v/max)*100)：值为 0 的项也被画出 2% 宽的条，
-    // 看起来"有数据"，点进去却是 0。零值就该是零宽度（仍保留行与百分比，
-    // 用户能看到"有这一项但没用量"）。
+    // 零值必须是零宽度：给个最小宽度会让"看起来有数据，点进去却是 0"。
+    // 行与百分比仍保留，用户能看到"有这一项但没用量"。
     const w = max > 0 ? Math.max(0, (v / max) * 100) : 0;
     // 占比分母用全量 totalV（不截断），保证所有行占比之和为 100%。
     // 负数（如退款场景）会破坏这个不变量，所以负值一律按 0 显示，
@@ -746,11 +731,10 @@ function bindUsageResize() {
       const args = state.usageRenderArgs;
       const box = $('#usage-page');
       if (!args || !box || state.tab !== 'usage') return;
-      // ⚠️ 必须核对 args 是不是当前范围的：state.usageRenderArgs 里存的是
-      // **最近一次渲染时**的参数，而 resize 是 200ms 防抖的。若用户在这
-      // 200ms 内切了时间范围，页面上的表已是新范围，args.stats 还是旧的
-      // → 重画出来的图与表格对不上。现在渲染时一并记下范围（见
-      // updateUsagePage），这里比对不一致就跳过，等下次数据回来自然重画。
+      // ⚠️ 必须核对 args 是不是当前范围的：state.usageRenderArgs 存的是最近一次
+      // 渲染时的参数，而 resize 是 200ms 防抖的。用户在这 200ms 内切了时间范围的话，
+      // 页面上的表已是新范围、args.stats 还是旧的，重画出来的图与表格对不上。
+      // 渲染时一并记下范围（见 updateUsagePage），这里比对不一致就跳过。
       if (args.range !== usageRange) return;
       box.querySelectorAll('.usage-chart').forEach((el) => { el.dataset.sig = ''; });
       renderUsageCharts(args.stats, box);
@@ -765,12 +749,12 @@ function renderUsageSkeleton() {
     .map((h) => `<i class="sk-col" style="height:${h}%"></i>`).join('');
   const chart = (h) => `<div class="sk-chart" style="height:${h}px">${cols}</div>`;
   const h3 = '<div class="sk-line" style="width:64px;height:15px;margin:22px 0 10px"></div>';
-  // 说明行 + 摘要行占位：正式版式里每块都有这两条（2026-10-19 统一版式），
+  // 说明行 + 摘要行占位：正式版式里每块都有这两条，
   // 不占位的话数据回来时整页会往下跳约 200px。
   const note = '<div class="sk-line" style="width:58%;height:11px;margin:0 0 10px"></div>';
   const sum = '<div class="sk-line" style="width:86%;height:30px;margin:0 0 11px;border-radius:9px"></div>';
   // 顺序与正式页面一致（控制条 → 三块图 → 统计卡），加载完成时布局不跳。
-  // 提示文案（R49）：大数据下统计可能要几秒，让用户知道页面没死。
+  // 提示文案：大数据下统计可能要几秒，让用户知道页面没死。
   return `
     <div class="usage-wrap">
       <div class="usage-head">
@@ -798,7 +782,7 @@ function renderUsagePage(stats, st, prices) {
 
       <!-- 控制条（指标 + 时间范围 + 刷新）贴着第一张图放，但要**独立于 [data-block="days"]**：
            ⚠️ 选「今日 / 24 小时」时后端 mode ≠ 'days'，updateUsagePage 会把整个
-              [data-block="days"] 隐藏（那时光图表本来就没数据）——控制条若住在里面
+              [data-block="days"] 隐藏（那时光图表本来就没数据），控制条若住在里面
               会跟着一起消失（实测 bug：点「今日」后所有按钮都不见了）。
            所以它必须是 days 块的**兄弟节点**，位置仍紧贴图表上方。 -->
       <div class="usage-ctrl">
@@ -954,7 +938,7 @@ function renderUsagePage(stats, st, prices) {
       </div>
 
       <!-- 统计卡整排挪到图表之后（需求：先看趋势，再看精确数字；首屏只剩标题+图，更简洁）。
-           ⚠️ 这些 data-field / id 一个都不能少 —— updateUsagePage 靠它们填数值，
+           ⚠️ 这些 data-field / id 一个都不能少，updateUsagePage 靠它们填数值，
               #runs-card 的点击绑定也挂在 renderUsagePage 里。
            估算成本仍是第一张：它是这页的主指标（accent 描边/底色突出）。 -->
       <div class="usage-cards">
@@ -1009,15 +993,12 @@ function renderUsagePage(stats, st, prices) {
   });
 
   // ── 图表点击 / 键盘下钻（委托挂 box 上，必须防重复绑定）──
-  // ⚠️（2026-10-12 修「明细弹窗多开」）box 是 #usage-page —— index.html 里的
-  //    **持久容器**，而本函数会被反复调用（切到用量页签 / 切时间范围 / 点刷新
-  //    都走 loadUsageView({force:true}) → 在此重建骨架）。委托监听器挂在 box
-  //    自身上，innerHTML 重建**清不掉它们** —— 每调用一次就多积一份。
-  //    积 N 份后，点一次图表条形会同时触发 N 次 openUsageBreakdown → 弹出 N 个
-  //    完全相同的「明细」弹窗（用户报障：「点击明细弹出很多个弹窗」，且每次
-  //    刷新后再点都会再多一个）。表格行的绑定挂在每次重建的 table 元素上，
-  //    不受影响；此处两个是唯一挂在持久容器上的。
-  //    与 bindSessionListDelegation（dataset.delegated）/ bindMarketList
+  // ⚠️ box 是 #usage-page，index.html 里的持久容器，而本函数会被反复调用
+  //    （切到用量页签 / 切时间范围 / 点刷新都走 loadUsageView({force:true}) 重建骨架）。
+  //    委托监听器挂在 box 自身上，innerHTML 重建清不掉它们，每调用一次就多积一份，
+  //    点一次图表条形会同时触发 N 次 openUsageBreakdown，弹出 N 个相同的「明细」弹窗。
+  //    表格行的绑定挂在每次重建的 table 元素上，不受影响；此处两个是唯一挂在持久
+  //    容器上的。与 bindSessionListDelegation（dataset.delegated）/ bindMarketList
   //    （dataset.mkBound）/ __chatDelBound、__quoteBound 同一约定：只绑一次。
   if (box.dataset.usageDrillBound !== '1') {
     box.dataset.usageDrillBound = '1';
@@ -1058,9 +1039,7 @@ function renderUsagePage(stats, st, prices) {
   });
 
   // 「展开全部 / 收起」按钮：显隐与文案由 updateUsagePage 里的 fill() 负责，
-  // 但此前**没有任何地方监听它的点击**，也没有代码把 tbody.dataset.expanded 置为 '1' ——
-  // 结果是：模型超过 20 行时按钮会出现、写着「展开全部（还有 N 行）」，点下去却毫无反应，
-  // 剩下的行永远看不到。这里补上开合逻辑（复用 updateUsagePage 重绘，不重新请求接口）。
+  // 点击的开合逻辑在这里（复用 updateUsagePage 重绘，不重新请求接口）。
   const modelsExpandBtn = box.querySelector('#models-expand');
   if (modelsExpandBtn) {
     modelsExpandBtn.addEventListener('click', () => {
@@ -1080,15 +1059,14 @@ function updateUsagePage(stats, st, prices) {
   const box = $('#usage-page');
   if (!box) return;
   // 记住最近一次渲染参数：供「展开全部/收起」按钮与窗口缩放重画图表使用。
-  // range 必须一起记 —— resize 回调要靠它判断这份 stats 是不是当前范围的
+  // range 必须一起记，resize 回调要靠它判断这份 stats 是不是当前范围的
   // （见 bindUsageResize 里的注释）。
   state.usageRenderArgs = { stats, st, prices, range: usageRange };
   const t = stats?.totals || {};
   const cfg = state.config || {};
 
-  // 统一存字符串：曾经这里把数字直接赋给 textContent（如 runs=0 时存的是数字 0
-  // 而非 '0'）。浏览器会隐式转换所以显示没问题，但类型不一致会在别处埋雷
-  // （比较、测试断言、序列化时都可能踩到）。这里显式转成字符串。
+  // 统一存字符串：数字直接赋给 textContent 时 runs=0 存的是数字 0 而非 '0'，
+  // 显示没问题，但类型不一致会在比较、测试断言、序列化时埋雷。
   const set = (f, v) => {
     const el = box.querySelector(`[data-field="${f}"]`);
     if (!el) return;
@@ -1096,19 +1074,17 @@ function updateUsagePage(stats, st, prices) {
     if (el.textContent !== s) el.textContent = s;
   };
 
-  // 价格口径说明（不再显示"当前模型" —— 全天可能换过多个模型）
+  // 价格口径说明（不再显示"当前模型"，全天可能换过多个模型）
   const today = st?.usage || {};
   set('runs', t.runs || 0);
-  // ⚠️ 这两个数字**口径不同**，曾经并排显示成「132 / 今日 800 次」，
-  // 用户必然以为数据错了：
+  // ⚠️ 这两个数字口径不同，必须把口径写进文案，否则用户会以为数据错了：
   //   大字 runs      = LLM 调用次数（本页统计，一个会话多轮就是多次）
   //   /api/status 的 usage.runs = 会话运行次数（每完成一个会话 +1）
-  // 现在把口径写进文案，避免"看起来自相矛盾"。
   set('runs-sub', `今日 ${today.runs ?? 0} 次会话运行`);
   // 搜索次数：只列数量，不参与成本计算（搜索通常是资源包或免费的）
   const searches = Number(stats?.searchCount) || 0;
   set('search', fmtTok(searches));
-  // 拆开显示搜索与抓取的构成（曾经三元两分支文案相同，判定是死逻辑）
+  // 拆开显示搜索与抓取的构成
   {
     const nSearch = Number(stats?.toolCounts?.web_search) || 0;
     const nFetch = Number(stats?.toolCounts?.web_fetch) || 0;
@@ -1121,14 +1097,10 @@ function updateUsagePage(stats, st, prices) {
   set('rate', fmtRate(t.cacheHitRate));
   set('rate-sub', `命中 ${fmtTok(t.cachedTokens)} / 输入 ${fmtTok(t.promptTokens)}`);
   set('cost', fmtYuan(t.cost));
-  // ⚠️（2026-10-17 N7）成本 0 有**两种完全不同的含义**，必须让用户分得清：
-  //   ① 真的没花钱（免费模型 / 本区间没调用）—— 正常；
-  //   ② **没匹配到官方单价**（走中转站、或模型不在内置价格表里）——
-  //      算术上只能得 0，但看起来像"统计坏了 / 价格算错了"。
-  //   实测本机：模型是 `sensenova-6.8-flash-lite`（token.sensenova.cn 中转站），
-  //   内置官方价格表里查无此模型 → 快照里 cost 全为 0，而 token 有近千万。
-  //   这不是 bug（顶栏早就为此不显示 ¥0），但用量页的副标题上没说清楚，
-  //   容易被误当成故障。这里补一句，并指向可自定义单价的位置。
+  // ⚠️ 成本 0 有两种完全不同的含义，必须让用户分得清：
+  //   ① 真的没花钱（免费模型 / 本区间没调用），正常；
+  //   ② 没匹配到官方单价（走中转站、或模型不在内置价格表里），算术上只能得 0，
+  //      看起来像"统计坏了 / 价格算错了"。这里补一句，并指向可自定义单价的位置。
   const costZero = !(Number(t.cost) > 0);
   const noPriceHint = (costZero && (Number(t.totalTokens) || 0) > 0)
     ? '未匹配到内置官方单价（中转站 / 未收录模型），可在「设置 → 模型与搜索 → 当前模型单价」自定义'
@@ -1144,8 +1116,8 @@ function updateUsagePage(stats, st, prices) {
   });
 
   // 统计新鲜度：服务端把统计结果缓存住了（默认 3 小时一次），所以这页的数字
-  // 未必是"刚刚"的。必须把算出来的时刻摆出来 —— 否则用户会拿一个几小时前的
-  // 成本数当成实时的，那比"慢"更糟。想立刻要最新的就点右边「刷新」。
+  // 未必是"刚刚"的。必须把算出来的时刻摆出来，否则用户会拿几小时前的成本数
+  // 当成实时的，那比"慢"更糟。想立刻要最新的就点右边「刷新」。
   const fresh = box.querySelector('#usage-updated');
   if (fresh) {
     const at = Number(stats?.computedAt) || 0;
@@ -1164,15 +1136,12 @@ function updateUsagePage(stats, st, prices) {
   const COLLAPSE_AT = 20;
   /**
    * 按当前指标降序排（与横向条形图 usageBars 用的是同一个 metricOf）。
+   * 表格与条形图必须同一个排序口径：表格用后端顺序（cost 优先）而图按当前指标排
+   * 的话，切到「Token」时图和表两种顺序，用户对照会以为数据错了。
    *
-   * ⚠️ 曾经表格直接用后端顺序（cost 优先，见 app.js 的 mergeGroups），
-   * 而条形图按**当前选中指标**排 —— 于是切到「Token」指标时，
-   * 「按模型」的图按 token 排、它下面的表还按成本排，同一个维度两种顺序，
-   * 用户对照时会以为数据错了。
-   *
-   * 排序必须**稳定**：大量条目 cost 为 0，若只按指标值比较，
-   * 相等项的相对顺序取决于后端 Map 的插入序（= readdirSync 顺序，
-   * 依赖文件系统），每次刷新可能不一样。所以用 key 做二级比较。
+   * 排序必须稳定：大量条目 cost 为 0，只按指标值比较的话，相等项的相对顺序
+   * 取决于后端 Map 的插入序（= readdirSync 顺序，依赖文件系统），每次刷新可能
+   * 不一样。所以用 key 做二级比较。
    */
   const sortByMetric = (list) => (list || []).slice().sort((a, b) => {
     const d = metricOf(b) - metricOf(a);
@@ -1206,8 +1175,8 @@ function updateUsagePage(stats, st, prices) {
     }
     if (!wanted.length) {
       if (tbody.dataset.empty !== '1') {
-        // ⚠️ 曾经写死 colspan="7"，但「按会话」表只有 6 列 —— 空态的
-        // 占位格比表头多一格，视觉上会错位。改为读真实列数，读不到再兜底 1。
+        // 列数必须读真实的：写死 colspan 时「按会话」表（6 列）的空态占位格
+        // 会比表头多一格，视觉上错位。读不到再兜底 1。
         const cols = Number(tbody.closest('table')?.querySelectorAll('thead th').length) || 1;
         tbody.innerHTML = `<tr><td colspan="${cols}" class="muted">无</td></tr>`;
         tbody.dataset.empty = '1';
@@ -1265,12 +1234,9 @@ function updateUsagePage(stats, st, prices) {
 }
 
 /**
- * 缓存命中率百分比。
- *
- * ⚠️ 曾经卡片用 1 位小数、表格用 0 位小数，同一页两种精度（`96.7%` vs `97%`），
- * 用户对照表格时会以为算错了。现在统一 1 位。
- * 同时不再用 `x.cacheHitRate || 0` —— 那会把"字段缺失(undefined)"与
- * "真实的 0"混为一谈，这里显式区分：缺失时显示 '—' 而不是骗人的 0%。
+ * 缓存命中率百分比。卡片与表格统一 1 位小数，同一页不要出现两种精度。
+ * ⚠️ 不能用 `x.cacheHitRate || 0`：那会把"字段缺失(undefined)"与"真实的 0"
+ * 混为一谈。缺失时显示 '—' 而不是骗人的 0%。
  */
 function fmtRate(rate) {
   if (rate === null || rate === undefined || !isFinite(Number(rate))) return '—';
@@ -1279,16 +1245,16 @@ function fmtRate(rate) {
 
 /* ══════════════════════════════════════════════════════════════
    四个维度块统一的「段落计量 + 摘要行」
-   （2026-10-19 用户要求：按天 / 按会话 / 按模型 / 按插件 四块风格统一）
+   （按天 / 按会话 / 按模型 / 按插件 四块风格统一）
 
    每块固定四段，顺序不再各自发挥：
      ① .usage-sec-head   左标题 + 右侧计量（data-meta）
      ② .usage-sec-note   一行说明（静态文案，写在骨架里）
      ③ .usage-sec-sum    摘要行（本函数按数据生成；「按插件」由 renderPluginUsage 填）
-     ④ .usage-chart      图表 —— 再往下是折叠的数值表与口径说明
+     ④ .usage-chart      图表，再往下是折叠的数值表与口径说明
 
    摘要行只写「不看数字就不知道的事」：平均、最大、占比、命中率。
-   合计/占比这类图里已经有的（.uc-rest 脚注）不再重复 ——
+   合计/占比这类图里已经有的（.uc-rest 脚注）不再重复，
    同一个数字在一页里出现三遍，读者反而不知道该信哪个。
    ══════════════════════════════════════════════════════════════ */
 function fillUsageSectionSummaries(stats, box) {
@@ -1302,7 +1268,7 @@ function fillUsageSectionSummaries(stats, box) {
     const el = box.querySelector(`[data-meta="${k}"]`);
     if (!el) return;
     if (el.textContent !== txt) el.textContent = txt;
-    // 计量文字可能为空（没有记录时）——空着比写"0 个"更诚实，也少一行噪声
+    // 计量文字可能为空（没有记录时），空着比写"0 个"更诚实，也少一行噪声
     el.style.display = txt ? '' : 'none';
   };
   const setSum = (k, html) => {
@@ -1321,9 +1287,8 @@ function fillUsageSectionSummaries(stats, box) {
     || String(a.key ?? '').localeCompare(String(b.key ?? ''));
 
   // ── 按天（单日 / 24 小时范围下整块被隐藏，这里也就没有数据）──
-  // ⚠️ 摘要行**故意不重复**图上方那条「峰值 / 日均 / 合计」（.uc-sum，随「图表」指标变）：
-  //    两条数字挨着写同一批值，读者只会觉得啰嗦。这里只给"看形状才得出的结论"——
-  //    用量集中在哪天、日均能不能代表整体。
+  // ⚠️ 摘要行故意不重复图上方那条「峰值 / 日均 / 合计」（.uc-sum，随「图表」指标变），
+  //    两条数字挨着写同一批值只会显得啰嗦。这里只给"看形状才得出的结论"。
   const days = Array.isArray(stats?.days) ? stats.days.slice() : [];
   if (days.length) {
     const runs = days.map((d) => Number(d.runs) || 0);
@@ -1358,9 +1323,9 @@ function fillUsageSectionSummaries(stats, box) {
     const topShare = totalV > 0 ? Math.round((topVal / totalV) * 100) : 0;
     const totalRuns = chats.reduce((a, c) => a + (Number(c.runs) || 0), 0);
     setMeta('chats', `${chats.length} 个会话`);
-    // 只有一个会话时，「占 100%」是句废话。也**不**在这里报"每次输入多少"：
-    // 「按插件」那块会给出同一个指标，但口径来自另一条统计链路（llmCalls），
-    // 两处数字差几个百分点就会被当成算错 —— 这里改成指路。
+    // 只有一个会话时，「占 100%」是句废话。这里也不报"每次输入多少"：
+    // 「按插件」那块给出同一个指标，但口径来自另一条统计链路（llmCalls），
+    // 两处数字差几个百分点就会被当成算错，所以改成指路。
     if (chats.length === 1) {
       setSum('chats',
         '只有一个会话，全部用量都来自它 —— 单次输入有多贵、钱花在插件说明还是历史上，'
@@ -1407,13 +1372,12 @@ function fillUsageSectionSummaries(stats, box) {
  * @param {boolean} force  true = 重建整个页面骨架（切换页签、切换时间范围、点刷新）；
  *                         false = 轮询刷新，只更新数值与表格行，不重建 DOM。
  *
- * ── 为什么要分开 ──
- * 轮询每 15 秒一次，如果每次都重建 DOM，用户正在看的行会被重新渲染、
- * 滚动位置也会丢。所以轮询走"只更新数值"这条路。
+ * 两者必须分开：轮询每 15 秒一次，每次都重建 DOM 的话用户正在看的行会被
+ * 重新渲染，滚动位置也会丢。
  *
- * ── 加载为什么快 ──
- * 1. 三个接口用 Promise.all **并行**请求（串行会慢 3 倍）
- * 2. 骨架屏**立即**显示，不等数据回来 —— 用户切过去马上看到布局，不会"黑一会"
+ * 加载速度靠三点：
+ * 1. 三个接口用 Promise.all 并行请求（串行会慢 3 倍）
+ * 2. 骨架屏立即显示，不等数据回来，用户切过去马上看到布局
  * 3. 竞态防护：请求期间用户可能切走或改了时间范围，回来时丢弃过期结果
  */
 let usageLoadToken = 0;          // 每次加载递增，用于丢弃过期结果
@@ -1424,17 +1388,16 @@ let usageLastData = null;        // 上一次加载成功的数据：{ range, st
  * 统计请求 URL。
  *
  * hard=true（用户明确点了「刷新」）→ 带 force=1，服务端跳过 3 小时结果缓存当场重算。
- * 其余入口（轮询、SSE、切页签、切时间范围）一律走缓存 —— 服务端为了"点今日要等很久"
- * 已经把统计结果缓存住了，前端不该再用 force 把它顶掉，否则缓存等于不存在。
- * 这三者的区别要一直保持：**只有刷新按钮才代表"我现在就要最新的"。**
+ * 其余入口（轮询、SSE、切页签、切时间范围）一律走缓存，否则缓存等于不存在。
+ * 只有刷新按钮才代表"我现在就要最新的"。
  */
 function usageStatsUrl(range, hard = false) {
   return `/api/usage/stats?range=${encodeURIComponent(range)}${hard ? '&force=1' : ''}`;
 }
 
-/* ══════════ 按插件统计（2026-10-19）══════════
-   与主统计分开请求：插件维度要额外扫会话文件 + 算提示词片段，比主统计慢；
-   单独请求的好处是"它失败不连累主页面"，也方便按需刷新（30 秒节流）。 */
+/* ══════════ 按插件统计 ══════════
+   与主统计分开请求：插件维度要额外扫会话文件 + 算提示词片段，比主统计慢。
+   单独请求的好处是它失败不连累主页面，也方便按需刷新（30 秒节流）。 */
 let pluginUsageAt = 0;
 let pluginUsageRange = '';
 
@@ -1448,9 +1411,8 @@ async function loadPluginUsage(range, { force = false } = {}) {
     state.pluginUsage = r;
     renderPluginUsage(r);
   } catch (e) {
-    // 2026-10-20：原文案让用户"重启 QQ Agent 后重试"—— 代价太重，而且这里失败
-    // 多半是后端一时没响应（接口本身存在，上面刚成功过）。页面上就有「刷新」，
-    // 它走的是 force=true，会把插件统计一起重拉，指过去就够了。
+    // 这里失败多半是后端一时没响应，不是接口不存在。页面上就有「刷新」，
+    // 它走 force=true 会把插件统计一起重拉，指过去就够了，不必让用户重启。
     const tb = $('#usage-page [data-table="plugins"] tbody');
     if (tb) {
       tb.innerHTML = '<tr><td colspan="8" class="muted" style="text-align:center;padding:18px">'
@@ -1460,15 +1422,17 @@ async function loadPluginUsage(range, { force = false } = {}) {
   }
 }
 
-/** 插件排行条：复用「按模型」的 .uc-bar-* 视觉（名次徽标 + 渐隐条 + 百分比）。
+/**
+ * 插件排行条：复用「按模型」的 .uc-bar-* 视觉（名次徽标 + 渐隐条 + 百分比）。
  *
- *  三种排行依据（2026-10-19 用户补充：只排"每次固定"会漏掉真正用起来的开销）：
- *    total → 区间总消耗 = 每次固定 × 调用次数 + 工具结果（默认，最贴近"花了多少"）
- *    fixed → 每次固定消耗（看"装了就在付"的底噪）
- *    calls → 区间调用次数（看"用得勤不勤"）
+ * 三种排行依据：
+ *   total → 区间总消耗 = 每次固定 × 调用次数 + 工具结果（默认，最贴近"花了多少"）
+ *   fixed → 每次固定消耗（看"装了就在付"的底噪）
+ *   calls → 区间调用次数（看"用得勤不勤"）
  *
- *  数据来自 /api/usage/plugins（不在 stats.xxx 里），所以不复用 usageBars；
- *  但 DOM 结构与它完全一致，样式不用改一行。 */
+ * 数据来自 /api/usage/plugins（不在 stats.xxx 里），所以不复用 usageBars；
+ * 但 DOM 结构与它完全一致，样式不用改一行。
+ */
 const PLUGIN_METRIC_DEFS = {
   total: { value: (p) => Number(p.periodTotal) || 0, unit: 'tok', hint: '区间总消耗 = 每次固定 × 调用次数 + 工具结果' },
   fixed: { value: (p) => Number(p.fixedPerCall) || 0, unit: 'tok/次', hint: '每次对话都要付的固定部分' },
@@ -1483,7 +1447,7 @@ function pluginBars(plugins, metric = 'total', extras = []) {
     .sort((a, b) => def.value(b) - def.value(a) || String(a.id).localeCompare(String(b.id)));
   const extraRows = (extras || []).filter((p) => p && def.value(p) > 0);
   if (!items.length && !extraRows.length) return '<div class="uc-empty muted">这段时间没有插件消耗记录</div>';
-  // 条形长度统一按「含对照行」的最大值归一 —— 这样能一眼看出插件条和对话条谁长，
+  // 条形长度统一按「含对照行」的最大值归一，这样能一眼看出插件条和对话条谁长，
   // 而不是各自满格造成"插件也很大"的错觉。
   const max = Math.max(...items.map(def.value), ...extraRows.map(def.value), 1);
   const total = items.reduce((a, p) => a + Math.max(0, def.value(p)), 0);
@@ -1505,7 +1469,7 @@ function pluginBars(plugins, metric = 'total', extras = []) {
     </div>`;
   }).join('');
   // 对照行（对话内容）：不是插件、不参与名次，放在最后用虚线分隔，
-  // 作用是给上面的插件条一个参照系 —— 「插件 3,877 / 对话 11,284」一眼可见。
+  // 作用是给上面的插件条一个参照系，「插件 3,877 / 对话 11,284」一眼可见。
   const contrast = extraRows.map((p) => {
     const v = Math.max(0, def.value(p));
     const w = max > 0 ? Math.max(0, (v / max) * 100) : 0;
@@ -1515,7 +1479,7 @@ function pluginBars(plugins, metric = 'total', extras = []) {
       <div class="uc-bar-val">${esc(fmtTok(v))}<span class="uc-bar-share">${esc(def.unit)}</span></div>
     </div>`;
   }).join('');
-  // 合计口径标注：摘要行给的是"只算插件"的数，这里包含核心功能——不写清楚会对不上账
+  // 合计口径标注：摘要行给的是"只算插件"的数，这里包含核心功能，不写清楚会对不上账
   const hasCore = items.some((p) => p.id === '(core)');
   return `<div class="uc-bars">${rows}${contrast}</div>`
     + `<div class="uc-rest">插件合计${hasCore ? '（含核心功能）' : ''} <b>${esc(fmtTok(total))}</b> ${def.unit}`
@@ -1534,9 +1498,9 @@ function renderPluginUsage(r) {
   const pluginFixed = Number(s.pluginFixedPerCall ?? s.fixedPerCall) || 0;
   const share = avg > 0 ? Math.round(pluginFixed / avg * 100) : 0;
 
-  // 区间口径就地补算（2026-10-19）：periodFixed / periodTotal 是这次新加的字段，
-  // 主进程没重启时接口里还没有它们——与其显示 0，不如用「每次固定 × 调用次数
-  // + 工具结果」在本地算一遍。摘要行和表格都读这一份，数字永远对得上。
+  // 区间口径就地补算：periodFixed / periodTotal 是后加的字段，旧接口里没有。
+  // 与其显示 0，不如用「每次固定 × 调用次数 + 工具结果」在本地算一遍。
+  // 摘要行和表格都读这一份，数字永远对得上。
   const llmCalls = Number(t.llmCalls) || 0;
   const periodFixedOf = (p) => Number.isFinite(Number(p.periodFixed))
     ? Number(p.periodFixed)
@@ -1548,10 +1512,10 @@ function renderPluginUsage(r) {
   const others = rowsData.filter((p) => p.id !== '(core)');
   const periodFixedSum = others.reduce((a, p) => a + p.periodFixed, 0);
 
-  // ── 对话侧（2026-10-19 用户第二次澄清：要的是「每次对话新进来的文本」这一块）──
+  // ── 对话侧 ──
   // 口径：每次输入的真实平均 token 减去全部固定开销（插件说明 + 核心工具说明），
   // 剩下的就是聊天记录 / 人设 / 运行时状态。倒推值，但分子分母都是真数。
-  // 与后端 summary.chatPerCall 同口径；接口没这字段时（主进程未重启）本地补算。
+  // 与后端 summary.chatPerCall 同口径；接口没这字段时本地补算。
   const allFixed = rowsData.reduce((a, p) => a + (Number(p.fixedPerCall) || 0), 0);
   const coreFixed = rowsData.filter((p) => p.id === '(core)').reduce((a, p) => a + (Number(p.fixedPerCall) || 0), 0);
   const corePeriodFixed = rowsData.filter((p) => p.id === '(core)').reduce((a, p) => a + p.periodFixed, 0);
@@ -1576,7 +1540,7 @@ function renderPluginUsage(r) {
     if (metaEl.textContent !== txt) metaEl.textContent = txt;
   }
 
-  // 摘要行：一句把「一次输入到底花在哪」说完 —— 插件 / 核心工具 / 对话内容
+  // 摘要行：一句把「一次输入到底花在哪」说完，插件 / 核心工具 / 对话内容
   const topEl = box.querySelector('[data-sum="plugins"]');
   if (topEl && avg > 0) {
     topEl.innerHTML = `每次输入 <b>${fmtTok(avg)}</b> tok =`
@@ -1695,10 +1659,10 @@ function renderPluginUsage(r) {
 
 /** 单个插件的功能明细：每个工具调用了多少次、返回多少 token、错了几次。
  *
- * ⚠️（2026-10-19）不要复用「调用明细」的 .tb-row —— 那套是 74px 名字 + 118px 代码
- *    + 34px 数字的窄三列，为"分类分组 + 条形图"设计的。插件功能行只有 id 和数字，
- *    塞进 34px 的数字列时「2,655 tok」会被挤成两行（用户截图反馈"看着奇怪"）。
- *    这里用独立的 .upt 网格：功能名自适应，三个数字列定宽右对齐。 */
+ * ⚠️ 不要复用「调用明细」的 .tb-row：那套是 74px 名字 + 118px 代码 + 34px 数字的
+ * 窄三列，为"分类分组 + 条形图"设计的。插件功能行只有 id 和数字，塞进 34px 的
+ * 数字列时「2,655 tok」会被挤成两行。这里用独立的 .upt 网格：功能名自适应，
+ * 三个数字列定宽右对齐。 */
 function openPluginToolsModal(p) {
   const tools = (p.tools || []).slice()
     .sort((a, b) => b.calls - a.calls || b.resultTokens - a.resultTokens);
@@ -1750,16 +1714,14 @@ async function loadUsageView({ force = false, hard = false } = {}) {
       ]);
       // 用户可能已经切走页签了，那就别动了
       if (state.tab !== 'usage') return;
-      // ⚠️ 也可能只是**切了时间范围**。轮询分支不重建骨架、不递增
-      // usageLoadToken，所以这里没有 token 守卫 —— 曾经只查了页签，
-      // 结果是：在途的 15s 请求回来后把**旧范围**的统计覆盖到新范围的
-      // 页面上，卡片与表格瞬间对不上。范围变了直接丢弃，等新范围自己的
-      // 加载流程把正确数据送上来。
+      // ⚠️ 也可能只是切了时间范围。轮询分支不重建骨架、不递增 usageLoadToken，
+      // 所以这里没有 token 守卫：只查页签的话，在途的请求回来后会把旧范围的统计
+      // 覆盖到新范围的页面上，卡片与表格瞬间对不上。范围变了直接丢弃。
       if (usageRange !== range) return;
       state.usageStats = stats;
-      // ⚠️ 价格不用再请求：启动时已加载进 state.modelPrices（/api/model-prices），
-      //    更新时按需拉取即可。曾经这里请求了一个**不存在的** /api/usage/prices，
-      //    404 会让整个 Promise.all reject → 用量页永远加载失败。
+      // 价格不用再请求：启动时已加载进 state.modelPrices（/api/model-prices）。
+      // ⚠️ 不要在这里加 /api/usage/prices 这类接口，它不存在，404 会让整个
+      // Promise.all reject，用量页永远加载失败。
       updateUsagePage(stats, st, state.modelPrices || {});
       // 插件维度单独拉（30 秒节流；失败静默，不让它拖累主页面）
       loadPluginUsage(range);
@@ -1771,11 +1733,10 @@ async function loadUsageView({ force = false, hard = false } = {}) {
   const token = ++usageLoadToken;
   const range = usageRange;
 
-  // ★ 先用上一次的数据立即渲染（如果有的话），而不是先画骨架等网络。
-  //   后端统计的冷启动实测约 200ms（要遍历全部会话文件），热数据只要 24ms；
-  //   但缓存 TTL 只有 5 秒、轮询 4 秒一次，切回用量页时缓存经常已经过期，
-  //   于是每次都要等那 200ms —— 表现就是"点过去黑一下"。
-  //   有旧数据时直接先画出来（0ms 可见），再在后台拉新的覆盖。
+  // 先用上一次的数据立即渲染（如果有的话），而不是先画骨架等网络。
+  // 后端统计冷启动约 200ms（要遍历全部会话文件），热数据只要 24ms，但缓存 TTL
+  // 只有 5 秒，切回用量页时缓存经常已经过期，每次都要等那 200ms，表现就是
+  // "点过去黑一下"。有旧数据时直接先画出来，再在后台拉新的覆盖。
   const cached = usageLastData && usageLastData.range === range ? usageLastData : null;
   if (cached) {
     state.usageStats = cached.stats;
@@ -1801,9 +1762,9 @@ async function loadUsageView({ force = false, hard = false } = {}) {
       // 已有页面：只更新数值，不重建（避免打断用户的滚动/交互）
       updateUsagePage(stats, st, prices);
     } else {
-      // ⚠️ renderUsagePage 不返回字符串 —— 它内部自己写 box.innerHTML、
-      //    绑定事件、并调用 updateUsagePage 填数值。
-      //    所以这里只能"直接调用"，不能再赋值（赋 undefined 会把页面清空）。
+      // ⚠️ renderUsagePage 不返回字符串：它内部自己写 box.innerHTML、绑定事件、
+      //    并调用 updateUsagePage 填数值。所以只能直接调用，不能赋值
+      //    （赋 undefined 会把页面清空）。
       renderUsagePage(stats, st, prices);
     }
     // 范围变了 → 插件统计也要重算（force：点刷新/切范围必须拿到新数）
@@ -1812,8 +1773,7 @@ async function loadUsageView({ force = false, hard = false } = {}) {
     if (token !== usageLoadToken) return;
     // 旧数据还在页面上就别用错误覆盖它（用户至少能看到上一次的数字）
     if (cached) return;
-    // 曾经这里只有一行错误文案：请求 hang 死时（无超时时代）骨架屏永远转下去，
-    // 用户只能重启。现在超时/失败都落到这张卡上，给一个明确的出路（R49）。
+    // 超时/失败都落到这张卡上，给一个明确的出路，否则骨架屏会永远转下去。
     box.innerHTML = `
       <div class="empty-hint">
         用量加载失败：${esc(e?.message || String(e))}<br/>

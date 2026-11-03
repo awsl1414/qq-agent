@@ -1,33 +1,26 @@
 // 09-dialogs.js — 统一非阻塞对话框
 // ---------------------------------------------------------------------------
 // 替代原生 alert / confirm / prompt：原生弹窗会阻塞渲染主线程，长时间不关会触发
-// 看门狗「心跳停摆」判 hung → 重建窗口（这正是此前群友日志里一类「闪退」的诱因）。
-// 这里全部走 08-modals.js 的 modelModalShell，沿用同一套拟物外壳与无障碍处理，
-// 保证视觉与交互一致性。
+// 看门狗「心跳停摆」判 hung → 重建窗口。这里全部走 08-modals.js 的 modelModalShell，
+// 沿用同一套拟物外壳与无障碍处理。
 //
-// 设计约定（向后兼容原生调用形态）：
-//   qaAlert('文本')                 → 等价于 alert，返回 Promise<void>
-//   qaConfirm('文本')               → 等价于 confirm，返回 Promise<boolean>
-//   qaPrompt('提示', '默认值')      → 等价于 prompt，返回 Promise<string|null>
+// 调用形态与原生一致：
+//   qaAlert('文本')                 → Promise<void>
+//   qaConfirm('文本')               → Promise<boolean>
+//   qaPrompt('提示', '默认值')      → Promise<string|null>
 //   以上也接受对象参数 { title, message, ... } 以定制标题/按钮文案。
 //   qaSelect({ title, message, options }) → 列表选择，返回 Promise<string|null>
 //
-// 这些函数全部返回 Promise，因此调用方需要 `await`（由 AST 转换脚本自动补上）。
+// 这些函数全部返回 Promise，调用方需要 `await`（由 AST 转换脚本自动补上）。
 //
-// ⚠️ 关闭语义必须统一：除了自身渲染的按钮，外壳还额外提供三条外部关闭路径
-//    （点遮罩空白 / 右上角 × / Esc，见 08-modals.js 的 modelModalShell）。
-//    R73 起 closeModelModal 会统一派发 qa-close 事件，这里监听它、按语义 resolve
-//    默认值，**保证 Promise 在任何关闭方式下都会 settle**：
-//      qaAlert → undefined ／ qaConfirm → false ／ qaPrompt、qaSelect → null
-//    （三者语义都等同"取消"）。此前外部关闭只移除 DOM、不通知调用方，
-//    `await qaConfirm(...)` 会永久挂起，其后代码永不执行。
-//
-// ⚠️（2026-10-17 修 L8）补上 'use strict' —— 本项目其余 ui/app/*.js 都带这一行，
-//    只有本文件漏了（严格模式能挡掉"手误写错变量名却静默创建全局"这类 bug）。
-//    加之前已核对：本文件的赋值目标全部在文件内有声明，没有依赖隐式全局的写法。
+// 关闭语义必须统一：除了自身渲染的按钮，外壳还提供三条外部关闭路径
+// （点遮罩空白 / 右上角 × / Esc，见 08-modals.js 的 modelModalShell）。
+// closeModelModal 统一派发 qa-close 事件，这里监听它并按语义 resolve 默认值，
+// 保证 Promise 在任何关闭方式下都会 settle：
+//   qaAlert → undefined ／ qaConfirm → false ／ qaPrompt、qaSelect → null
 'use strict';
 
-// 把文本安全转成弹窗正文 HTML：先转义，再把换行变成 <br>。
+// 先转义再把换行变成 <br>，顺序不能反。
 function qaMsgToHtml(message) {
   return esc(String(message == null ? '' : message)).replace(/\r?\n/g, '<br>');
 }
@@ -64,7 +57,6 @@ function qaAlert(...args) {
       foot: `<button class="btn btn-primary qa-ok" type="button">${esc(okText)}</button>`
     });
     let settled = false;
-    // Esc / × / 点遮罩 → 等同关闭（resolve 默认值，见文件头约定）
     const onShellClose = () => done();
     const done = () => {
       if (settled) return;
@@ -91,7 +83,6 @@ function qaConfirm(...args) {
         `<button class="btn ${danger ? 'btn-danger' : 'btn-primary'} qa-ok" type="button">${esc(confirmText)}</button>`
     });
     let settled = false;
-    // Esc / × / 点遮罩 → 视为「取消」
     const onShellClose = () => done(false);
     const done = (val) => {
       if (settled) return;
@@ -124,7 +115,6 @@ function qaPrompt(...args) {
   });
   return new Promise((resolve) => {
     let settled = false;
-    // Esc / × / 点遮罩 → 视为「取消」，返回 null
     const onShellClose = () => done(null);
     const done = (val) => {
       if (settled) return;
@@ -156,7 +146,6 @@ function qaSelect({ title = '请选择', message = '', options = [], cancelText 
   });
   return new Promise((resolve) => {
     let settled = false;
-    // Esc / × / 点遮罩 → 视为「取消」，返回 null
     const onShellClose = () => done(null);
     const done = (val) => {
       if (settled) return;

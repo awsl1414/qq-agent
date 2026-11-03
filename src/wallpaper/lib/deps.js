@@ -18,7 +18,7 @@ const MIN_FFMPEG_MAJOR = 5;
 export async function checkFfmpeg() {
   // 动态壁纸录制是**平台本身**不可用，不是依赖没装：ddagrab 是 D3D11 桌面
   // 抓屏滤镜，Wallpaper Engine 也只有 Windows 版。macOS / Linux 上无论装
-  // 多少份 ffmpeg 都录不出来，所以必须给独立原因码 —— 混进 'missing' 会把
+  // 多少份 ffmpeg 都录不出来，所以必须给独立原因码，混进 'missing' 会把
   // 用户引去装一个装了也没用的 ffmpeg，最后仍然在 recordSceneWindow 撞上
   // "No such filter: ddagrab"。
   if (process.platform !== 'win32') {
@@ -57,7 +57,7 @@ export async function checkFfmpeg() {
 // ── 硬件视频编码器探测（NVENC > AMF > libx264）─────────────────────────
 // 导入/录制是无缝循环的编码环节：libx264 软编码在弱 CPU 机器上要跑满核
 // 好几分钟；N 卡 NVENC / A 卡 AMF 硬编码几十秒完事且几乎不占 CPU。
-// 探测用「真编三帧」而不是查 -encoders 列表 —— 列表里有 ≠ 驱动能用。
+// 探测用「真编三帧」而不是查 -encoders 列表，列表里有 ≠ 驱动能用。
 // 结果按进程缓存（每次探测要拉起一次 ffmpeg + 初始化 GPU 编码会话）。
 let hwEncoderCache = null;
 export async function resolveHwEncoder(ffmpegPath) {

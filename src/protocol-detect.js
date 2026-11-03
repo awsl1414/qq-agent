@@ -1,28 +1,27 @@
 // 协议端（SnowLuma）配置探测：找到它、读出端点与令牌。
 //
-// ── 为什么需要这个模块（2026-10-24）──────────────────────────────────────
-// 协议端自 2026-10-23 起由用户自行安装、自己启动，令牌不再随包分发：
-// SnowLuma 用 `randomBytes(32).toString('base64url')` 给每个账号**首次运行**时
-// 随机生成一对（HTTP / WS 各一枚，互不相同），落盘在
-// `<SnowLuma>/config/onebot_<QQ号>.json`。
+// 为什么需要这个模块：协议端自 2026-10-23 起由用户自行安装、自己启动，
+// 令牌不再随包分发。SnowLuma 用 `randomBytes(32).toString('base64url')`
+// 给每个账号首次运行时随机生成一对（HTTP / WS 各一枚，互不相同），
+// 落盘在 `<SnowLuma>/config/onebot_<QQ号>.json`。
 //
 // 于是"把 Agent 打包发给别人"这件事卡在一个很蠢的地方：对方要打开 WebUI、
 // 找到网络配置、抄两串 43 位随机字符、再粘回 Agent。抄错一位的表现是
-// "端口通了但没连上"，页面只能提示"令牌不一致"——用户根本不知道去哪找。
+// "端口通了但没连上"，页面只能提示"令牌不一致"，用户根本不知道去哪找。
 //
-// 本模块把这一步自动化：直接读协议端自己的配置文件。它是**只读**的，
+// 本模块把这一步自动化：直接读协议端自己的配置文件。它是只读的，
 // 不改协议端任何文件；令牌只在进程内向上传递，不进日志、不进 /api 响应。
 //
-// ── 设计约束 ──────────────────────────────────────────────────────────────
-//   · 找不到就返回原因，由调用方静默退回手动填写 —— 探测失败不该打扰用户；
-//   · 认不出格式（协议端升级改了结构）也只返回 found:false，绝不抛到调用方；
-//   · 所有 spawn 都带超时，最坏情况拖 8 秒，不阻塞启动关键路径（调用方异步跑）。
+// 设计约束：
+//   - 找不到就返回原因，由调用方静默退回手动填写，探测失败不该打扰用户；
+//   - 认不出格式（协议端升级改了结构）也只返回 found:false，绝不抛到调用方；
+//   - 所有 spawn 都带超时，最坏情况拖 8 秒，不阻塞启动关键路径（调用方异步跑）。
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// 本模块所在目录（src/）。ESM 里没有 __dirname，必须从 import.meta.url 取 ——
+// 本模块所在目录（src/）。ESM 里没有 __dirname，必须从 import.meta.url 取，
 // 用它去找"Agent 安装目录旁边有没有并排放着 snowluma"。
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -191,7 +190,7 @@ function urlOf(scheme, server) {
 /**
  * 解析一份 onebot_<uin>.json。认不出结构就返回 null（协议端改格式时不炸）。
  *
- * 只取**第一个**带端口的 http/ws server：SnowLuma 默认各建一个，
+ * 只取第一个带端口的 http/ws server：SnowLuma 默认各建一个，
  * 也就是 Agent 该连的那一对。多 server 的高级用法不猜。
  */
 function parseProtocolFile(file) {
@@ -204,7 +203,7 @@ function parseProtocolFile(file) {
   const httpList = Array.isArray(nets.httpServers) ? nets.httpServers : [];
   const ws = wsList.find((s) => s && Number(s.port) > 0) || null;
   const http = httpList.find((s) => s && Number(s.port) > 0) || null;
-  // 有一种配置是把 WS 挂在 HTTP server 上（enableWebSocket）—— 这时 WS 端口 = HTTP 端口
+  // 有一种配置是把 WS 挂在 HTTP server 上（enableWebSocket），这时 WS 端口 = HTTP 端口
   const wsOnHttp = !ws && http && http.enableWebSocket === true ? http : null;
   if (!ws && !http) return null;
 
@@ -260,7 +259,7 @@ function collectAccounts(dirs) {
  *   wsPortOpen?: boolean,
  *   accounts?: Array<{uin:string,wsPort:number,httpPort:number,hasWsToken:boolean,hasHttpToken:boolean,mtime:number,portOpen?:boolean,dir:string}>
  * }>}
- *   ⚠️ 返回体含明文令牌，**只允许在进程内使用**；给渲染层前必须过 publicView()。
+ *   返回体含明文令牌，只允许在进程内使用；给渲染层前必须过 publicView()。
  */
 export async function detectProtocol({ dir = '', isPortOpen = null } = {}) {
   let dirs = [];
@@ -322,8 +321,8 @@ export async function detectProtocol({ dir = '', isPortOpen = null } = {}) {
 }
 
 /**
- * 把探测结果削成"可以回给渲染层"的样子：**删掉两枚令牌**，只留有无标记。
- * 这个函数是令牌不越过 IPC/HTTP 边界的唯一保证 —— 新增字段时务必同步检查。
+ * 把探测结果削成"可以回给渲染层"的样子：删掉两枚令牌，只留有无标记。
+ * 这个函数是令牌不越过 IPC/HTTP 边界的唯一保证，新增字段时务必同步检查。
  */
 export function publicView(hit) {
   if (!hit) return { found: false, reason: '探测失败' };

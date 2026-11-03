@@ -1,13 +1,13 @@
-// 控制台壁纸库（内置模块 src/wallpaper/core.js —— 2026-10-23 由「壁纸套件交接包」
+// 控制台壁纸库（内置模块 src/wallpaper/core.js，2026-10-23 由「壁纸套件交接包」
 // 内置化，原 plugins/wallpaper 插件）：扫描 Wallpaper Engine 的壁纸
 // （Steam 创意工坊 + 本地 myprojects），给控制台「壁纸」页提供壁纸列表与文件定位。
 //
 // 架构角色与 media-download / voice-module 一致：本模块只提供**能力**
 // （wallpaper.library / wallpaper.file），HTTP 暴露在 src/routes.js 的
-// /api/wallpaper/* 以能力中介方式完成 —— 本模块不碰 HTTP，路由只做能力中介。
+// /api/wallpaper/* 以能力中介方式完成，本模块不碰 HTTP，路由只做能力中介。
 //
 // 安全边界：wallpaper.file 只按 id 返回**本次扫描登记过**的绝对路径，
-// 请求方传来的任何路径字符串都被忽略 —— 浏览器端永远拿不到"任意文件读取"。
+// 请求方传来的任何路径字符串都被忽略，浏览器端永远拿不到"任意文件读取"。
 //
 // 类型策略（决定每张壁纸在控制台里怎么用）：
 //   video  → 浏览器能直接播，作为动态背景（kind='video'，返回媒体文件本身）
@@ -32,7 +32,7 @@ export function setup(api) {
 // 数据目录：与全站同一口径（config.js：QQ_AGENT_DATA_DIR > PROFILE 后缀 > app/data）。
 // 内置化改造说明：插件期这里按 import.meta.url 自己反推（plugins/wallpaper 上两级
 // 正好是 app/）；搬到 src/wallpaper/ 后反推结果相同，但那样会有两份 DATA_DIR 逻辑、
-// 且绕不过 QQ_AGENT_PROFILE 的多实例后缀 —— 直接复用 config.js 那一份。
+// 且绕不过 QQ_AGENT_PROFILE 的多实例后缀，直接复用 config.js 那一份。
 
 // ── 动态壁纸管线（lib/，移植自 zcode-beautify MIT）───────────────────────
 // 模块只动态 import 一次并缓存：sceneimport 的任务表在模块里，反复
@@ -61,7 +61,7 @@ async function loadFfLib() {
 
 // ── GIF 预览冻结 ─────────────────────────────────────────────────────────
 // WE 的动图预览（preview.gif）会同时出现在壁纸页网格缩略图、contain 模式
-// 的整屏模糊背板、静态壁纸背景里 —— GIF 没有硬件解码，每帧都是 CPU 解码
+// 的整屏模糊背板、静态壁纸背景里，GIF 没有硬件解码，每帧都是 CPU 解码
 // （模糊层还要整屏重栅格化），是滚动/切页卡顿的主源。扫描时用 ffmpeg 抽
 // 首帧存成 JPG（按 gif mtime 失效，一次 ~75ms 永久缓存），之后所有「预览」
 // 一律伺服静态帧；ffmpeg 缺失时静默退回动图。
@@ -234,7 +234,7 @@ async function scan() {
     return {
       ok: false,
       // 2026-10-24：文案跟着界面走。壁纸页已收进「设置 → 外观与数据 → 界面背景」，
-      // 而且空状态页上就摆着目录输入框 —— 不再让用户去猜"控制台「壁纸」页"在哪。
+      // 而且空状态页上就摆着目录输入框，不再让用户去猜"控制台「壁纸」页"在哪。
       error: '没有找到 Wallpaper Engine。安装目录留空时，会自动按注册表和常见 Steam 路径探测；都没探到，就在下面手动填一次安装根目录（里面有 wallpaper64.exe）。',
       items: []
     };
@@ -403,7 +403,7 @@ export const providers = {
     };
   },
   // 重新录制：删掉该壁纸的导入登记与缓存循环（比如录制时窗口被动过、
-  // 成品是坏的那些），让下一次导入真正重录而不是秒回缓存命中 ——
+  // 成品是坏的那些），让下一次导入真正重录而不是秒回缓存命中，
   // 这是"只能转一次"现象的解药（坏成品被内容哈希缓存永久命中）。
   'wallpaper.import.redo': async ({ id } = {}) => {
     const key = String(id || '').trim();
@@ -416,7 +416,7 @@ export const providers = {
         fs.rmSync(path.join(lib.dynRoot(DATA_DIR), reg.hash), { recursive: true, force: true });
         removed = true;
       } catch (e) {
-        // Windows 上被占用（这张壁纸正在当视频播）删不掉 —— 前端会先切回
+        // Windows 上被占用（这张壁纸正在当视频播）删不掉，前端会先切回
         // 静态图释放句柄再重试，这里如实报错。
         return { ok: false, error: `缓存文件被占用（这张壁纸可能正在播放，前端会先切静态再试）：${e?.message ?? e}` };
       }

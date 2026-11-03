@@ -52,8 +52,8 @@ plugins/my-plugin/
 | `manifest.configSchema` | **只含配置项**（action 已被摘掉） | 保存循环、「共 N 项设置」计数 |
 | `manifest.panels` | 界面入口，已校验 + URL 已算好 | 设置弹层的「界面」区块 |
 
-拆分的意义：action **不会**变成一个不存在的配置键被写进 `config.skills[id]`，
-也**不会**被算进「共 N 项设置」。那个 `-1` 的减法曾经是必须的，现在没有了。
+拆分的意义：action 不会变成一个不存在的配置键被写进 `config.skills[id]`，
+也不会被算进「共 N 项设置」，保存循环不用再手动减一。
 
 ---
 
@@ -107,27 +107,20 @@ plugins/my-plugin/
 
 ### 3.1 写：插件侧用 `api.storage`
 
-```js
-// plugins/my-plugin/index.js
-export function activate(api) {   // 参数是 activate 的上下文，api 在 setup 里已经拿到
-  api.storage.set('snapshot', { items: [...] });   // 立刻落盘
-}
-```
-
-实际写法是在 `setup(api)` 里存住 api，activate 里用：
+`setup(api)` 里把 api 存住，`activate` 里用它：
 
 ```js
 let api_ = null;
 export function setup(api) { api_ = api; }
-export function activate() { api_.storage.set('snapshot', { items: [...] }); }
+export function activate() { api_.storage.set('snapshot', { items: [...] }); }   // 立刻落盘
 ```
 
-落盘位置：**`<DATA_DIR>/plugin-data/<id>/storage.json`**
+落盘位置：`<DATA_DIR>/plugin-data/<id>/storage.json`
 （`DATA_DIR` = `config.js` 的 `DATA_DIR`，默认 `<ROOT>/data`，可用 `QQ_AGENT_DATA_DIR` 覆盖。）
 
-- 单个文件 **1MB 硬上限**，超了写失败。
+- 单个文件 1MB 硬上限，超了 `set` 抛错。
 - 键名 `__proto__` / `constructor` / `prototype` 会被拒。
-- 只读通道**没有写接口**，页面改不了任何东西。
+- 只读通道没有写接口，页面改不了任何东西。
 
 ### 3.2 读：页面侧 fetch 相对路径
 
@@ -142,19 +135,19 @@ const res = await fetch('../@data/storage.json');   // ← 推荐
 const snap = await res.json();
 ```
 
-**推荐相对路径 `../@data/storage.json`**，而不是绝对路径
-`/plugin-panel/my-plugin/@data/storage.json`。相对写法**不必知道自己的 id**，
+推荐相对路径 `../@data/storage.json`，而不是绝对路径
+`/plugin-panel/my-plugin/@data/storage.json`。相对写法不必知道自己的 id，
 整个 `panel/` 目录可以原样复制到另一个插件里而不改一行。
 
 （`@data` 是路由保留段，映射到 `<DATA_DIR>/plugin-data/<id>/`。）
 
 ### 3.3 数据刷新
 
-这条通道是**纯静态 GET**，宿主不会通知页面"数据变了"。
-所以快照由插件在**每次数据变动后**主动写（表情库查看器就是这么做的：
+这条通道是纯静态 GET，宿主不会通知页面"数据变了"。
+所以快照由插件在每次数据变动后主动写（表情库查看器就是这么做的：
 收藏同步 / 加备注 / 收藏新表情 / 发送表情后各写一次）。
 
-页面每次打开都会重新 fetch（`cache-control: no-cache`），所以**打开即最新**，
+页面每次打开都会重新 fetch（`cache-control: no-cache`），所以打开即最新，
 不需要页面内轮询。
 
 ---
@@ -169,7 +162,7 @@ api.panel.prefix    // '/plugin-panel'
 
 api.panel.url('panel/viewer.html')
 // → '/plugin-panel/sticker/panel/viewer.html'
-// 相对插件目录的**任意白名单资源**（.js/.css/.png/.svg/.woff2…）
+// 相对插件目录的任意白名单资源（.js/.css/.png/.svg/.woff2…）
 // 非法路径（越界 / 扩展名不在白名单）→ 返回 ''，调用方据此判断
 
 api.panel.dataUrl()                  // → '/plugin-panel/sticker/@data/storage.json'
@@ -183,7 +176,7 @@ const viewUrl = api.panel?.url?.('panel/viewer.html') || '';
 api.log(`表情系统已启用${viewUrl ? `\n  界面：${viewUrl}` : ''}`);
 ```
 
-> `api.panel` 是**可选**的（老宿主没有），所以写 `api.panel?.url?.(...)` 更稳。
+> `api.panel` 是可选的（老宿主没有），所以写 `api.panel?.url?.(...)` 更稳。
 
 ---
 
@@ -227,9 +220,10 @@ api.log(`表情系统已启用${viewUrl ? `\n  界面：${viewUrl}` : ''}`);
    再要求 `realFile === realRoot || realFile.startsWith(realRoot + path.sep)`。
    符号链接 / Windows 目录联接指向外面 → 404。
 
-> 第 5 道是**必须**的：第 3 道只看字符串，拦不住"插件目录里放一个指向
-> `C:\Users\...` 的链接"。测试里用 junction（`fs.symlinkSync(..., 'junction')`）覆盖了这条，
-> 注意本机 `symlinkSync` 默认类型会**静默退化成普通文件**，那样测出来是假绿。
+> 第 5 道是必须的：第 3 道只看字符串，拦不住"插件目录里放一个指向
+> `C:\Users\...` 的链接"。在 Windows 上写这类测试要用 junction
+> （`fs.symlinkSync(..., 'junction')`）：本机 `symlinkSync` 默认类型会静默退化成普通文件，
+> 那样测出来是假绿。
 
 ### 6.2 CSP
 
@@ -245,22 +239,22 @@ frame-ancestors 'self'
 
 与 `/ui` 的 CSP 同款，只有两处不同：
 
-- **`script-src` 去掉了内联脚本的 hash**，插件页面一律用**外链 `.js`**。
+- `script-src` 去掉了内联脚本的 hash，插件页面一律用外链 `.js`。
   内联 `<script>` 和 `onclick=` 都会被拦。`<style>` 和内联 `style=` 仍然允许
   （`style-src` 带 `unsafe-inline`）。
-- **`frame-ancestors` 从 `'none'` 放宽成 `'self'`**，插件页面**就是要**被设置弹窗的
+- `frame-ancestors` 从 `'none'` 放宽成 `'self'`：插件页面就是要被设置弹窗的
   iframe 嵌，写 `'none'` 会被浏览器直接拒掉，表现为白屏。
 
 另附 `x-content-type-options: nosniff` 与 `referrer-policy: no-referrer`。
 
-### 6.3 明确**不**防的东西
+### 6.3 明确不防的东西
 
-页面**能读到自己插件的全部源码与全部 `plugin-data`**。
+页面能读到自己插件的全部源码与全部 `plugin-data`。
 
-这不是漏洞，那本来就是它自己的东西。但**插件不该把别人的机密往 `plugin-data` 里塞**，
+这不是漏洞，那本来就是它自己的东西。但插件不该把别人的机密往 `plugin-data` 里塞，
 因为它等于放在一个可被自己的页面读到的位置。
 
-同理，页面**读不到**别的插件的目录（根被限定在自己的 id 下）。
+同理，页面读不到别的插件的目录（根被限定在自己的 id 下）。
 
 ### 6.4 为什么用 iframe，而不是把 HTML 注进主页面
 
@@ -274,13 +268,13 @@ frame-ancestors 'self'
 
 ## 7. 加载失败时的表现
 
-**加载期**（`normalizeManifest`）：
+加载期（`normalizeManifest`）：
 
-- 路径非法 → 入口**仍然出现在列表里**，但 `url` 为空、`problem` 是原因，
+- 路径非法 → 入口仍然出现在列表里，但 `url` 为空、`problem` 是原因，
   按钮位置就地显示「打不开：<原因>」。
 - 同时写进 `manifest.problems`，控制台的技能/插件页签会显示。
 
-**打开后**（`openPluginPanel`）：
+打开后（`openPluginPanel`）：
 
 - iframe 加载完先探一次：如果页面正文恰好是 `Not Found` / `Forbidden`
   （宿主 404 页的字面内容），显示兜底提示。
@@ -292,27 +286,26 @@ frame-ancestors 'self'
 
 ### 8.1 改了 `plugins/**` 或 `skills/**` 就要重算指纹基线
 
-`checkPluginTrust()` 对"目录名在基线里 **且** 内容指纹一致"的内置模块直接放行。
-指纹一旦失配，扩展降级走**能力扫描**，扫到 `node:fs` 之类即判不可信并**拒绝加载**。
+`checkPluginTrust()` 对"目录名在基线里且内容指纹一致"的内置模块直接放行。
+指纹一旦失配，扩展降级走能力扫描，扫到 `node:fs` 之类即判不可信并拒绝加载。
 表情系统插件的 `lib/manager.js` 就 import 了 `node:fs`，失去豁免后必然被打回。
 
 重算方式见 [skill-system.md 第 6 节](skill-system.md#6-安全边界两层别混淆)。
-**顺序必须是：改完所有插件文件 → 重算基线 → 跑测试。** 反了就是假失败。
+顺序必须是：改完所有插件文件 → 重算基线 → 跑测试。反了就是假失败。
 
 ### 8.2 插件页面不能用内联脚本
 
 `script-src 'self'` 不含 `unsafe-inline`。写在 HTML 里的 `<script>…</script>`
-**不会执行，也不报错**（只在 DevTools console 里有一条 CSP 违规）。
+不会执行，也不报错（只在 DevTools console 里有一条 CSP 违规）。
 一律外链：`<script src="./viewer.js" defer></script>`。
 
 ### 8.3 前端弹层不拼 URL
 
-`ui/app/06-settings-render.js` 是 **classic script**（`ui/index.html` 用 `defer` 逐个加载），
-**不能 `import`** `src/skills/panel.js`。所以它**只消费**后端算好的 `panels[].url`，
+`ui/app/06-settings-render.js` 是 classic script（`ui/index.html` 用 `defer` 逐个加载），
+不能 `import` `src/skills/panel.js`。所以它只消费后端算好的 `panels[].url`，
 自己一行路径都不拼，只保留一个形状检查（是否以 `/plugin-panel` 开头）。
 
-加新的界面能力时，别想着"在前端拼一下就行"。那正是 R129 之前的状态，
-两边拼法一有分歧就是"点了白屏"且不报错。
+加新的界面能力时不要在前端拼路径。两边拼法一有分歧就是"点了白屏"且不报错。
 
 ---
 
@@ -329,8 +322,8 @@ frame-ancestors 'self'
 | `ui/style.css` | `.skill-panels` / `.skill-panel-row` / `.plugin-panel__*` |
 | `plugins/sticker/panel/` | 参考实现（表情库查看器） |
 
-契约测试不在本快照里（原 `panel-contract-test.mjs` 等四个套件随开发目录分发）。
-本仓库现有的测试见 `tests/`，用 `pnpm test` 跑。
+契约测试不在本仓库里（原 `panel-contract-test.mjs` 等套件随开发目录分发）。
+现有测试见 `tests/`，用 `pnpm test` 跑。
 
 ---
 
@@ -342,7 +335,7 @@ frame-ancestors 'self'
 - [ ] 页面用**外链** `<script>`，没有内联脚本 / `onclick=`
 - [ ] 页面用相对路径 `../@data/storage.json` 读数据（不硬编码自己的 id）
 - [ ] 插件在数据变动后写了快照（`api.storage.set`）
-- [ ] 路径是相对路径、用 `/`、不含 `..`（跑一遍 `pnpm test`，含契约单元测试）
+- [ ] 路径是相对路径、用 `/`、不含 `..`（跑一遍 `pnpm test`）
 - [ ] 改了插件文件 → **重算 `builtin-modules.json` 指纹**
 - [ ] 在浅色 / 深色两个主题下各点一次（iframe 里的页面不继承控制台主题，
       要么自己读 `prefers-color-scheme`，要么像 `viewer.css` 那样做一份 token 镜像）

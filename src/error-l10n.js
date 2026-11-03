@@ -1,30 +1,21 @@
 // error-l10n.js — 把「模型 API 报错」翻译成人话
 // ---------------------------------------------------------------------------
-// 背景（2026-10-10 r88）：
-//   会话失败时，UI 把 `session.error` 原样铺在详情面板里。那条字符串长这样：
+// 会话失败时，UI 把 `session.error` 原样铺在详情面板里，那是一条英文 JSON
+// （HTTP 状态码 + 网关的错误体）。能读英文 JSON 的人觉得信息完整，绝大多数
+// 用户看到的只是一堵墙：红字和一堆括号，读不出「哪儿错了、该点哪里」。
 //
-//     模型 API HTTP 400：{"error":{"message":"The supported API model names are
-//     deepseek-flash, deepseek-v4-pro, but you passed DS v41f. (request_id:
-//     2f8cb36b-cd39-4504-9b95-9d33e3698f62)","type":"invalid_request_error",
-//     "param":null,"code":"invalid_request_error"}}
+// 设计：不改后端抛错的内容，只加"解释层"。抛错处照旧保留完整技术细节
+// （排查问题的人要它），同时把解释结果挂在 error 对象上：
 //
-//   对能读英文 JSON 的人是"信息完整"，对绝大多数萌新是"一堵墙"：
-//   他们看到的是红字和一堆括号，读不出「到底哪儿错了、我该点哪里」。
-//   实测群里的反馈就是"看不懂这玩意"。
+//   error.human    = { title, what, fix, target }   // 给最终用户看
+//   error.rawDetail = '原始技术细节'                 // 折叠区里给排查者看
 //
-// 设计：
-//   **不改后端抛错的内容，只加"解释层"。** 抛错处照旧保留完整技术细节
-//   （排查问题的人要它），但同时把解释结果挂在 error 对象上：
+// UI 优先渲染 error.human；拿不到 human（老数据/未知错误）就退回原样显示。
+// "说人话"因此是纯增量的，任何识别不了的情况都不会比现在更差。
 //
-//     error.human    = { title, what, fix, target }   // 给最终用户看
-//     error.rawDetail = '原始技术细节'                 // 折叠区里给排查者看
-//
-//   UI 优先渲染 error.human；拿不到 human（老数据/未知错误）就退回原样显示。
-//   这样"说人话"是**纯增量**的，任何识别不了的情况都不会比现在更差。
-//
-//   为什么识别放在后端而不是 UI：报错文本在后端生成，HTTP 状态码、响应体、
-//   模型名这些"判据"在后端都是现成的结构化变量；搬到 UI 就得从拼接后的字符串
-//   里再正则抠一遍，既脆又容易错。UI 只负责渲染，不负责猜。
+// 识别放在后端而不是 UI：报错文本在后端生成，HTTP 状态码、响应体、模型名
+// 这些判据在后端都是现成的结构化变量；搬到 UI 就得从拼接后的字符串里再正则
+// 抠一遍，既脆又容易错。UI 只负责渲染，不负责猜。
 //
 // 维护约定：新增一类错误 → 在 CASES 里加一条 { test, build }。test 只做
 //   "能不能识别"的判断，build 负责产出四段文案。文案要求：
@@ -77,18 +68,17 @@ export function parseModelNameMismatch(msg) {
   // 期望列表：出现在 "supported/available/valid ... are|is" 之后
   const exp = /(?:supported|available|valid|allowed)[^.]*?\b(?:are|is|:)\s*([^.]*)/i.exec(m);
   // 实际传入：出现在 "you passed / got / provided" 之后。
-  // R86 修：原正则只抓到**第一个词** —— "you passed DS v41f." 会抓成「DS」，
-  //   于是 what 显示"你填的「DS」这个模型服务端不认"，用户对不上自己填的是啥。
-  //   现在取到句末/逗号/左括号之前，允许中间有空格（模型名本身不带空格）。
+  // 取到句末/逗号/左括号之前，允许中间有空格（模型名本身不带空格）。
+  // 只抓第一个词会把 "you passed DS v41f." 抓成「DS」，用户对不上自己填的是啥。
   const got = /\b(?:you\s+)?(?:passed|sent|provided|got)\b\s*[`"']?\s*([^"'`().,;\n]{2,}?)\s*[`"']?\s*(?:\.|,|;|\(|$)/i.exec(m);
   if (!exp) return null;
   const expected = String(exp[1] || '')
     .split(/[,、;]|\band\b/i)
     .map((x) => String(x).trim())
-    // R86 修：服务端的期望列表后面常直接接一句解释 ——
+    // 服务端的期望列表后面常直接接一句解释：
     //   "…are deepseek-flash, deepseek-v4-pro, but you passed DS v41f."
-    //   按逗号切开后，最后一项就是那半句话。模型名本身**不含空格**，
-    //   所以"含空格的项"一定是被粘连的句子片段，必须丢掉 ——
+    //   按逗号切开后，最后一项就是那半句话。模型名本身不含空格，
+    //   所以"含空格的项"一定是被粘连的句子片段，必须丢掉，
     //   否则会渲染成"改成服务商支持的其中一个：a / b / butyoupassedDSv41f"。
     .filter((x) => x && !/\s/.test(x))
     .map((x) => x.replace(/[`"'\s.]+/g, '').trim())
@@ -119,10 +109,10 @@ export function explainApiError({ status = 0, text = '', model = '', message = '
     try { hit = c.test({ status, raw, serverMsg, msg, model, message: String(message || '') }); } catch { hit = null; }
     if (!hit) continue;
     try {
-      // R86 修：ctx 里补上 message。
-      //   ⑧⑨⑩ 三条规则（网络失败 / 超时 / 非 JSON）本来就要靠它区分
-      //   「连不上 vs DNS 解析失败」「超时是否已发出」「HTML 错误页 vs 空响应」，
-      //   而 test() 拿得到 message、build() 之前拿不到 —— 于是这三条永远走兜底文案。
+      // ctx 里必须带 message：⑧⑨⑩ 三条规则（网络失败 / 超时 / 非 JSON）
+      // 靠它区分「连不上 vs DNS 解析失败」「超时是否已发出」「HTML 错误页
+      // vs 空响应」。test() 拿得到 message，build() 之前拿不到，
+      // 漏了它就永远走兜底文案。
       const out = c.build(hit === true ? {} : hit, { status, model, serverMsg, msg, message: String(message || '') });
       if (out && out.title && out.what && out.fix) {
         return { ...out, target: out.target ?? null };
@@ -204,9 +194,9 @@ const CASES = [
     build: () => ({
       title: '请求太频繁了',
       what: '短时间内请求太多，被服务商临时限流（一般是每分钟请求数/RPM 用完了）。',
-      // 2026-10-18：原来的建议是"把界面刷新间隔调大"——那是控制台轮询的场景，
-      // 对群聊机器人来说根因是发言频率与并发，配个备选模型（限额按渠道分开算）
-      // 也是立刻能恢复的路。改成本场景真正可操作的三个动作。
+      // 原建议是"把界面刷新间隔调大"，那是控制台轮询的场景；群聊机器人
+      // 的根因是发言频率与并发，配个备选模型（限额按渠道分开算）也是
+      // 立刻能恢复的路。改成真正可操作的三个动作。
       fix: '等一两分钟会自动恢复。经常这样就降低群的「参与度」，或在「模型配置」里加个备选模型（不同渠道的限额分开算）。',
       target: 'settings-api'
     })
@@ -220,9 +210,8 @@ const CASES = [
     build: () => ({
       title: '上下文太长了',
       what: '这次要发给模型的内容超出了它的长度上限。',
-      // 2026-10-20 修：原文案写「设置 → 工具与技能」，但「全部响应」的历史条数
-      // 不在那一页 —— 它在 聊天 →「⚡ 活跃设置」→「⚙ 档位设置」里，
-      // 且 target 原来给的是 settings-tools，点按钮会跳到错的页。
+      // 别把这里改回「设置 → 工具与技能」：「全部响应」的历史条数不在那页，
+      // 在 聊天 →「⚡ 活跃设置」→「⚙ 档位设置」里，target 也必须是 settings-allow。
       fix: '到 设置 → 聊天 →「⚡ 活跃设置」→「⚙ 档位设置」把「④ 其余情况」的条数调小，或关掉图片输入、少启用几个技能。',
       target: 'settings-allow'
     })

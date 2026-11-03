@@ -2,7 +2,7 @@
 
 ![平台](https://img.shields.io/badge/platform-Windows%20%7C%20Electron-lightgrey)
 ![技术栈](https://img.shields.io/badge/stack-Node.js%20%7C%20原生前端-orange)
-![测试](https://img.shields.io/badge/tests-112%20cases-brightgreen)
+![测试](https://img.shields.io/badge/tests-122%20cases-brightgreen)
 
 一个跑在自己电脑上的 QQ 群聊机器人：装完双击启动，扫码登录，填个模型 Key 就能用。
 事件驱动 + 无状态会话，每次处理的 token 成本恒定；所有操作都在图形控制台里完成。
@@ -19,7 +19,7 @@
 
 ## 技术架构
 
-**事件驱动 + 无状态会话**（成本控制的核心）
+**事件驱动 + 无状态会话**
 
 1. 群聊消息持续写入本地 JSON 存档，每条带时间与已读状态
 2. 每次有新消息（或主动机会）就新开一个独立会话：提示词 = 静态系统提示（人设/规则/策略）+ 存档摘要 + 本次新消息
@@ -70,8 +70,8 @@
 **桌宠（内置）**
 
 - Live2D 桌面伙伴（插件 `desktop-pet`，PixiJS + Cubism Core）。随包带 DS鼠控版 默认模型（8 个动作组 / 44 个表情），控制台「桌宠」页可导入 Cubism 4 模型（自动读动作组与表情），支持置顶/穿透/缩放/透明度、待机动作与表情
-- 交互：单击弹「今日用量」卡片（今日 N 次运行 · X tok · 缓存 Y% · ¥Z，下面一行「搜索：N 次」，16 秒自动收起，期间每 5 秒刷新）；双击打开开发工单对话窗（需启用 `dev-orders`）
-- 模型放在 `data/desktop-pet/models/<模型 id>/`，导入走插件真实链路 `service.importModel`。运行时导入会被 5 秒一次的状态落盘覆盖，**导入前先完整退出应用**
+- 交互：单击弹「今日用量」卡片（今日 N 次运行 · X tok · 缓存 Y% · ¥Z，下面一行「搜索：N 次」，16 秒自动收起，期间每 5 秒刷新）；双击打开开发工单对话窗（由内置模块 `dev-orders` 提供，不可禁用）
+- 模型放在 `data/desktop-pet/models/<模型 id>/`，导入走插件真实链路 `service.importModel`。运行时导入会被 5 秒一次的状态落盘覆盖，导入前先完整退出应用
 - 依赖 GPU 渲染。显卡驱动异常导致白屏/崩溃时，按 [doc/running.md](doc/running.md) 第 7 节的显卡条目处理
 
 **OneBot**
@@ -106,9 +106,9 @@ plugins/my-plugin/            skills/my-skill/
   index.js     providers/hooks   index.js     registerTool
 ```
 
-判据一句话：**规则能写死就做插件（`plugins/`），要理解人话就做技能（`skills/`）。**
+判据一句话：规则能写死就做插件（`plugins/`），要理解人话就做技能（`skills/`）。
 
-选错类型的后果是**功能静默失效**：不报错、不崩、就是没反应。所以两份开发文档请先读：
+选错类型的后果是功能静默失效：不报错、不崩、就是没反应。所以两份开发文档请先读：
 
 - **确定性型** → [doc/extend_development/plugin-development.md](doc/extend_development/plugin-development.md)
 - **LLM 型** → [doc/extend_development/skill-development.md](doc/extend_development/skill-development.md)
@@ -117,14 +117,14 @@ plugins/my-plugin/            skills/my-skill/
 
 其它约定：
 
-- **开关只有一处**：`config.skills[id].enabled`。关掉一个扩展，它注册的工具、提供的能力、提示词片段、请求改写会同时失效，不会出现"界面关了但还在偷偷工作"
-- **按能力依赖，不按名字**：核心代码问"谁提供 `llm.request-params`"，不 import 具体扩展，所以换实现不用改核心代码
-- **不可能覆盖安全规则**：扩展的提示词片段优先级被强制压在核心规则之下
-- **状态可解释**：控制台的「技能」与「插件」两个页签各自直接告诉你为什么某项没生效（未启用 / 依赖缺失 / 加载失败 / 模型不支持），不是笼统的"工具关闭"
-- **两种清单文件功能等价**：`plugin.json` 与 `skill.json` 走同一条规范化流程，目录只决定语义分类，不限制能用哪些特性
-- **插件可以自带界面**：在 `configSchema` 里写一条 `type: "action"`（`panel` 指向插件目录里的 `.html`），设置弹窗就多出一颗按钮，点开是只读 iframe，不用改宿主 UI 代码
+- 开关只有一处：`config.skills[id].enabled`。关掉一个扩展，它注册的工具、提供的能力、提示词片段、请求改写会同时失效，不会出现"界面关了但还在偷偷工作"
+- 按能力依赖，不按名字：核心代码问"谁提供 `llm.request-params`"，不 import 具体扩展，所以换实现不用改核心代码
+- 扩展的提示词片段优先级被强制压在核心规则之下，覆盖不了安全规则
+- 状态可解释：控制台的「技能」与「插件」两个页签各自直接告诉你为什么某项没生效（未启用 / 依赖缺失 / 加载失败 / 模型不支持），不是笼统的"工具关闭"
+- 两种清单文件功能等价：`plugin.json` 与 `skill.json` 走同一条规范化流程，目录只决定语义分类，不限制能用哪些特性
+- 插件可以自带界面：在 `configSchema` 里写一条 `type: "action"`（`panel` 指向插件目录里的 `.html`），设置弹窗就多出一颗按钮，点开是只读 iframe，不用改宿主 UI 代码
 - 内置示例：`speaker-identity`（身份标注）、`thinking-adapters`（思考参数方言适配）为确定性型；`calculator`、`memory-recall` 为 LLM 型
-- **热重载默认开启**：目录放进去就生效，无需重启（`config.extensions.hotReload` 可关；等价于"任意落地的 JS 会被执行"，共享机器建议关掉）
+- 热重载默认开启：目录放进去就生效，无需重启（`config.extensions.hotReload` 可关；等价于"任意落地的 JS 会被执行"，共享机器建议关掉）
 - 架构总览见 [doc/extend_development/skill-system.md](doc/extend_development/skill-system.md)
 
 ## 安装与使用

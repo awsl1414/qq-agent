@@ -1,20 +1,11 @@
 // 账号池路由：多端点/多 Key 的负载均衡。
 //
-// ── 解决什么问题 ──────────────────────────────────────────────────────
-// 有人手上有好几把免费 API Key（同一网关多把，或不同网关），速度参差不齐。
-// 本 Skill 在每次请求时按权重挑一个端点：权重由**实测延迟**的 EWMA 动态调整 ——
-// 快的多接活，慢的少接活；被限流（429）的临时冷却，冷却后自动恢复。
-// 不需要人肉盯着切换。
+// 每次请求按权重挑一个端点，权重由实测延迟的 EWMA 动态调整：快的多接活，
+// 被限流（429）的临时冷却，冷却后自动恢复。
 //
-// ── 为什么是 Skill ────────────────────────────────────────────────────
-// 大多数用户只有一个端点，用不上它；而且"怎么分配"是策略问题，不是核心能力。
-// 关掉它就是纯粹的单端点行为，和没有这个功能时完全一致。
-//
-// ── 数据分两层（刻意的）───────────────────────────────────────────────
-//   持久层：Skill 配置里的 accounts[]（用户可编辑：增删改、启停）
-//   运行时：内存 Map（延迟 EWMA / 错误数 / 权重 / 最近使用）**不落盘**
-// 不落盘的原因：这些是秒级波动的观测值，写进配置文件既增加写盘频率，
-// 又会在重启后留下过期的"快照"误导判断。重启后权重归零重新学习更干净。
+// 数据分两层：持久层是插件配置里的 accounts[]（用户可编辑），
+// 运行时统计只放内存不落盘。这些是秒级波动的观测值，写进配置文件既增加写盘频率，
+// 又会在重启后留下过期快照误导判断；重启后归零重新学习更干净。
 
 import crypto from 'node:crypto';
 
@@ -29,12 +20,12 @@ function accounts() {
   return Array.isArray(list) ? list : [];
 }
 
-/** 合并持久账号 + 内存统计，返回给路由/UI 用的视图（key 可脱敏）。 */
+/** 合并持久账号与内存统计，返回给路由/UI 用的视图（key 可脱敏）。 */
 function accountView(a, maskKey = true) {
   const r = runtime.get(a.id) || {};
   const cooldownMs = Number(cfg().cooldownMs) || 60000;
   const lastErrorAt = r.lastErrorAt || 0;
-  // 只有"限流类错误"才进入冷却；其它错误（超时、4xx、5xx）只降权，不冷却。
+  // 只有限流类错误才进入冷却；其它错误（超时、4xx、5xx）只降权。
   const rateLimited = !!r.rateLimited;
   return {
     id: a.id,
@@ -69,7 +60,7 @@ export function snapshot() {
 /**
  * 按当前策略挑一个端点。
  * @returns {{ id, baseUrl, apiKey, model } | null}
- *   null = 池空 / 全部冷却 / 全部未填 baseUrl —— 调用方回退到自己的配置。
+ *   null 表示池空、全部冷却或全部未填 baseUrl，调用方回退到自己的配置。
  */
 export function pickAccount() {
   const c = cfg();
@@ -84,7 +75,7 @@ export function pickAccount() {
   if (strategy === 'fixed') {
     chosen = pool[0];
   } else if (strategy === 'round-robin') {
-    // 最久没用的优先 —— 等价于轮流，且不需要维护游标
+    // 最久没用的优先，等价于轮流，且不需要维护游标
     chosen = pool.reduce((min, a) => (a.lastUsed < min.lastUsed ? a : min));
   } else {
     const minWeight = Number(c.minWeight) || 0.1;
@@ -139,10 +130,10 @@ export function recordLatency(accountId, latencyMs) {
 
 /**
  * 记录一次失败。
- * @param {boolean} isRateLimited 是否限流（429/速率类错误）—— 限流进冷却，其它只降权。
+ * @param {boolean} isRateLimited 是否限流（429/速率类错误）。限流进冷却，其它只降权。
  *
- * ⚠️ 限流标记在冷却窗口内**保持粘性**：429 进入冷却后，几秒后同账号的一次超时/5xx
- * 不能把标记覆写成 false —— 否则 coolingDown 立即失效，冷却中的账号被重新投用，
+ * 限流标记在冷却窗口内保持粘性：429 进入冷却后，几秒后同账号的一次超时/5xx
+ * 不能把标记覆写成 false，否则 coolingDown 立即失效，冷却中的账号被重新投用，
  * 继续撞 429，陷入"刚冷却就被投用"的循环。窗口自然过期后标记失效，不会永久冷却。
  */
 export function recordError(accountId, isRateLimited) {
@@ -171,7 +162,7 @@ export function resetStats(accountId) {
   else runtime.clear();
 }
 
-// ── 账号增删改（只改 Skill 配置命名空间，不碰核心 api 配置）─────────────
+// ── 账号增删改（只改插件配置命名空间，不碰核心 api 配置）─────────────────
 
 export function addAccount({ baseUrl, key = '', model = '', name = '' } = {}) {
   const base = String(baseUrl || '').trim();
@@ -210,7 +201,7 @@ export function removeAccount(id) {
   return { ok: true, accounts: accounts().filter((a) => a.id !== id) };
 }
 
-// ── Skill 生命周期 ────────────────────────────────────────────────────────
+// ── 插件生命周期 ──────────────────────────────────────────────────────────
 
 export function setup(api) {
   cfg = api.config;
@@ -234,12 +225,6 @@ export const providers = {
     return { ok: true, cooling: limited };
   }
 };
-
-// 说明：原先还声明过 'llm.endpoint-snapshot' 能力（"快照，UI 用"），
-// 但全项目没有任何消费方 —— UI 并没有账号池面板，核心也不需要它。
-// 声明了却没人取用的能力会让审计报"孤儿"、也让使用者误以为有现成的接口。
-// 现在改为普通导出 snapshot()（下面 internals 里已有），要接 UI 时再显式声明并接线。
-
 
 /** 有可用账号才算就绪；池子空时 UI 直接显示原因，而不是假装生效。 */
 export function available() {

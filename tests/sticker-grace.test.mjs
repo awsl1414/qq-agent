@@ -1,12 +1,12 @@
-// 收尾精细化（P3）最小单测（2026-10-22，表情包排查报告「机制层」项）。
+// 收尾精细化最小单测。
 //
-// 为什么单独测这一块：`stickerGraceDecision()` 的返回值直接决定"要不要多跑一轮 LLM"，
-// 而一轮就是一次全价 prompt（实测约 19K token）。判错的两个方向都疼：
-//   · 该宽限没宽限 → 表情继续发不出去，等于 P3 没做
+// stickerGraceDecision() 的返回值直接决定"要不要多跑一轮 LLM"，而一轮就是一次
+// 全价 prompt（实测约 19K token）。判错的两个方向都疼：
+//   · 该宽限没宽限 → 表情继续发不出去
 //   · 不该宽限却宽限 → 每条短回应白烧 19K token，把省 token 的机制整个推翻
 // 所以把边界全钉一遍：档位、库存、冷却、已发过表情、坏 JSON、最后一轮。
 //
-// 运行：node --test tests/sticker-grace.test.mjs   （在 resources/app 目录下）
+// 运行：node --test tests/sticker-grace.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {

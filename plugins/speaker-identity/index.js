@@ -1,4 +1,4 @@
-// 发言人身份标注 Skill。
+// 发言人身份标注插件。
 //
 // 解决的问题（每一条都来自真实群聊里的误判）：
 //   1. 同一个人改群名片 → 历史里前后两条消息看起来像两个人说的
@@ -9,13 +9,12 @@
 //
 // 因此传给模型的每条消息都带稳定 QQ 号，让模型自己能判断"是不是同一个人"。
 //
-// ── Skill 边界（为什么这些函数在这里而不是 onebot.js）────────────────────
-// 这里是**纯函数**：不碰网络、不碰文件、不改全局状态。
+// 边界：这里是纯函数，不碰网络、不碰文件、不改全局状态。
 // OneBot 的连接与重连、消息存档、发送队列仍然由核心模块负责。
-// 本 Skill 只提供"格式化与规范化"能力，通过：
+// 本插件只提供"格式化与规范化"能力，通过：
 //   capability  message.speaker-format / message.inline-at-normalize
 //   providers   供核心模块（prompt/tools）按能力名取用
-//   prompt       向系统提示词追加"身份以 QQ 号为准"的规则
+//   prompt      向系统提示词追加"身份以 QQ 号为准"的规则
 
 export const UNKNOWN_SENDER = '未知发送者';
 
@@ -29,7 +28,7 @@ export function idTag(userId) {
 /**
  * 发言人标签：名字 + 稳定 ID。
  * @param {object} o { name, userId, self, selfLabel, notes }
- *   notes: { [userId]: 备注名 } —— 管理员给的备注优先于群名片
+ *   notes: { [userId]: 备注名 }，管理员给的备注优先于群名片
  */
 export function speakerTag({ name = '', userId = '', self = false, selfLabel = '我', notes = null } = {}) {
   if (self) return selfLabel;
@@ -67,7 +66,7 @@ export function stripSpeakerTags(text) {
 /**
  * 正文 @ 规范化：把 `@昵称` 换成 `@昵称(QQ:xxx)`。
  *
- * 只在**能唯一确定对象**时替换：
+ * 只在能唯一确定对象时替换：
  *   - 有 atUserId 且能在成员表里找到 → 用它
  *   - 名字在成员表里唯一命中 → 用它
  *   - 命中多个同名成员 → 不动（宁可保留歧义，也不要指错人）
@@ -87,7 +86,7 @@ export function normalizeInlineAt(text, { members = [], atUserId = '', allowConv
     const name = String(rawName).trim();
     if (!name) return whole;
     // 已经带 QQ 后缀的跳过。
-    // ⚠️ 必须用 replace 回调给的 offset —— 早先用 src.indexOf(whole) 永远定位到**第一处**，
+    // 必须用 replace 回调给的 offset：早先用 src.indexOf(whole) 永远定位到第一处，
     // 于是"@A(QQ:1) 和 @A"这种文本里第二处也会被误判成已带后缀而跳过。
     const after = src.slice(offset + whole.length);
     if (/^\s*\(QQ:\d+\)/.test(after)) return whole;
@@ -118,10 +117,10 @@ export function normalizeInlineAt(text, { members = [], atUserId = '', allowConv
  * 修复被截断的 JSON 数组参数。
  *
  * 现象：模型输出 `["在的","咋了` 这种半截 JSON（达到 token 上限被切断），
- * JSON.parse 直接抛错，整次工具调用失败——但其实前几条消息是好的，完全可以发出去。
+ * JSON.parse 直接抛错，整次工具调用失败，但其实前几条消息是好的，完全可以发出去。
  * 策略：从右往左逐步丢弃最后一个不完整的元素，补齐 `]`，返回能解析出的最后一个前缀。
  *
- * ⚠️ 只在"看起来像数组"时才尝试，且最多尝试 4 次，避免把畸形输入变成误发消息。
+ * 只在"看起来像数组"时才尝试，且最多尝试 4 次，避免把畸形输入变成误发消息。
  */
 export function splitFragmentedArgs(text) {
   const raw = String(text ?? '').trim();
@@ -150,7 +149,7 @@ export function speakerIdentificationRules() {
   return '消息里的 QQ 号是稳定身份标识，昵称/群名片随时可能改。判断"是不是同一个人"一律看 QQ 号，不要只看名字。两个人名字相同不等于同一个人。';
 }
 
-// ── Skill 生命周期 ────────────────────────────────────────────────────────
+// ── 插件生命周期 ──────────────────────────────────────────────────────────
 
 let cfg = () => ({});
 let log = () => {};
@@ -160,7 +159,7 @@ export function setup(api) {
   cfg = api.config;
   log = api.log;
   // 软依赖：owner-identity 装了就用，没装就静默跳过。
-  // 为什么不用 manifest.requires —— 那是**硬依赖**，缺了会把本 Skill 判定为不可用，
+  // 为什么不用 manifest.requires：那是硬依赖，缺了会把本插件判定为不可用，
   // 而"没装主人模块就不能标注发言人"显然不合理。
   askCapability = api.capability || (() => undefined);
 }
@@ -191,16 +190,16 @@ export const providers = {
     normalizeInlineAt(text, { members, atUserId, allowConvert: cfg().normalizeInlineAt !== false })
 };
 
-// ⚠️ 这里**故意不再导出 promptSections()**（2026-09-20 修）。
+// 这里故意不再导出 promptSections()。
 //
 // 原来它返回一个 id 为 'speaker-stable-id-dynamic' 的动态片段，内容由
-// speakerIdentificationRules() 生成 —— 而 plugin.json 的 prompt.sections 里
-// 已经声明了同一段文字（id 'speaker-stable-id'）。两者**逐字相同**，只因为
-// id 不同，skillManager.getPromptSections 的按-id-去重就放过了两份，
+// speakerIdentificationRules() 生成，而 plugin.json 的 prompt.sections 里
+// 已经声明了同一段文字（id 'speaker-stable-id'）。两者逐字相同，只因为
+// id 不同，skillManager.getPromptSections 的按 id 去重就放过了两份，
 // 结果系统提示里「▸ 发言人身份」出现两遍，每次调用白付约 113 字符。
 //
 // 规则内容是静态的（随 includeInHistory 开关变，但关掉时两边都想要同一句话），
-// 所以正确做法是只留 plugin.json 里的那一份声明 —— 单一来源，不会再漂移。
+// 所以正确做法是只留 plugin.json 里的那一份声明，单一来源，不会再漂移。
 // 若日后确实需要动态文案，请把 manifest 里的那份删掉再在这里返回，
 // 而不是两边都留着。
 

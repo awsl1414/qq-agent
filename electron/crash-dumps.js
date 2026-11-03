@@ -1,16 +1,14 @@
-// 崩溃转储保留上限（2026-10-16 外部审查 #3）
+// 崩溃转储清理：按 mtime 保留最近 keep 份，更旧的删掉。
 //
-// 病灶：每个 minidump 约 34MB，而全库没有任何清理 —— 崩溃几次就永久占几百 MB，
-// 且"崩溃趋势"完全不可观测（不聚合、不上报、不清理）。
-// 本机 2026-10-16 一天内 GPU 子进程连崩 4 次，Crashpad/reports 下堆了 3 份共 100MB。
+// 每个 minidump 约 34MB，不做清理的话崩溃几次就永久占几百 MB（实测一天内
+// GPU 子进程连崩 4 次，Crashpad 下堆了 3 份共 100MB）。
+// 目录不存在 / 读失败一律静默跳过，清理失败不该影响启动。
 //
-// 口径：按 mtime 保留最近 keep 份，更旧的删掉。目录不存在 / 读失败一律静默跳过 ——
-//       清理失败不该影响启动。
-// 说明：crashpad 实际落在 <userData>/Crashpad/reports/（main.js 里 startCrashReporter
-//       的注释写的是 dumps/），所以整个 Crashpad 目录递归扫，只认 .dmp。
+// 注意 crashpad 实际落在 <userData>/Crashpad/reports/，所以整个 Crashpad 目录
+// 递归扫，只认 .dmp。
 //
-// 为什么单独成文件：main.js import 了 electron，纯 node 下跑不起来，逻辑塞在里面
-// 就等于没有测试。抽出来之后 .workbuddy 下的套件可以直接喂临时目录验证。
+// 单独成文件的原因：main.js import 了 electron，纯 node 下跑不起来，逻辑塞在
+// 里面就等于没有测试。抽出来之后可以直接喂临时目录验证。
 
 import fs from 'node:fs';
 import path from 'node:path';

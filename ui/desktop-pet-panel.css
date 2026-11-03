@@ -1,15 +1,14 @@
 /* 桌面伙伴管理面板。继承控制台主题令牌，不影响透明桌宠窗口。
 
-   ⚠️ 2026-10-24 整页重设计。旧版引用的一整套令牌（--tx / --tx2 / --bd / --bg0..3 /
-   --ac / --ac-soft / --r-sm..lg / --ok / --warn / --err / --raise-1 …）在令牌扁平化时
-   已全部改名或删除（现在是 --fg / --fg-dim / --line / --layer-* / --accent / --green …）。
-   var() 取不到值 → 声明在计算值阶段失效（IACVT）→ 边框、圆角、背景、徽标配色**整页丢失**，
-   只剩继承来的字色 —— 这就是"这页跟整体风格不搭"的真实原因：不是画风不同，是样式没生效。
+   ⚠️ 只使用当前令牌（--fg / --fg-dim / --line / --layer-* / --accent / --green …）。
+   旧版那套（--tx / --bd / --bg0..3 / --ac / --r-sm..lg / --raise-1 …）已改名或删除，
+   再引用它们会因 var() 取不到值而让整条声明在计算值阶段失效（IACVT），
+   边框、圆角、背景、徽标配色整页丢失，只剩继承来的字色。
 
-   现在的做法：
+   做法：
    - 外壳与通用件直接复用全站设计语言（.snowluma-page-card / .sl-* / .btn / .field / .hint），
      与「连接」「自检」页同宽同款，不再私有一套按钮输入框；
-   - 页内部件（角色卡 / 状态瓦片 / 动作表 / 成就 / 场景条 / 保存条）按同一套令牌重写，
+   - 页内部件（角色卡 / 状态瓦片 / 动作表 / 成就 / 场景条 / 保存条）按同一套令牌写，
      全部活在当前变量上，两个主题都成立。 */
 
 /* ── 外壳 ──────────────────────────────────────────────────────────────
@@ -45,7 +44,7 @@
    一行四段：插件 / 桌面窗口 / 当前角色 / 桌宠。标签淡、值亮，段间发丝线。
    为什么不是 .sl-tiles 的四张卡片：四个几乎等重的绿框并排，既像四张"成功提示"，
    又把页面顶部堆成一坨、跟下面的分区面板抢层级；正常状态也不该重复分区里已有的信息。
-   所以收敛成一条安静的横条 —— 只有出问题时才在下面追加一行 .dp-status-note。 */
+   所以收敛成一条安静的横条，只有出问题时才在下面追加一行 .dp-status-note。 */
 .dp-status {
   display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 0 18px;
   min-height: 44px; padding: 9px 14px;
@@ -87,7 +86,7 @@
 /* ── 表单 ────────────────────────────────────────────────────────────── */
 .dp-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; }
 .dp-field-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-/* label 包 input 的旧结构保留（JS 靠它渲染动作绑定下拉），控件样式与 .field 对齐 */
+/* label 包 input 的结构保留（JS 靠它渲染动作绑定下拉），控件样式与 .field 对齐 */
 .dp-field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; }
 .dp-field > span { color: var(--fg); font-weight: 500; }
 .dp-field select, .dp-field input:not([type=checkbox]):not([type=range]), .dp-field textarea {
@@ -127,7 +126,7 @@
 
 /* 开关横行：页内所有"打勾才启用"的选项一律画成滑动开关（全站 input.sw，
    见 style.css「开关（switch）」一节），和设置页 .checkbox-row 同一摆法：开关在左、文字在右。
-   ⚠️ 这里**不要**再给 .dp-check input / .dp-table input[type=checkbox] 写 width/height ——
+   ⚠️ 这里**不要**再给 .dp-check input / .dp-table input[type=checkbox] 写 width/height：
    .dp-check input 是 0,1,1 与本文件后加载的顺序合起来会压过 input.sw，
    .dp-table input[type=checkbox] 更是 0,2,1 直接赢，两者都会把 40×22 的轨道压回 15px 方块。
    外观统一交给 input.sw，这里只管间距。 */

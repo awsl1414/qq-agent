@@ -1,4 +1,4 @@
-// 自动修复（self-fix）—— 带两道人工闸的修复链路的行为层入口。
+// 自动修复（self-fix）：带两道人工闸的修复链路的行为层入口。
 //
 // 全链路（每一步都对应一个 capability，核心只按能力名取，不 import 本插件）：
 //
@@ -20,7 +20,7 @@
 // ── 红线 ──
 //   1. 本插件所有写盘都在 <DATA_DIR>/plugin-data/self-fix/ 之下，唯一的例外是 fix.commit，
 //      且它必须先成功落快照 + fsync 才允许写真实文件。
-//   2. 模型没有任何写盘工具 —— "应用改动"是把提案里的 hunks **确定性地**套到暂存区副本上，
+//   2. 模型没有任何写盘工具："应用改动"是把提案里的 hunks **确定性地**套到暂存区副本上，
 //      不是让模型再写一遍文件。这样 P2（最小改动）才有可能被静态校验。
 //   3. 默认关闭（enabledByDefault:false + fixEnabled:false 双保险）。
 
@@ -37,8 +37,8 @@ import {
 import { runProtocolGate, runVerifyPlan, VERIFIERS, VERIFIER_IDS } from './checks.js';
 import { buildProposePrompt, parseProposal, applyHunks } from './prompt.js';
 import { buildEvidencePack, packToMarkdown, buildDocx, buildReportPrompt, parseReport, grepLogs } from './doc.js';
-// 数据目录的唯一真源（与 forge / dev / doctor 同源）。原来写 `QQ_AGENT_DATA_DIR || '.'`，
-// 该 env 只有 electron/main.js 会设 —— headless（node src/server.js）下回落进程 cwd，
+// 数据目录的唯一真源（与 forge / dev / doctor 同源）。不能写 `QQ_AGENT_DATA_DIR || '.'`：
+// 该 env 只有 electron/main.js 会设：headless（node src/server.js）下回落进程 cwd，
 // 工单会写进 <仓库根>/plugin-data/self-fix/，而 UI 读 data/ 下的真目录。
 import { DATA_DIR } from '../../config.js';
 
@@ -83,7 +83,7 @@ function guardEnabled() {
 
 // ── 相关文件收集（给提案 prompt 用）────────────────────────────────────────
 //
-// 为什么在插件侧做：这与 doctor-tools 的"沙箱是唯一路径解析入口"同一逻辑 ——
+// 在插件侧做：这与 doctor-tools 的"沙箱是唯一路径解析入口"同一逻辑：
 // 核心不该懂路径规则。核心只把 question/answer/target 交给插件，插件回一段拼好的 prompt。
 
 const WINDOW = 60;      // 命中行上下各留多少行
@@ -134,7 +134,7 @@ function collectRelevantFiles({ target, answer }) {
 
 /**
  * 把一个改动项的 hunks 套到"改动前文本"上，写进暂存区。
- * 改动前文本的来源：真实文件（首次 apply）—— 因为暂存区是"待落地的完整新版本"。
+ * 改动前文本的来源是真实文件（首次 apply），因为暂存区是"待落地的完整新版本"。
  */
 function stageOne(id, change) {
   const r = resolveTarget(root, appRoot, dataRoot, change);
@@ -159,9 +159,9 @@ function stageOne(id, change) {
 /**
  * 算一份改动预览（改动前 / 改动后 / diff 行），给 UI 与报告用。
  *
- * ⚠️ 闸① 之前**暂存区里还没有文件**（批准前一个字节都不写），所以这里必须能
- *    在内存里把 hunks 套一遍得到"改后文本"。否则提案卡会显示成"整份文件被删光了" ——
- *    那会让所有人在批准前误判。批准之后暂存区就有文件了，两条路径结果一致。
+ * 闸① 之前**暂存区里还没有文件**（批准前一个字节都不写），所以这里必须能
+ * 在内存里把 hunks 套一遍得到"改后文本"。否则提案卡会显示成"整份文件被删光了"：
+ * 那会让所有人在批准前误判。批准之后暂存区就有文件了，两条路径结果一致。
  */
 function previewAll(id, rec) {
   const readMaybe = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return null; } };
@@ -200,9 +200,9 @@ function summarize(rec) {
   };
 }
 
-// ── 批准令牌的生命周期（2026-10-21 修）──────────────────────────────────
+// ── 批准令牌的生命周期 ─────────────────────────────────────────────────────
 //
-// 问题（外部反馈）：模型把代码改到闸门能通过了，闸门却始终不放行。
+// 曾出现过：模型把代码改到闸门能通过了，闸门却始终不放行。
 //   根因不是闸门判定，而是 approve 令牌只消费、不归还：
 //     fix.apply 置 consumed=true → 自验失败(status=failed) / 人工回滚(rolled-back)
 //     → 再想 apply 直接 403「批准令牌已使用过」，而 commit 又要求 status=verified
@@ -210,7 +210,7 @@ function summarize(rec) {
 //
 // 修法两条，缺一不可：
 //   ① 令牌绑定**提案内容**（指纹）：人工批准的是这份 diff，不是这个工单号。
-//      内容改了就作废旧令牌、要求重新批准 —— 这是安全性，不能靠"允许重复 apply"换来。
+//      内容改了就作废旧令牌、要求重新批准。这是安全性，不能靠"允许重复 apply"换来。
 //   ② 失败/回滚时**重发**令牌并把状态退回 proposed：工单能继续用，但每次都是新的一次人工批准。
 
 /** 提案指纹：内容任何一处变化都会变。旧记录没有该字段时按"无指纹"处理（向后兼容）。 */
@@ -261,8 +261,7 @@ export function setup(api) {
   // <DATA_DIR> = root 往上两级（root=<DATA>/plugin-data/self-fix）
   dataRoot = path.dirname(path.dirname(root));
   // appRoot：本文件位于 <appRoot>/src/harness/fix/index.js
-  // ⚠️ 必须用 fileURLToPath —— new URL().pathname 在 Windows 上会给 /E:/... 前导斜杠（踩过）
-  // 内置化后本文件位于 <appRoot>/src/harness/<mod>/index.js —— 层级比插件期深一层，
+  // 必须用 fileURLToPath：new URL().pathname 在 Windows 上会给 /E:/... 前导斜杠。
   // 优先用宿主注入的 appRoot（见 src/harness/index.js），算错会让自检/修复指向 src/。
   appRoot = api.appRoot || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
   projectRoot = path.dirname(path.dirname(appRoot));
@@ -390,7 +389,7 @@ export const providers = {
     };
     // 预检一次协议闸（不改 status，只是让闸① 的界面上能有结论可看）
     try { rec.protocol = runProtocolGate(root, appRoot, dataRoot, rec); } catch (e) { rec.protocol = { passed: false, blocking: 1, violations: [{ code: 'P?', level: 'block', title: '协议闸预检失败', detail: String(e?.message || e) }] }; }
-    // 预检会归一化 changes（含 level）—— 指纹必须在这一步之后算，才是"用户将看到并批准的那份内容"
+    // 预检会归一化 changes（含 level），指纹必须在这一步之后算，才是"用户将看到并批准的那份内容"
     rec.approval.fingerprint = proposalFingerprint(rec.proposal);
     writeRecord(root, id, rec);
     return { ok: true, fixId: id, approvalToken: rec.approval.token, record: rec, summary: summarize(rec), noChange };
@@ -398,14 +397,14 @@ export const providers = {
 
   /**
    * 闸①：校验一次性批准令牌 → 把改动写进暂存区 → 跑协议闸。
-   * 令牌不对/过期/已用过一律 403 语义（ok:false），**什么都不做** ——
+   * 令牌不对/过期/已用过一律 403 语义（ok:false），**什么都不做**：
    * 这让"人工批准"成为后端绕不过去的门，而不是界面上的一个装饰按钮。
    */
   'fix.apply': ({ fixId, approvalToken, extraNote = '' } = {}) => {
     const g = guardEnabled(); if (g) return g;
     const rec = readRecord(root, fixId);
     if (!rec) return { ok: false, error: '工单不存在' };
-    // 空提案没有任何可应用的内容 —— 明确拒绝，别让它在 apply 之后变成一个"空的暂存区工单"。
+    // 空提案没有任何可应用的内容：明确拒绝，别让它在 apply 之后变成一个"空的暂存区工单"。
     if (rec.noChange === true || !(rec.proposal?.changes || []).length) {
       return { ok: false, noChange: true, error: '本次提案没有任何改动（判定为「无需代码修复」）—— 无需应用，直接丢弃这条即可。' };
     }
@@ -428,9 +427,9 @@ export const providers = {
     for (const c of rec.proposal.changes) {
       const r = stageOne(rec.id, c);
       if (!r.ok) {
-        // ⚠️ 写暂存区失败**不能**把令牌一起吃掉：修前 consumed 在循环之前就置位，
-        //    一次写盘异常 = 这笔工单永久无法再应用（外部反馈的死路）。
-        //    现在改为"全部写成功才消费"，失败则原地换一张新票，用户可以立刻重试。
+        // 写暂存区失败**不能**把令牌一起吃掉：consumed 若在循环之前就置位，
+        // 一次写盘异常 = 这笔工单永久无法再应用。改为"全部写成功才消费"，
+        // 失败则原地换一张新票，用户可以立刻重试。
         rec.status = 'failed';
         rec.failReason = r.error;
         reissueApproval(rec, `写暂存区失败：${r.error}`.slice(0, 180));
@@ -506,7 +505,7 @@ export const providers = {
     rec.lastVerifyPassed = !!res.passed;
     // 自验没过 → 换一张新票退回"待批准"。
     // 为什么：验失败后工单若停在 failed，apply 会被已消费的令牌挡住，commit 又要求 verified
-    //       —— 用户只能看着"改好了却推不动"。换票后模型改完可直接再应用一次。
+    //：用户只能看着"改好了却推不动"。换票后模型改完可直接再应用一次。
     // 暂存区**保留**：fix.rerun 仍能对同一份暂存重跑（验证抖动时不丢当前成果）。
     if (!res.passed) reissueApproval(rec, `自验未通过（第 ${n} 轮，${res.failCount} 项失败）`);
     writeRecord(root, fixId, rec);
@@ -545,7 +544,7 @@ export const providers = {
     if (rec.status === 'committed') return { ok: false, error: '这笔工单已经落地过了' };
     if (!rec.approval?.approvedAt) return { ok: false, error: '没有人工批准的记录，拒绝落地' };
     // 闸②必须真的成立：**必须先通过自验**（status='verified'，由 fix.verify 在 passed 时写入），
-    // 否则「闸②」只是个装饰按钮 —— 跳过 verify 直接 commit 会让未经任何验证、协议闸明确不合规的
+    // 否则「闸②」只是个装饰按钮：跳过 verify 直接 commit 会让未经任何验证、协议闸明确不合规的
     // 改动被写进 src/ ui/，随后热重载。这两条是闸②的全部价值所在，不能省。
     if (rec.status !== 'verified') {
       return {
@@ -554,12 +553,11 @@ export const providers = {
           + '下一步：在闸②点「运行验证」；若验证项本身要改代码，请改完后重新批准应用（工单详情里会给新的批准入口）。'
       };
     }
-    // ⚠️ fail-closed：`!rec.protocol` 也要拒（2026-10-07 安全验证实测）。
-    //   早期写的是 `if (rec.protocol && rec.protocol.passed === false)` ——
-    //   protocol 为 null/undefined 时整个协议复检被**跳过**，于是
-    //   `{status:'verified', protocol:null}` 就能直接落地（实测真实文件被写入）。
-    //   工单是普通 JSON（<DATA_DIR>/plugin-data/self-fix/fixes/*.json），
-    //   status/protocol 全部自报、无完整性校验，所以判据必须要求"确凿通过"。
+    // fail-closed：`!rec.protocol` 也要拒。写成 `if (rec.protocol && rec.protocol.passed === false)`
+    // 的话，protocol 为 null/undefined 时整个协议复检被**跳过**，于是
+    // `{status:'verified', protocol:null}` 就能直接落地（实测真实文件被写入）。
+    // 工单是普通 JSON（<DATA_DIR>/plugin-data/self-fix/fixes/*.json），
+    // status/protocol 全部自报、无完整性校验，所以判据必须要求"确凿通过"。
     if (!rec.protocol || rec.protocol.passed !== true) {
       const why = rec.protocol
         ? `协议闸未通过（${rec.protocol.blocking ?? '?'} 项阻断）`
@@ -598,7 +596,7 @@ export const providers = {
     return { ok: true, fixId, ...out, approvalToken: rec.approval.token };
   },
 
-  /** 丢弃（理由必填并落盘 —— "不采纳"比"采纳"信息量大得多）。 */
+  /** 丢弃（理由必填并落盘："不采纳"比"采纳"信息量大得多）。 */
   'fix.discard': ({ fixId, reason = '' } = {}) => {
     const rec = readRecord(root, fixId);
     if (!rec) return { ok: false, error: '工单不存在' };

@@ -8,8 +8,8 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "index.js": "b3c52252ae71f441",
-        "plugin.json": "75d526dd6156bc57"
+        "index.js": "225c4ef7a949b41f",
+        "plugin.json": "789de031ef5038ec"
       }
     },
     {
@@ -18,7 +18,7 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "index.js": "75cf74ae277586cc",
+        "index.js": "f19a8a78dd03b4ae",
         "plugin.json": "70721cd634c44f91"
       }
     },
@@ -28,8 +28,8 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "index.js": "f05a9633b45f9688",
-        "plugin.json": "7c68c2da72766749"
+        "index.js": "2d247bb188a1b653",
+        "plugin.json": "680071bced647fa7"
       }
     },
     {
@@ -38,32 +38,32 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "README.md": "c3839a9598e7b6b2",
-        "docs/human-like-memory.html": "9e9e2945b823c854",
-        "index.js": "601918753b2ca94a",
-        "lib/archive.js": "c2624125c80fd642",
-        "lib/budget.js": "e5a0b81efa94ae50",
-        "lib/cards.js": "05020b8cdea7e6a0",
-        "lib/conflict.js": "b348e1eea33b9b61",
-        "lib/consolidate.js": "52a9d9e629c87557",
-        "lib/crossturn.js": "8d935389ea61f224",
-        "lib/env.js": "4f84553caf87c6ac",
-        "lib/gist.js": "2cc0ea5b58eb964b",
-        "lib/inject.js": "707c8c427cf1e7f9",
-        "lib/peek.js": "41d55a805056f4a3",
-        "lib/pending.js": "998e5e2d0c8258c3",
-        "lib/recall.js": "6a76f256c75dfdd7",
-        "lib/stats.js": "5025c7d249725af8",
-        "lib/store.js": "30a6f11e3e68b5c3",
-        "lib/util.js": "14be37b2a6694893",
-        "plugin.json": "b262840db6ab352f",
+        "README.md": "13dfdfca986a429f",
+        "docs/human-like-memory.html": "2e92580070a5633c",
+        "index.js": "1854ea6bcc9bc843",
+        "lib/archive.js": "dc7088fb024f332d",
+        "lib/budget.js": "2c9114b67b772442",
+        "lib/cards.js": "c7f6746d3468c3bb",
+        "lib/conflict.js": "3bd6e9334a9823e5",
+        "lib/consolidate.js": "436a3fe600499e68",
+        "lib/crossturn.js": "2f14d0c4bdfc7236",
+        "lib/env.js": "1718d2305081d86d",
+        "lib/gist.js": "7c91bcde00726928",
+        "lib/inject.js": "661605cf51e22a48",
+        "lib/peek.js": "037fad0c68e65981",
+        "lib/pending.js": "cb4270d942b4bd21",
+        "lib/recall.js": "db18a9487e7b88b3",
+        "lib/stats.js": "4d13e2eccc957266",
+        "lib/store.js": "c782a58fd6955405",
+        "lib/util.js": "317edc5596b84de4",
+        "plugin.json": "e8c1a6285aef010d",
         "tools/bench-soak.mjs": "007daefdfb9b72f4",
-        "tools/bench-tokens.mjs": "c901bfdd71dfa79d",
+        "tools/bench-tokens.mjs": "3bc3cfdbaa9a60be",
         "tools/bench-unindex.mjs": "cc14456a480cd6bf",
         "tools/curve-sim.html": "79f5d1e40d67e515",
         "tools/repro-gist-hits.mjs": "75c10a882edd44ec",
         "tools/repro-rollup-overwrite.mjs": "44ffd0f052d84c26",
-        "tools/selftest.mjs": "95b215dda1cac73b"
+        "tools/selftest.mjs": "e1f195c5f502b8d7"
       }
     },
     {
@@ -72,7 +72,7 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "index.js": "5b442fc6c496e4cf",
+        "index.js": "8a21edd8af2e6ec9",
         "plugin.json": "45e22ff63453959e"
       }
     },
@@ -82,11 +82,11 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "bili.js": "27b833c0523c9577",
-        "douyin.js": "e0d5b89584d87b36",
-        "index.js": "434402d8822704d1",
-        "media-common.js": "9283ff65e5e56f26",
-        "plugin.json": "656a6bfb3cd3f666"
+        "bili.js": "cfcc1958ed62570a",
+        "douyin.js": "024c98e901f1b2a1",
+        "index.js": "9a1512609369f4ac",
+        "media-common.js": "f8ead412c5a5cc16",
+        "plugin.json": "2f3fdf91d1760d56"
       }
     },
     {
@@ -95,7 +95,7 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "index.js": "a2ac0104b28ab451",
+        "index.js": "780aed9eb755ceac",
         "plugin.json": "54bdbdc178b66949"
       }
     },
@@ -105,7 +105,7 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "index.js": "43aa53c11ee4dea9",
+        "index.js": "2f9be1f2ed46d5f1",
         "plugin.json": "308939c4098267ef"
       }
     },
@@ -115,7 +115,7 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "index.js": "1d02ae973b2932c1",
+        "index.js": "10a8f5edaa618ee6",
         "plugin.json": "2c23269b7861f1fe"
       }
     },
@@ -125,8 +125,8 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "dialects.js": "4327c868aec0e154",
-        "index.js": "3401d1e2742a7024",
+        "dialects.js": "bff981bcced2065e",
+        "index.js": "1546c8a088d208c2",
         "plugin.json": "854664e0d1849918"
       }
     },
@@ -136,8 +136,8 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "frames.js": "0f395e406c31b358",
-        "index.js": "fc940154bc0c9de4",
+        "frames.js": "aeff07f547a582e3",
+        "index.js": "74a7d2a32e6bb1cd",
         "plugin.json": "2214fbac910caff7"
       }
     },
@@ -147,12 +147,12 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "index.js": "8651b89cc415e091",
-        "lib/manager.js": "9025835fd4ed577c",
-        "lib/stickers.js": "18444f37c06eaf3f",
-        "panel/viewer.css": "4ffe9c4a9bc124fc",
+        "index.js": "8615631c43b7a0e4",
+        "lib/manager.js": "886f8b39db8ec672",
+        "lib/stickers.js": "0f1095ea2d74017d",
+        "panel/viewer.css": "8468268adf34937f",
         "panel/viewer.html": "b0a83ac7b3f89f2e",
-        "panel/viewer.js": "55d4c1697c48389f",
+        "panel/viewer.js": "eed88419c03bbc90",
         "plugin.json": "ff0bc231df152f63"
       }
     },
@@ -162,7 +162,7 @@
       "kind": "skill",
       "entry": "index.js",
       "files": {
-        "index.js": "7f7baa2fa0fbd1bf",
+        "index.js": "4c9a56841647987b",
         "skill.json": "f844614ff1857931"
       }
     },
@@ -172,7 +172,7 @@
       "kind": "skill",
       "entry": "index.js",
       "files": {
-        "index.js": "f1a2619662b46eba",
+        "index.js": "47a2861726588fb7",
         "skill.json": "68763c37eeca8788"
       }
     },
@@ -182,8 +182,8 @@
       "kind": "skill",
       "entry": "index.js",
       "files": {
-        "index.js": "16f7f54b2c1dbcc8",
-        "skill.json": "fa14b53bfa732a7c"
+        "index.js": "b7bedd11a8dceab8",
+        "skill.json": "6670fc92455a187f"
       }
     },
     {
@@ -192,7 +192,7 @@
       "kind": "skill",
       "entry": "index.js",
       "files": {
-        "index.js": "024853ac9ba103cb",
+        "index.js": "8a7e1b0e1788102e",
         "skill.json": "3f5c4b2ccfb59319"
       }
     },
@@ -202,8 +202,8 @@
       "kind": "skill",
       "entry": "index.js",
       "files": {
-        "index.js": "a433a5decf08e910",
-        "memes.js": "78a1e90e9345e3d6",
+        "index.js": "4eea1c76908dffe3",
+        "memes.js": "8a5b7b4663fcd39f",
         "skill.json": "5a27eae8425792b9"
       }
     },
@@ -213,7 +213,7 @@
       "kind": "skill",
       "entry": "index.js",
       "files": {
-        "index.js": "7e899b2cd98ba3b0",
+        "index.js": "980a1fec6b2ceef5",
         "skill.json": "2f56eae55c9ab232"
       }
     },
@@ -223,12 +223,12 @@
       "kind": "skill",
       "entry": "index.js",
       "files": {
-        "config.js": "d1244be36ab8136a",
-        "downloader.js": "73e1c332e7473edc",
-        "filters.js": "74077af51d655770",
-        "index.js": "d8d97f8fb9bade4e",
-        "pixiv.js": "7ba194ee4fb490d9",
-        "setu.js": "e21da4af60d7569c",
+        "config.js": "76ebe7309835b9f8",
+        "downloader.js": "8952cf4d0bd380f4",
+        "filters.js": "734263f6b0b367ea",
+        "index.js": "2310e47f6570b7c4",
+        "pixiv.js": "6f71d49a3e5cbad9",
+        "setu.js": "4597bd9cc3cade01",
         "skill.json": "0cc082eeed97508f"
       }
     },
@@ -238,7 +238,7 @@
       "kind": "skill",
       "entry": "index.js",
       "files": {
-        "index.js": "1e0f6f838568d63c",
+        "index.js": "2d4618004fed4fbe",
         "skill.json": "a9d4208cbe5e9adf"
       }
     },
@@ -249,10 +249,10 @@
       "entry": "index.js",
       "files": {
         "README.md": "368faac85706cf0c",
-        "index.js": "096e4a6feab9873a",
+        "index.js": "a34cb53561c1a303",
         "lib/model-store.js": "8129a02962683f9c",
         "lib/service.js": "54b385b52cbaf541",
-        "plugin.json": "e763a5cdc36478f8"
+        "plugin.json": "e1c0bf081e71047b"
       }
     }
   ]

@@ -1,8 +1,8 @@
-// ffmpeg 下载源拼接与安装前置条件（2026-11-03）
+// ffmpeg 下载源拼接与安装前置条件
 //
-// 背景：ffmpeg 改为按需下载后，有两条容易回归的约束：
-//   ① 下载源前缀拼接要对 —— 用户填不填尾斜杠都得拼对，否则下载 404
-//   ② Token 只发给 github.com / api.github.com，**绝不能**发给镜像站
+// ffmpeg 改为按需下载后，有两条容易回归的约束：
+//   ① 下载源前缀拼接要对，用户填不填尾斜杠都得拼对，否则下载 404
+//   ② Token 只发给 github.com / api.github.com，绝不能发给镜像站
 //      （镜像站是第三方，把 Token 递过去等于把凭据交给它）
 // 这里钉住这两条，外加校验值常量与 zip 兜底路径的存在性。
 import { test } from 'node:test';
@@ -36,7 +36,7 @@ test('assetUrl：yylx 前缀拼在官方地址前面', () => {
 
 test('镜像表里的每一项都是「前缀 + 完整 GitHub 地址」形态', () => {
   // 加新镜像时最容易犯的错：漏尾斜杠、或写成域名替换式（git.yylx.win/GyanD/…）。
-  // 后者实测 404 —— 这个站只认完整 GitHub 地址拼在后面。
+  // 后者实测 404，这个站只认完整 GitHub 地址拼在后面。
   for (const [key, prefix] of Object.entries(setup.MIRRORS)) {
     if (!prefix) continue;   // direct 是空前缀
     assert.ok(prefix.endsWith('/'), `${key} 的前缀应以 / 结尾：${prefix}`);
@@ -131,7 +131,7 @@ test('setupStatus 初始形态字段齐全（UI 靠它渲染进度）', () => {
 // 这两件事正交，组合错会互相拖后腿（代理 → 镜像 → GitHub 多绕一跳）。
 // resolveDownloadRoute 把决策收在一处，这里逐格钉住。
 //
-// 代理探测依赖本机环境，所以用 `__setProxyProbeForTest` 注入固定值 ——
+// 代理探测依赖本机环境，所以用 __setProxyProbeForTest 注入固定值。
 // 直接改写模块导出的属性会在 ESM 下抛 "Cannot redefine property"。
 const originalProxyProbe = setup.__getProxyProbeForTest();
 

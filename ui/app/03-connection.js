@@ -1,24 +1,19 @@
-// 〔连接页签〕—— M9 拆分第 4 段
-// 2026-10-23：由「SnowLuma 页」改写为「连接页」（协议端解耦重构）。
+// 〔连接页签〕
 'use strict';
 
 /* ── 这一页为什么长这样 ───────────────────────────────────────────────────
- * 2026-10-23 之前，SnowLuma 随包分发、由本软件启动 / 注入 / 托管，所以这一页
- * 是一整套「启动管线」（QQ → SnowLuma → OneBot），光按钮就 18 个。
- *
- * 但 SnowLuma 的 EULA 5.4 明确禁止把它的专有原生组件并入第三方安装包、也禁止
- * 用自动化脚本部署。于是分工改成：
+ * SnowLuma 的 EULA 5.4 明确禁止把它的专有原生组件并入第三方安装包、也禁止
+ * 用自动化脚本部署，所以协议端不由本软件托管：
  *   · 协议端（SnowLuma 或 NapCat，二选一）= 用户自己安装、自己启动；
  *   · QQ Agent = 纯 OneBot v11 客户端，只负责连上 ws/http 端点。
  *
- * 这一页因此只剩三件事，也正是用户真正需要知道的：
+ * 这一页只剩三件事：
  *   ① 现在连上没有（状态）；
  *   ② 没连上该装什么、怎么配（协议端指引，两张卡）；
  *   ③ 端点地址 / 令牌在哪儿改（端点设置，默认折叠）。
  *
  * 日志只留「应用日志」：协议端的日志归协议端自己（SnowLuma 控制台 / NapCat
- * 控制台），我们拿不到，也不该假装能拿到 —— 旧版三块日志面板里有两块是
- * 内置 SnowLuma 的 stdout，随托管一起消失了。
+ * 控制台），我们拿不到，也不该假装能拿到。
  *
  * 样式沿用 .snowluma-* / .sl-* 类名（style.css 里那一大段仍然有效）：
  * 换的只是内容与 id，没必要为了改名再动一遍 CSS。
@@ -26,16 +21,14 @@
 
 /* 折叠区展开态：页面每 15 秒被 startListPoller 重建一次（quiet），
    不记住的话用户刚展开日志、一转眼就自己合上了。
-   ⚠️ 端点设置里可能有用户正在输入的地址，所以 quiet 刷新**只改状态文字**、
-   绝不重绘整页（见 updateConnectionLive）—— 这是旧版「注入目标输入框打一半
-   被重置」那个坑的通用解法。 */
+   ⚠️ 端点设置里可能有用户正在输入的地址，所以 quiet 刷新只改状态文字、
+   绝不重绘整页（见 updateConnectionLive），否则输入框打到一半会被重置。 */
 let connLogsOpen = false;
 let connAdvOpen = false;
-/* 2026-10-24 重设计追加：
-   · connSetupOpen —— 「装一个协议端」折叠区的手动开合态。null = 用户还没动过，
-     按连接状态自动定（没连上默认展开，连上默认收起）；
-   · connLogsCache —— 最近一次拿到的日志。手动「重新检测」只重读 /api/status、
-     不重新拉日志，但 updateConnectionLive 需要日志参数来维护日志面板。 */
+/* connSetupOpen，「装一个协议端」折叠区的手动开合态。null = 用户还没动过，
+   按连接状态自动定（没连上默认展开，连上默认收起）；
+   connLogsCache，最近一次拿到的日志。手动「重新检测」只重读 /api/status、
+   不重新拉日志，但 updateConnectionLive 需要日志参数来维护日志面板。 */
 let connSetupOpen = null;
 let connLogsCache = { logs: [], level: 'info' };
 
@@ -66,7 +59,7 @@ function connLogText(appLogsData) {
 }
 
 /** 三种状态的"人话结论"：连上 / 端口通了但没连上 / 端口没开。
-    这一页 99% 的使用场景是"为什么连不上、我该先做什么"，所以结论必须自己把
+    这一页 99% 的使用场景是"为什么连不上、我该先做什么"，所以结论自己要把
     下一步说出来，而不是把后端诊断原样甩给人。 */
 function connVerdict(v) {
   if (v.connected) {
@@ -314,7 +307,7 @@ function updateConnectionLive(v, appLogsData) {
 }
 
 /** 手动「重新检测」：只重读一次状态并把结论写回页面。
-    不重建整页 —— 端点设置里可能正有用户输入一半的地址（老坑）。 */
+    不重建整页，端点设置里可能正有用户输入一半的地址（老坑）。 */
 async function connRecheck(btn) {
   if (!btn || btn.disabled) return;
   const note = $('#conn-check-note');
@@ -326,10 +319,10 @@ async function connRecheck(btn) {
     if (!s) { if (note) note.textContent = '读不到状态：后端没有应答。'; return; }
     let nv = connView(s);
 
-    // 2026-10-24：端口通了但仍没连上，最常见的不是"账号没登录"，而是**令牌没填**
+    // 端口通了但仍没连上，最常见的不是"账号没登录"，而是令牌没填
     // （SnowLuma 每个账号随机生成一对，两枚还不一样）。这一步先替用户去协议端的
-    // config/onebot_<QQ号>.json 里读一次 —— 读到了就连上了，省掉他去 WebUI 抄两串
-    // 43 位字符串。已经是通的、或端口没开都不试（避免无谓的 PowerShell 探测）。
+    // config/onebot_<QQ号>.json 里读一次，省掉他去 WebUI 抄两串 43 位字符串。
+    // 已经连上、或端口没开都不试（避免无谓的 PowerShell 探测）。
     let fillNote = '';
     if (!nv.connected && nv.portOpen) {
       const filled = await api('/api/protocol/autofill', {
@@ -388,7 +381,7 @@ async function loadConnectionPage({ quiet = false } = {}) {
 
   if (!status) {
     // 只有非 quiet 才把错误卡顶上去：轮询期间的偶发失败不该把已经渲染好的
-    // 页面（可能正被用户读着）换成错误页。旧版这里也是同样的口径。
+    // 页面（可能正被用户读着）换成错误页。
     if (!quiet) {
       box.innerHTML = `
         <div class="snowluma-page-card snowluma-error-card">
@@ -468,8 +461,8 @@ function bindConnectionPage(box, v, appLogsData) {
   if (logs) {
     logs.addEventListener('toggle', () => { connLogsOpen = logs.open; });
     // 用户手点 summary 展开时贴底：他想看的是"最后发生了什么"。
-    // ⚠️ 监听 summary 的 click 而不是 details 的 toggle —— toggle 在程序化
-    //    open 时也会触发（旧版踩过：15 秒重建后把阅读位置又拽回末尾）。
+    // ⚠️ 监听 summary 的 click 而不是 details 的 toggle，因为 toggle 在程序化
+    //    open 时也会触发，会把阅读位置又拽回末尾。
     logs.querySelector('summary')?.addEventListener('click', () => {
       requestAnimationFrame(() => {
         const pre = $('#conn-logs-view');
@@ -478,7 +471,7 @@ function bindConnectionPage(box, v, appLogsData) {
     });
   }
 
-  // ── 自动读取协议端配置（2026-10-24）──
+  // ── 自动读取协议端配置 ──
   // 直接读 SnowLuma 的 config/onebot_<QQ号>.json，拿到端口和两枚令牌后落盘 + 重连。
   // 手动触发带 force：以协议端当前配置为准覆盖（用户点这个按钮就是这个意思）。
   // 令牌不会回传到页面（后端 publicView 已删除），所以这里只显示账号与结果。

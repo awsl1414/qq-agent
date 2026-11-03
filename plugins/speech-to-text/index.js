@@ -3,17 +3,16 @@
 // 数据流：record media（url/file）→ OneBot get_record 拿 wav（SnowLuma 内置 silk 转码）
 //         → whisper-cli 识别 → 返回文字。
 //
-// ── 设计原则 ──────────────────────────────────────────────────────────
-//   · 失败一律抛错，由调用方静默吞掉 —— 绝不阻塞/影响聊天主流程；
-//   · 识别是「增强」不是「必需」：失败时消息保持 [语音] 占位，行为与未启用时一致；
-//   · 临时文件用完即删，不残留磁盘（一次识别会产生 .wav 和 .txt 两个临时文件，
+// 设计原则：
+//   · 失败一律抛错，由调用方静默吞掉，绝不阻塞/影响聊天主流程；
+//   · 识别是增强不是必需：失败时消息保持 [语音] 占位，行为与未启用时一致；
+//   · 临时文件用完即删（一次识别会产生 .wav 和 .txt 两个临时文件，
 //     漏删会在长期运行里堆满临时目录）；
-//   · **全程本地**：不上传音频到任何第三方服务。语音属于比较私密的内容，
-//     这一点是刻意的取舍 —— 换来的是需要用户自己准备 whisper 二进制和模型。
+//   · 全程本地，不上传音频到任何第三方服务。语音属于比较私密的内容，
+//     这一点是刻意的取舍，换来的是需要用户自己准备 whisper 二进制和模型。
 //
-// ── 这不是"核心功能" ──────────────────────────────────────────────────
-// 它需要外部可执行文件 + 模型文件（几百 MB），不是所有人都想装。
-// 所以做成默认关闭的 Skill：装好的人在设置页打开，没装的人完全不受影响。
+// 它不是核心功能：需要外部可执行文件 + 模型文件（几百 MB），不是所有人都想装。
+// 所以做成默认关闭的插件：装好的人在设置页打开，没装的人完全不受影响。
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -30,15 +29,15 @@ let log = () => {};
  * 定位 whisper-cli 可执行文件。
  *
  * 三路，顺序即优先级：
- *   ① 配置里填的完整路径 —— 用户显式指定就该赢过一切自动探测
+ *   ① 配置里填的完整路径，用户显式指定就该赢过一切自动探测
  *   ② PATH 里的常见名字（whisper-cli / whisper）
  *   ③ 常见安装目录（Homebrew / ~/.local/bin / /usr/local/bin）
  *
- * ⚠️ 为什么要第 ③ 路：从 systemd / launchd 启动时进程 PATH 与交互式终端不同，
- *    brew 装的 whisper-cli 在 /opt/homebrew/bin 下，终端里能跑、应用里 ENOENT。
- *    这与 src/ffmpeg-resolve.js 补候选目录是同一个根因。
+ * 为什么要有第 ③ 路：从 systemd / launchd 启动时进程 PATH 与交互式终端不同，
+ * brew 装的 whisper-cli 在 /opt/homebrew/bin 下，终端里能跑、应用里 ENOENT。
+ * 这与 src/ffmpeg-resolve.js 补候选目录是同一个根因。
  *
- * ⚠️ 刻意**不**探测裸的 `main` / `main.exe`：这名字太通用，
+ * 刻意不探测裸的 `main` / `main.exe`：这名字太通用，
  * PATH 里恰好有同名无关程序时会被误选，然后拿错误参数去执行一个不认识的程序。
  */
 const WHISPER_NAMES = ['whisper-cli', 'whisper-cli.exe', 'whisper', 'whisper.exe'];
@@ -67,7 +66,7 @@ function unixBinDirs() {
 }
 
 export async function resolveWhisperPath(configured) {
-  // ① 配置路径：存在**且**能跑才算数。只判存在会把"路径写错到某个同名文件"
+  // ① 配置路径：存在且能跑才算数。只判存在会把"路径写错到某个同名文件"
   //    当成可用，报错推迟到真正识别时才出现，用户很难把两件事联系起来。
   const p = String(configured || '').trim();
   if (p && fs.existsSync(p) && await whisperWorks(p)) return p;
@@ -111,10 +110,10 @@ function writeBase64ToTemp(raw, ext) {
  *   2) file 字段是 base64:// 前缀或长 base64 串
  *   3) file 字段是 http(s) 下载链接，或本地路径
  *
- * ⚠️ 第 3 种的 http(s) 分支刻意**不走 safe-fetch 的公网校验**：
- *    这个 URL 是本机 OneBot 服务（SnowLuma）给的，不是群友可控的输入，
- *    和用户自己填的 baseUrl 同一信任级。如果对它做内网拦截，
- *    反而会把"OneBot 跑在 127.0.0.1"这种最常见的情况挡掉。
+ * 第 3 种的 http(s) 分支刻意不走 safe-fetch 的公网校验：
+ * 这个 URL 是本机 OneBot 服务（SnowLuma）给的，不是群友可控的输入，
+ * 和用户自己填的 baseUrl 同一信任级。如果对它做内网拦截，
+ * 反而会把"OneBot 跑在 127.0.0.1"这种最常见的情况挡掉。
  */
 async function fetchRecordAsWav(record, onebot) {
   const key = String(record?.file || record?.url || '').trim();
@@ -149,10 +148,10 @@ async function fetchRecordAsWav(record, onebot) {
 /**
  * 清理 whisper-cli 输出：去掉时间戳/进度/日志行，得到纯文字。
  *
- * ⚠️ 时间戳行是**剥掉前缀保留正文**，不是整行丢弃。
- * 原实现把 `^\[` 开头的行整行过滤掉 —— 那是假设 `-nt`（no timestamps）一定生效。
+ * 时间戳行是剥掉前缀保留正文，不是整行丢弃。
+ * 原实现把 `^\[` 开头的行整行过滤掉，那是假设 `-nt`（no timestamps）一定生效。
  * 但只要某个 whisper 版本忽略 `-nt`（或走 .txt 分支），输出的每一行都带
- * `[00:00:00.000 --> 00:00:02.000] 正文` 前缀，于是**每一行都被丢掉**，
+ * `[00:00:00.000 --> 00:00:02.000] 正文` 前缀，于是每一行都被丢掉，
  * 识别结果恒为空，表现为"语音永远只有 [语音] 占位"。
  * 剥前缀后两种输出形态都能拿到正文，不再依赖那个假设。
  */
@@ -207,13 +206,13 @@ export async function transcribeRecord(record, { onebot } = {}) {
     if (!text) throw new Error('语音识别结果为空');
     return text;
   } finally {
-    // 临时文件用完即删（wav / txt 都清）——漏删会在长期运行里堆满临时目录
+    // 临时文件用完即删（wav / txt 都清），漏删会在长期运行里堆满临时目录
     try { fs.unlinkSync(wavPath); } catch { /* ignore */ }
     try { fs.unlinkSync(`${outBase}.txt`); } catch { /* ignore */ }
   }
 }
 
-// ── Skill 生命周期 ────────────────────────────────────────────────────────
+// ── 插件生命周期 ──────────────────────────────────────────────────────────
 
 export function setup(api) {
   cfg = api.config;
@@ -236,8 +235,8 @@ export const providers = {
 
 /**
  * 自检：缺 whisper 或缺模型就报"依赖不满足"，设置页会直接显示原因。
- * ⚠️ 必须同步 —— 可用性判定走的是同步调用链，返回 Promise 会被当成"可用"。
- * 探测要 spawn 进程（异步），所以用"首次乐观放行 + 后台探测 + 缓存结果"。
+ * 必须同步：可用性判定走的是同步调用链，返回 Promise 会被当成"可用"。
+ * 探测要 spawn 进程（异步），所以用"首次不乐观放行 + 后台探测 + 缓存结果"。
  */
 let probeState = null;   // null = 未探测；'' = 不可用；路径 = 可用
 let probing = false;
@@ -263,22 +262,22 @@ export function available() {
   if (probeState !== null && (probedWith !== JSON.stringify(cfg()) || (!probeState && Date.now() - probeAt > PROBE_RETRY_MS))) {
     probeState = null;
   }
-  // ⚠️ 2026-10-21：探测中必须按**不可用**返回（与 video-frames:104 同一条铁律）。
+  // 探测中必须按不可用返回（与 video-frames 同一条铁律）。
   //
-  // 旧写法在这里 `return { ok: true }`（注释写的"首次乐观放行"），配合上方
+  // 旧写法在这里 return { ok: true }（注释写的"首次乐观放行"），配合上方
   // 「失败结果超 60 秒置回 null 重探」就构成闭环振荡：
   //   探测失败(不可用) → 60s 后 probeState=null → 乐观放行(可用) → 探测又失败 → …
-  // 而「语音消息」提示词片段是**随 active 状态增删**的（skills/manager.js 的
+  // 而「语音消息」提示词片段是随 active 状态增删的（skills/manager.js 的
   // getPromptSections 只收 isActive 的模块，available() 返回 ok:false 即 inactive），
-  // 于是系统提示每 60 秒在两个字节版本之间来回跳 —— 前缀缓存从系统提示第
+  // 于是系统提示每 60 秒在两个字节版本之间来回跳，前缀缓存从系统提示第
   // ~6552 字符处断开，其后全部按全价重算。
   //
-  // 实测（2026-10-21 本机未装 whisper）：cache-guard drift 里「语音消息」
-  // 一天增删 78 次；漂移后第一通调用 miss 中位 713 tok、p90 5855（稳态 387），
+  // 实测（本机未装 whisper）：cache-guard drift 里「语音消息」一天增删 78 次；
+  // 漂移后第一通调用 miss 中位 713 tok、p90 5855（稳态 387），
   // 归因额外 miss ≈ 15.3 万 tok = 全天 miss 的 28.3%。
   //
   // 代价：探测完成前（毫秒级，后台 spawn）短暂报"不可用"，装好 whisper
-  // 与模型后下一轮自动恢复 —— 用一次毫秒级不可用，换掉每分钟一次的全价重算。
+  // 与模型后下一轮自动恢复，用一次毫秒级不可用换掉每分钟一次的全价重算。
   if (probeState === null) {
     probeInBackground();
     return { ok: false, reason: '正在探测语音识别依赖…' };

@@ -1,16 +1,13 @@
-// 成本护栏：本地累计 prompt token，接近上限时**分级**砍掉可选注入。
+// 成本护栏：本地累计 prompt token，接近上限时分级砍掉可选注入。
 //
-// ── 相对内置 lib/cost-guard.js 的实质改动 ────────────────────────────────
-// 内置版有两个问题（其中第二个它自己的注释里已经承认了）：
-//   1. shouldReduceOptionalInjects(cfg) 只判**日级**：会话级的 chatPromptMax
-//      虽然会写进统计文件，但判断时根本没读 —— 也就是说设置页那个
-//      「单会话 prompt 上限」调了等于没调。本插件把 chatKey 一路传下来，
-//      日级与会话级**两个都判**。
-//   2. 只有"砍 / 不砍"两档，且砍的是语义卡与跨群旁听，跨轮与待办照旧 ——
-//      真到超限那天，护栏其实护不住多少。本插件分三档（见 LEVELS）。
+// 相对内置 cost-guard 的实质改动：
+//   1. 内置版 shouldReduceOptionalInjects 只判日级：会话级的 chatPromptMax 虽然
+//      写进统计文件，判断时根本没读，设置页那个「单会话 prompt 上限」调了等于没调。
+//      本插件把 chatKey 一路传下来，日级与会话级两个都判。
+//   2. 内置版只有"砍 / 不砍"两档，且砍的是语义卡与跨群旁听，跨轮与待办照旧，
+//      真到超限那天护栏其实护不住多少。本插件分三档（见 LEVELS）。
 //
-// ── 为什么放在 memory-v3 而不是 DATA_DIR 根 ─────────────────────────────
-// 本插件所有状态都收在自己的数据根里，卸载 = 删一个目录。
+// 状态放在本插件的数据根而不是 DATA_DIR 根：卸载 = 删一个目录。
 // 内置版把 cost-guard.json / pending-todos.json / semantic-cards/ 散在 DATA_DIR 根，
 // 卸载后留一地文件。
 import path from 'node:path';
@@ -18,9 +15,9 @@ import { ensureDir, readJson, writeJson, dayKeyOf } from './util.js';
 
 /**
  * 三档的含义（level 越大砍得越狠）：
- *   0  正常      —— 全部注入
- *   1  接近上限  —— 关掉「语义卡 + 跨群旁听」；自动回忆预算减半
- *   2  已超上限  —— 再关掉「跨轮 + 自动回忆」，只留待办（短、且办不完会真的误事）
+ *   0  正常      全部注入
+ *   1  接近上限  关掉「语义卡 + 跨群旁听」；自动回忆预算减半
+ *   2  已超上限  再关掉「跨轮 + 自动回忆」，只留待办（短、且办不完会真的误事）
  */
 const LEVELS = {
   0: { cards: true, peek: true, crossTurn: true, autoRecall: true, recallBudgetScale: 1 },
@@ -33,17 +30,16 @@ const NEAR_RATIO = 0.85;
 
 /**
  * 单文件里最多跟踪多少个会话。
- * 护栏只需要知道"谁在烧钱"，不需要给每个会话留一行 ——
+ * 护栏只需要知道"谁在烧钱"，不需要给每个会话留一行，
  * 不设上限的话，长期运行会攒出成千上万个只增不减的条目。
  */
 const MAX_TRACKED_CHATS = 200;
 
 /**
  * 落盘节流（毫秒）。
- * ⚠️ C7 修复（2026-10-14）：原来 after-response **每轮**都整文件写一遍
- *    （含最多 200 个会话条目）。内存里的 this.data 才是 shouldReduce 的
- *    实时真相源，磁盘文件只在崩溃恢复时用 —— 每轮全量写既没必要也拖慢主流程。
- *    20 秒节流的代价：崩溃时最多丢 20 秒的计数（护栏略微松弛），可接受。
+ * after-response 每轮整文件写一遍（含最多 200 个会话条目）没必要也拖慢主流程：
+ * 内存里的 this.data 才是 shouldReduce 的实时真相源，磁盘文件只在崩溃恢复时用。
+ * 20 秒节流的代价是崩溃时最多丢 20 秒的计数（护栏略微松弛），可接受。
  */
 const WRITE_INTERVAL_MS = 20000;
 
@@ -106,9 +102,9 @@ export class Budget {
 
   /**
    * 记一次运行的本轮增量用量。
-   * ⚠️ 必须传**本轮增量**：宿主 after-response 每轮都触发，而 ctx.session.usage
-   *    是运行级累计值 —— 内置版踩过这个坑（真实 791K 被记成 1285K，×1.62）。
-   *    所以这里只接受调用方算好的差值。
+   * 必须传本轮增量：宿主 after-response 每轮都触发，而 ctx.session.usage
+   * 是运行级累计值，直接拿来记会放大（内置版踩过，真实 791K 被记成 1285K）。
+   * 所以这里只接受调用方算好的差值。
    */
   report(chatKey, { promptTokens = 0, cachedTokens = 0 } = {}) {
     const { on } = this.#limits();

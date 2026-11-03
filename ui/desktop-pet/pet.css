@@ -12,8 +12,8 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 .placeholder p { font-size: clamp(10px, 3.5vw, 13px); line-height: 1.75; margin: 8px 0; color: #385e7c; }
 .placeholder-tag { border-radius: 99px; padding: 4px 10px; font-size: 10px; color: #3c6683; background: #eaf8ffe8; }
 .placeholder.reacting .orbit { animation: bounce .45s ease; }
-/* Keep readable 13px text. JS measures the whole reply and requests enough
-   native space instead of putting a scrollbar inside the bubble. */
+/* 保持 13px 可读字号：JS 量整段回复后向外层申请足够的原生空间，
+   而不是在气泡里塞滚动条。 */
 .speech { position: absolute; z-index: 5; left: 0; top: 6px; width: max-content; min-width: 60px; max-width: 137px; height: auto; max-height: none; padding: 10px 26px 10px 16px; border: 0; border-radius: 20px; background: rgba(255,255,255,.92); color: #1a2a3a; box-shadow: 0 2px 8px rgba(0,0,0,.1); font: 13px/1.6 "Microsoft YaHei", "Segoe UI", sans-serif; text-align: center; white-space: normal; word-break: break-word; overflow-wrap: break-word; cursor: auto; opacity: 0; transform: translateX(calc(-50% + 50vw)); transition: opacity .3s; }
 .speech.show { opacity: 1; }
 .speech.is-closing { pointer-events: none; }
@@ -25,8 +25,8 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 #observe { position: absolute; z-index: 6; bottom: 12px; left: 50%; transform: translateX(-50%); white-space: nowrap; color: #365e7e; background: #f4fbffed; border: 1px solid #bddcec; padding: 6px 14px; border-radius: 99px; font: inherit; font-size: clamp(10px, 3.5vw, 12px); cursor: pointer; opacity: .22; transition: opacity .15s; }
 #pet:hover #observe, #observe:focus-visible, #observe:disabled { opacity: 1; }
 #observe:disabled { cursor: progress; }
-/* One reference box scales as a whole: text wraps identically at every pet
-   size, including when the native window is fitted to a small display. */
+/* 整块按一个基准盒等比缩放：文字在任何桌宠尺寸下换行都一致，
+   窗口被适配到小屏幕时也一样。 */
 .status { position: absolute; bottom: 47px; left: 50%; width: 162px; padding: 5px 8px; border-radius: 9px; background: #f2f9ffeb; text-align: center; color: #45667e; font-size: 11px; transform: translateX(-50%) scale(var(--status-scale, 1)); transform-origin: center bottom; pointer-events: none; }
 [hidden] { display: none !important; }
 body.paused .orbit { animation-play-state: paused; }

@@ -1,28 +1,23 @@
-// 消息来源本地路径的白名单校验（2026-10-16，外部审查 #15）
+// 消息来源本地路径的白名单校验。
 //
-// ── 为什么需要 ──────────────────────────────────────────────────────────
-// OneBot 消息段里的 `image.file` / `video.path` 是**协议端转述**的字段，
-// 消费侧原来直接 `fs.readFileSync(...)`：
-//   · src/tools.js        看图工具"无缓存且无 url"时读 m.file（还专门支持 file:// 解码）
-//   · src/video-reader.js #localize 路径 0 直接采用 media.path
-// 那等于"消息里写什么路径就读什么文件"——群里一条构造过的消息段就能让机器人
-// 读本地任意文件，再经 base64 进模型上下文、由发图能力外发。属纵深防御缺口
-// （利用需协议端把攻击者可控内容塞进该字段，常规收图时它是协议端自己的缓存路径）。
+// OneBot 消息段里的 `image.file` / `video.path` 是协议端转述的字段，消费侧
+// 原本直接 `fs.readFileSync(...)`（src/tools.js 的看图工具、src/video-reader.js
+// 的 #localize），等于"消息里写什么路径就读什么文件"：群里一条构造过的消息段
+// 就能让机器人读本地任意文件，再经 base64 进模型上下文、由发图能力外发。
+// 属纵深防御缺口（利用需协议端把攻击者可控内容塞进该字段）。
 //
-// ── 口径（与项目里两处现成范式一致）────────────────────────────────────
-//   ① app.js 的 plugin-panel 五道闸（path.relative + realpath 二次确认）
-//   ② plugins/sticker/lib/manager.js 的 localStickerPath（root 归属校验）
-// 具体到本模块是四道：
-//   ① 只认**我们自己写下的缓存目录**（image-cache / video-cache）—— 消息里的
+// 口径与项目里两处现成范式一致（app.js 的 plugin-panel 五道闸、
+// plugins/sticker/lib/manager.js 的 localStickerPath），具体四道：
+//   ① 只认我们自己写下的缓存目录（image-cache / video-cache）。消息里的
 //      路径指向别处一律拒绝，调用方按"取不到"降级（url 兜底 / 元信息降级）；
 //   ② path.relative 判归属：拒 `..` 逃逸、拒绝对路径改写、拒根目录自身；
 //   ③ realpathSync 二次确认：挡符号链接 / 目录联接指向目录外（relative 挡不住）；
-//   ④ 文件名必须匹配我们自己的命名规则 —— 防止"同目录内的任意文件"被当参数读。
+//   ④ 文件名必须匹配我们自己的命名规则，防止"同目录内的任意文件"被当参数读。
 //
-// ⚠️ 取舍（明说）：严格口径下，指向**协议端自己缓存目录**的 file/path 不再被读取。
+// ⚠️ 取舍（明说）：严格口径下，指向协议端自己缓存目录的 file/path 不再被读取。
 //    实践中该分支本就很少成功：file 常是裸文件名（readFileSync 按 cwd 解析 → ENOENT），
 //    且我们自己写下的缓存由 lookupCachedImage 优先命中、根本走不到这个分支。
-//    换来的是"消息不能再指定读哪个文件"。若将来确需放行协议缓存，加一个**可配置**
+//    换来的是"消息不能再指定读哪个文件"。若将来确需放行协议缓存，加一个可配置
 //    的根目录白名单，不要退回"任意路径"。
 
 import fs from 'node:fs';
@@ -38,7 +33,7 @@ const ROOTS = {
 /**
  * 把协议端可能给的各种形态规范成绝对路径：
  *   `file:///C:/a/b.jpg` / `file://host/C:/a/b.jpg` / `C:/a/b.jpg` / `C:\a\b.jpg`
- * 裸文件名（无盘符/无根）返回 null —— 它会被 readFileSync 按进程 cwd 解析，
+ * 裸文件名（无盘符/无根）返回 null，它会被 readFileSync 按进程 cwd 解析，
  * 那是另一条不可控的面，直接拒。
  */
 function toAbsolute(raw) {

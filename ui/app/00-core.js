@@ -1,14 +1,14 @@
 // QQ Agent 控制台前端：会话式（每次运行 = 一个会话）。
-// ── 本文件是 12 段拆分（M9）中的第 1 段：基础层（工具函数 / state / 主题 / 峰谷 / 滑条）。
-//    拆分原则：所有段都是**普通脚本**（无 import/export），按 index.html 里的 defer 顺序
-//    执行；跨段共享的顶层 let/const 是全局词法绑定，语义与原单文件完全一致。
+// ── 基础层（工具函数 / state / 主题 / 峰谷 / 滑条）。
+//    所有段都是普通脚本（无 import/export），按 index.html 里的 defer 顺序执行；
+//    跨段共享的顶层 let/const 是全局词法绑定。
 //    vendor 模块（tier-slider / price-match）由 /app.js（ESM 桥）挂到 window 上。
 'use strict';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
-// ── 活性心跳（R69）─────────────────────────────────────────────────────────
+// ── 活性心跳 ──────────────────────────────────────────────────────────────
 // 主进程的看门狗（electron/main.js 的 probePage）每 5 秒读一次 window.__qaBeat：
 // 只要它在递增，就说明渲染主线程还在正常跑。
 //
@@ -16,19 +16,19 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 // 这类故障 render-process-gone 不会触发、appReady 之类的启动标志也恒为真，
 // 只有"心跳还在不在动"能把它和正常工作区分开。
 //
-// ⚠️ 窗口隐藏时 Chromium 会节流甚至暂停定时器，心跳会停 —— 这是正常的，
+// ⚠️ 窗口隐藏时 Chromium 会节流甚至暂停定时器，心跳会停，这是正常的，
 //    所以主进程只在窗口可见时才拿它做判定（缩到托盘不会误判成僵死）。
 window.__qaBeat = 0;
 setInterval(() => { window.__qaBeat = (window.__qaBeat || 0) + 1; }, 1000);
 
-// ── 后台降载（r93）────────────────────────────────────────────────────────
-// 窗口隐藏/被遮挡时给 <html> 挂 .qa-bg，style.css 末尾那一段据此把**装饰性**
-// infinite 动画（骨架 shimmer、各类 spinner、? 主题的 VHS 扫描线等，共 19 处）
-// 统一改成 animation-play-state: paused。
+// ── 后台降载 ──────────────────────────────────────────────────────────────
+// 窗口隐藏/被遮挡时给 <html> 挂 .qa-bg，style.css 末尾那一段据此把装饰性的
+// infinite 动画（骨架 shimmer、各类 spinner、? 主题的 VHS 扫描线等）统一改成
+// animation-play-state: paused。
 //
-// 为什么需要：R76 为了让"被遮挡时不误判僵死"关掉了 backgroundThrottling，
-// 代价是页面在后台照样全速跑动画 —— 笔记本上实打实耗电，集显机上还会与
-// 合成器抢资源、表现为偶发掉帧。可见时行为逐帧不变（class 只在隐藏时挂）。
+// 为什么需要：为了"被遮挡时不误判僵死"，页面关掉了 backgroundThrottling，
+// 代价是后台照样全速跑动画，笔记本上实耗电，集显机上还会与合成器抢资源、
+// 表现为偶发掉帧。可见时行为逐帧不变（class 只在隐藏时挂）。
 document.addEventListener('visibilitychange', () => {
   document.documentElement.classList.toggle('qa-bg', document.hidden === true);
 });
@@ -43,8 +43,8 @@ const CHAT_MSG_MORE = 200;    // 存档页：每次滚动追加
 // 内置作息模板（一键填充时段+档位）+ 一份用户自定义（custom）。
 // sliderPos 口径：0~100（10=仅艾特，100=全响应），与峰谷设置页输入框一致。
 const PEAK_PRESETS = {
-  // 2026-10-23：预设标签补「计费」二字 —— 这个功能的动机是**省钱**（部分厂商高峰时段
-  // token 更贵），不是作息习惯。原先只写"高峰"，新人会以为是"群聊高峰时间"。
+  // 预设标签带「计费」二字：这个功能的动机是省钱（部分厂商高峰时段
+  // token 更贵），不是作息习惯。只写"高峰"会让人以为是"群聊高峰时间"。
   workbuddy: { label: 'workbuddy（早 8~晚 11 计费高峰）',
     peak: { start: '08:00', end: '23:00', sliderPos: 10 }, valley: { start: '23:00', end: '08:00', sliderPos: 100 } },
   deepseek: { label: 'deepseek（早 9~晚 6 计费高峰）',
@@ -77,7 +77,7 @@ function applyPeakPreset(key) {
   setVal('#cfg-peak-end', p.peak.end);
   // 档位点走自定义竖向滑条控制器（activeVSlider 在活跃设置弹窗打开时挂上）。
   // 高峰珠（档位低）与低谷珠（档位高）各就各位；applyValues 会触发一次
-  // onChange 把值写进弹窗草稿 —— 刻度/区间带/说明文字随之刷新。
+  // onChange 把值写进弹窗草稿，刻度/区间带/说明文字随之刷新。
   const toSliderPos = (raw, fallback) => {
     if (raw === null || raw === undefined || raw === '') return fallback;
     const n = Number(raw);
@@ -92,10 +92,10 @@ function applyPeakPreset(key) {
   if (hint) hint.textContent = key === 'custom' ? '已套用「自定义」。可继续微调，保存后生效。' : `已套用「${PEAK_PRESETS[key].label}」。可继续微调，保存后生效。`;
 }
 
-/* ═══ 自定义档位滑条（2026-09-19 竖向 / 2026-10-09 r34 改横向）═══
-   从零实现的指针驱动滑条，**不用任何 <input type=range>** —— 原生 range 无法
-   在同一条轨道上放两颗可独立抓取的珠子（两个 range 叠加只能点到最上面那个，
-   这是当初实测踩过的坑）。控制器协议：
+/* ═══ 自定义档位滑条（横向）═══
+   从零实现的指针驱动滑条，不用任何 <input type=range>：原生 range 无法
+   在同一条轨道上放两颗可独立抓取的珠子（两个 range 叠加只能点到最上面那个）。
+   控制器协议：
      createVSlider({ mount, dual, low, high, onChange, onInput })
        mount    挂载点元素
        dual     true = 双珠（峰谷），false = 单珠
@@ -124,10 +124,8 @@ function createVSlider({ mount, dual = false, low = 100, high = 10, onChange = n
   el.setAttribute('tabindex', '0');
 
   // DOM：轨道（渐变）+ 可选区间带 + 两颗珠（低谷彩珠 / 高峰灰珠）
-  // ⚠️ r34 起改**横向**（照原型 v2 第 1046-1068 行的 .tier-slider + .tier-scale）：
-  //    此前是竖向（bottom 锚点、轨道 300px），但改造层第 6 节把 `.vslider2` 和
-  //    `.tier-slider`（横向 range）写在同一条规则里（height:6px / 背景 card-hi），
-  //    竖向容器被一起压成 6px 横条 —— 轨道 12×6、右侧刻度 92×300，两者差 294px。
+  // ⚠️ 必须是横向：style.css 把 `.vslider2` 和横向的 `.tier-slider` 写在同一条
+  //    规则里（height:6px / 背景 card-hi），竖向容器会被一起压成 6px 横条。
   el.innerHTML = `
     <div class="vs2-track"></div>
     <div class="vs2-band"></div>
@@ -147,9 +145,8 @@ function createVSlider({ mount, dual = false, low = 100, high = 10, onChange = n
   let disabled = false;
   let dragging = null;         // 'low' | 'high' | null
   let destroyed = false;
-  // 2026-10-23：珠心不再允许贴到 0% / 100% —— 那会让 18px 的视觉珠有一半跑到
-  // 容器外（截图：拖到最左/最右时珠子被裁成半圆）。把珠心限制在 [R, 100%-R]，
-  // 视觉上珠子边缘正好与轨道端点齐平，hover 放大也不会溢出。
+  // 珠心限制在 [R, 100%-R]：贴到 0% / 100% 会让 18px 的视觉珠有一半跑到容器外
+  // （拖到最左/最右时珠子被裁成半圆）。限制后珠子边缘正好与轨道端点齐平。
   // R 取 12 = CSS 里 .vs2-thumb 的 margin-left:-12px（24px 热区的一半），
   // 这样连透明的热区也完整落在容器内。
   const THUMB_R = 12;
@@ -183,7 +180,7 @@ function createVSlider({ mount, dual = false, low = 100, high = 10, onChange = n
   function posFromEvent(e) {
     const rect = el.getBoundingClientRect();
     // left=0 在左（1 档端），100 在右（4 档端）。
-    // 2026-10-23：与 pctLeft 互逆 —— 珠子中心只在 [R, width-R] 之间移动，
+    // 与 pctLeft 互逆：珠子中心只在 [R, width-R] 之间移动，
     // 指针映射也要按这段可用宽度算，否则拖到边缘时珠子与指针会差出 R 像素。
     const x = (e.touches?.[0] ?? e).clientX;
     const usable = Math.max(1, rect.width - 2 * THUMB_R);
@@ -220,7 +217,7 @@ function createVSlider({ mount, dual = false, low = 100, high = 10, onChange = n
     } else {
       lo = pos;
       // 约束只在双珠时有意义：单珠模式下隐藏的高峰珠是"幽灵下界"，
-      // 会把低谷珠锁死在初始位置以下（表现为"全局档位拖不动"，2026-09-19 修）。
+      // 会把低谷珠锁死在初始位置以下（表现为"全局档位拖不动"）。
       if (isDual && lo < hi) lo = hi;
       if (!isDual) hi = Math.min(hi, lo);   // 维持 lo >= hi 不变量（切双珠时干净）
     }
@@ -252,8 +249,8 @@ function createVSlider({ mount, dual = false, low = 100, high = 10, onChange = n
   lowEl.addEventListener('keydown', (e) => keyFor(lowEl, e));
   highEl.addEventListener('keydown', (e) => keyFor(highEl, e));
 
-  // 2026-10-23：构造完先画一次。此前初始位置要等调用方 setValues / moveTo 才生效，
-  // 任何"创建后不立刻赋值"的入口都会看到两颗珠都停在最左端（实测 rect 落在 0%）。
+  // 构造完先画一次。不画的话，任何"创建后不立刻赋值"的入口都会看到
+  // 两颗珠都停在最左端。
   render();
   return {
     get values() { return { low: lo, high: hi }; },
@@ -299,7 +296,7 @@ const state = {
   skills: [],            // 扩展条目状态列表（技能+插件，后端判定，含 kind 与不可用原因）
   skillsReady: false,    // 扩展列表是否已从后端拉回（区分"加载中"与"真的一件都没装"）
   skillsSummary: {},     // 后端全量摘要 { total, active, disabled, broken, capabilities }
-                         // ⚠️ 两页的"生效 N/M"不读它，而是按本页条目现算 ——
+                         // ⚠️ 两页的"生效 N/M"不读它，而是按本页条目现算，
                          // 否则技能页会把插件的数量也算进去，两个页签显示同一组数字。
   uninstalledSkills: [], // 配置里有 skills.<id> 段、但磁盘上已无此条目（删目录后的配置残留）
   status: null,
@@ -323,24 +320,18 @@ const state = {
 };
 
 // ── 工具函数 ──
-// 控制台标识头：证明请求来自本控制台页面，而非外部网页冒用浏览器。
-// 带自定义头的请求必须过 CORS 预检，天然挡住跨站脚本/表单的静默读取。
 /** 数字加千分位（token 计数用）。表格里的精确数值用它，不做单位压缩。 */
 const fmtTok = (n) => (Number(n) || 0).toLocaleString('zh-CN');
 
 /**
  * token 计数的紧凑格式（图表气泡、坐标轴、顶部概览条共用）。
  *
- * ⚠️ 这里曾经是**三套**互不相同的换算，是用量页最刺眼的一类 bug：
- *   ① 本函数旧版（01-boot.js）：阈值 10000，出 1687 万 token 会显示
- *      「16871.7k tok」——k 后面再套 k，看不出量级；
- *   ② fmtMetricShort（04-archive-usage.js）：同一个量显示成「16872k」，
- *      而且用 Math.round(n/1000) 丢精度（16871 → 17k）；
- *   ③ fmtTok：完全不加单位，与上面两个在同一页面上并存。
- * 结果是同一个数字在概览条 / 卡片 / 坐标轴 / 表格里长得都不一样。
+ * ⚠️ 不要另造换算：曾经有三套互不相同的实现（01-boot.js 的 k 套 k、
+ * 04-archive-usage.js 的丢精度取整、fmtTok 的不加单位），同一个数字在
+ * 概览条 / 卡片 / 坐标轴 / 表格里长得都不一样。
  *
- * 现在统一到 K / M / G 三档，阈值 1000（不是 10000 —— 否则 9999 显示
- * 「9999」而 10000 突然跳成「10.0k」，视觉上像数据出错）：
+ * 统一到 K / M / G 三档，阈值 1000 而不是 10000：否则 9999 显示「9999」
+ * 而 10000 突然跳成「10.0k」，视觉上像数据出错。
  *   999  → 999        1000 → 1.0k       16_871_668 → 16.9M
  */
 function fmtTokShort(n) {
@@ -373,7 +364,7 @@ let usageRange = '7';
 /*
  * 工具的中文名与分类，用于"调用明细"弹窗。
  *
- * 用 emoji 当图标只是为了扫一眼好认 —— 这类"没什么实际用处但有趣"的细节，
+ * 用 emoji 当图标只是为了扫一眼好认，这类"没什么实际用处但有趣"的细节，
  * 是特意保留的：一张纯数字的表格很无聊，分类 + 图标能让人真的去看一眼。
  */
 const TOOL_META = {
@@ -458,6 +449,8 @@ const USAGE_METRICS = [
   ['tokens', 'Token']
 ];
 
+// 控制台标识头：证明请求来自本控制台页面，而非外部网页冒用浏览器。
+// 带自定义头的请求必须过 CORS 预检，天然挡住跨站脚本/表单的静默读取。
 const CONSOLE_MARKER = 'qq-agent-console';
 // Browser/headless users may open the console with ?token=<server.token>.
 // Cache it for this tab, then remove it from the address bar; Electron replaces the marker
@@ -509,8 +502,8 @@ function withToken(url) {
    ══════════════════════════════════════════════════════════════
    四种取值：'dark' | 'light' | 'system'（跟随系统偏好）| '?'（整活主题）。
    持久化两层：
-     1. localStorage —— 立即生效，避免每次启动都等接口
-     2. 后端 config.ui.theme —— 跨设备/重装后保留（尽力而为，失败不阻塞）
+     1. localStorage，立即生效，避免每次启动都等接口
+     2. 后端 config.ui.theme，跨设备/重装后保留（尽力而为，失败不阻塞）
    首屏防闪由 index.html 的内联脚本负责（读 localStorage 直接设 data-theme）。
 */
 const THEME_ICON = { dark: '🌙', light: '☀️', system: '🖥️', '?': '❓' };
@@ -544,9 +537,9 @@ function applyTheme(pref) {
 }
 
 /* ══════════════════════════════════════════════════════════════
-   外观个性化（R40）：强调色 / 界面底色 / 底色不透明度 / 背景图 / 整窗不透明度
+   外观个性化：强调色 / 界面底色 / 底色不透明度 / 背景图 / 整窗不透明度
    ══════════════════════════════════════════════════════════════
-   全部只改 CSS 变量与一个静态背景层，不重建 DOM、不加动画 ——
+   全部只改 CSS 变量与一个静态背景层，不重建 DOM、不加动画，
    本机是软件渲染，个性化不能变成性能负担。
    空值一律"跟随主题"：不覆盖对应变量，这样换主题仍然协调。 */
 
@@ -565,9 +558,9 @@ const BG_PRESETS = [
   ['#0e1013', '默认墨'], ['#151515', '纯黑'], ['#101a24', '深夜蓝'],
   ['#1b1420', '暗紫'], ['#0f1a14', '墨绿'], ['#241a14', '暖棕']
 ];
-/* 玻璃色调（2026-10-23）：半透明面板/卡片的底色往这个色相上拉。
-   只在「全界面透明度」< 100 时看得出来 —— 不透明时卡片是实色，染色等于换了个卡片色。
-   ⚠️ 这里给的是**色相**，不是最终卡片色：实际会按比例混进主题原色
+/* 玻璃色调：半透明面板/卡片的底色往这个色相上拉。
+   只在「全界面透明度」< 100 时看得出来，不透明时卡片是实色，染色等于换了个卡片色。
+   ⚠️ 这里给的是色相，不是最终卡片色：实际会按比例混进主题原色
    （暗色主题仍保持暗、亮色主题仍保持亮），见 20-glass.js 的 TINT_WEIGHT。 */
 const GLASS_TINT_PRESETS = [
   ['#3d6fd8', '深海蓝'], ['#6d5ce0', '紫雾'], ['#12897f', '青瓷'],
@@ -581,17 +574,16 @@ function clampInt(v, min, max, fallback) {
   return Math.min(max, Math.max(min, Math.round(n)));
 }
 
-// 上一次真正推给主进程的整窗不透明度（见 applyUiCustom 里的 R46 注释）。
+// 上一次真正推给主进程的整窗不透明度（见 applyUiCustom 里的注释）。
 // 初值 100 = "主窗口生来就是不透明的"，所以配置为 100% 时永远不会触发那次调用。
 // 窗口被看门狗重建时页面会整体重载，这个变量跟着归位，不会错记成"已经调过"。
-// ⚠️（2026-10-24 修）这行曾被合并 0.4.9 的补丁吃掉，而 applyUiCustom 里仍在读写它。
-//    读未声明变量直接抛 → 被外面那个"桥不可用"的 catch 吞掉 → 整窗不透明度
-//    这个功能从此永远不生效，而且看不出任何错误。别删。
+// ⚠️ 别删：applyUiCustom 读写它，少声明一行会让整窗不透明度整个失效，
+//    而且异常会被外面"桥不可用"的 catch 吞掉，看不出任何错误。
 let lastWinOpacity = 100;
 
 /**
  * 把 config.ui 里的个性化项应用到界面上。
- * 任何一项留空/非法 = 用主题默认值（把对应的内联样式删掉，而不是写成空串 ——
+ * 任何一项留空/非法 = 用主题默认值（把对应的内联样式删掉，而不是写成空串，
  * 空串会让 var() 回落到"无效"，同样整条声明失效）。
  * @param {object} ui config.ui（可为空对象）
  * @param {{live?: boolean}} [opts]
@@ -622,16 +614,14 @@ function applyUiCustom(ui, opts) {
   const bgEl = document.getElementById('app-bg');
   if (bgEl) {
     const name = String(u.bgImage || '').trim();
-    /* ⚠️⚠️ 2026-10-23 修「刚开始打开是一张特别糊的自己的桌面壁纸」：
-       内置主题跟随（src/wallpaper/theme.js）抓的是小红车工坊壁纸的 **preview 缩略图**（当前这张
-       bg-we-3d6c4ba604d7.gif 实测 192×192 / 50 帧），用 cover 铺满 1000+ 宽的窗口
-       等于放大 6 倍多 —— 糊成一片色块，正是用户描述的那张"特别糊的桌面壁纸"。
-       它本来只是「壁纸套件没接管时的降级兜底」（见该插件头部注释"不抢用户的图"），
+    /* ⚠️⚠️ 内置主题跟随（src/wallpaper/theme.js）抓的是壁纸的 preview 缩略图
+       （实测 192×192 / 50 帧），用 cover 铺满 1000+ 宽的窗口等于放大 6 倍多，
+       糊成一片色块。它本来只是「壁纸套件没接管时的降级兜底」，
        所以：用户在「壁纸」页选过真壁纸时（localStorage 的 wp-console-bg 里有 id，
-       真媒体由 14-wallpaper.js 的 #wp-bg-video / #wp-bg-img 负责），这里就绝不能铺。
+       真媒体由 14-wallpaper.js 的 #wp-bg-video / #wp-bg-img 负责），这里绝不能铺。
        否则启动首帧先闪那张糊缩略图，等 4K 视频解出首帧才被盖住，观感就是"打开时糊一下"。
        用户自己上传的图（文件名不带 bg-we-）不受影响，照旧铺满。
-       注意这条判断必须留在首帧绘制前的 applyUiCustom 里 —— 只在 wp 那边挂
+       这条判断必须留在首帧绘制前的 applyUiCustom 里：只在 wp 那边挂
        html[data-wp='on'] 再 display:none 是来不及的，那时糊图已经画上屏了。 */
     const autoThumb = name.startsWith('bg-we-');
     const wpOwnsBg = (() => {
@@ -660,10 +650,10 @@ function applyUiCustom(ui, opts) {
     }
     /* 小图柔化（补上插件的 bgSoften 契约）：插件量过预览图宽度，<720px 时写
        bgSoften（像素半径），本意是"交给前端一次性高斯模糊，做一张柔和的氛围底，
-       比硬拉伸体面得多"（原文见 src/wallpaper/theme.js 头部的
-       「分辨率说明」）。但改版后前端从未读过这个字段（全局 0 处引用），
-       于是缩略图只能被 cover 硬拉伸成马赛克。这里补上 —— 交给 CSS 做，
-       filter 挂在静态层上只栅格化一次，不是 backdrop-filter 那种逐帧整屏模糊。 */
+       比硬拉伸体面得多"（原文见 src/wallpaper/theme.js 头部的「分辨率说明」）。
+       前端此前从未读过这个字段，缩略图只能被 cover 硬拉伸成马赛克。
+       这里交给 CSS 做：filter 挂在静态层上只栅格化一次，
+       不是 backdrop-filter 那种逐帧整屏模糊。 */
     const soften = clampInt(u.bgSoften, 0, 60, 0);
     if (useBg && soften > 0) {
       bgEl.style.setProperty('--app-bg-soften', `${soften}px`);
@@ -675,20 +665,16 @@ function applyUiCustom(ui, opts) {
   }
 
   // 整窗不透明度：只有 Electron 桌面端有这座桥（浏览器里打开没有 qqaDesktop）
-  // ⚠️（2026-10-10 r86 修 P1）live（拖动滑条）阶段**跳过**这次 IPC：
-  //    setOpacity 是跨进程调用，挂在滑条的 `input` 上会让拖动期间的每一帧都
-  //    打一次（60fps → 60 次/秒），既浪费又可能拖慢主进程。
-  //    CSS 变量部分照常更新（用户立刻看到颜色变化），真正的窗口透明度等到
-  //    松手（change 事件）那一次再落 —— 用户感知不到差别。
-  // ⚠️（2026-10-23，R46 真凶）**100% 时一次都不要打**，值没变也别打。
-  //    Electron 在 Windows 上的 SetOpacity（native_window_views.cc）会无条件
-  //    给窗口加 WS_EX_LAYERED 并调 SetLayeredWindowAttributes(LWA_ALPHA)，
-  //    而且**没有**"回到 1.0 就摘掉这个样式"的分支。LWA_ALPHA 与真透明窗口
-  //    用的逐像素 alpha 是互斥的两种分层模式 —— 一旦调用，那个窗口就只剩
-  //    第一帧、之后永不重绘。
-  //    这段代码启动时恒被调用一次（11-init.js → applyUiCustom），即使配置是
-  //    100% 也照调 —— 于是"真透明窗口"必挂。R46 记录的 8/10 轮冻结、
-  //    "GPU 开关 / 禁 DComp 全无效"，根源就在这里，不是系统坏了。
+  // ⚠️ live（拖动滑条）阶段跳过这次 IPC：setOpacity 是跨进程调用，挂在滑条的
+  //    `input` 上会让拖动期间每一帧都打一次（60fps → 60 次/秒），既浪费又可能
+  //    拖慢主进程。CSS 变量照常更新（用户立刻看到颜色变化），真正的窗口透明度
+  //    等松手（change 事件）那一次再落。
+  // ⚠️ 100% 时一次都不要打，值没变也别打。Electron 在 Windows 上的 SetOpacity
+  //    （native_window_views.cc）会无条件给窗口加 WS_EX_LAYERED 并调
+  //    SetLayeredWindowAttributes(LWA_ALPHA)，而且没有"回到 1.0 就摘掉这个样式"
+  //    的分支。LWA_ALPHA 与真透明窗口用的逐像素 alpha 是互斥的两种分层模式，
+  //    一旦调用，那个窗口就只剩第一帧、之后永不重绘。这段代码启动时恒被调用
+  //    一次（11-init.js → applyUiCustom），所以 100% 也照调会让"真透明窗口"必挂。
   if (!live) {
     const op = clampInt(u.winOpacity, 30, 100, 100);
     try {
@@ -719,12 +705,11 @@ function syncChaosLayers(on) {
 
 // 点击爆「？」粒子：只在「？」主题下生效（判断放点击时，不绑状态）
 //
-// ⚠️ R95：加了"在飞粒子"上限。每个粒子都是 position:fixed + will-change:
-//    transform,opacity（见 style.css 的 .chaos-pop），850ms 后才回收 —— 原先
-//    没有任何节流，在 ? 主题下快速连点 50 次会瞬间堆出 ~200 个常驻合成层，
-//    合成器扲不住（表现为连点期间掉帧，正是"看着像闪了一下"的来源之一）。
-//    上限取 48：单击最多爆 5 个，48 足够容纳任何正常操作节奏，
-//    只有"按住连点"才会被截流；被截流时**只少几个装饰粒子**，不影响任何功能。
+// ⚠️ 加了"在飞粒子"上限。每个粒子都是 position:fixed + will-change:
+//    transform,opacity（见 style.css 的 .chaos-pop），850ms 后才回收。没有节流时
+//    在 ? 主题下快速连点会瞬间堆出上百个常驻合成层，合成器扛不住，连点期间掉帧。
+//    上限取 48：单击最多爆 5 个，足够容纳任何正常操作节奏，
+//    只有"按住连点"才会被截流，被截流时只少几个装饰粒子，不影响功能。
 const CHAOS_POP_MAX = 48;
 let chaosPopAlive = 0;
 document.addEventListener('click', (e) => {
@@ -748,7 +733,7 @@ document.addEventListener('click', (e) => {
   }
 }, { passive: true });
 
-// R112：渲染端网络自愈看门狗。说明见下面 api() catch 里的注释。
+// 渲染端网络自愈看门狗。说明见下面 api() catch 里的注释。
 let __netFailStreak = 0;
 let __netFailAt = 0;
 let __netRecoverAt = 0;
@@ -776,7 +761,7 @@ function noteNetworkFailure() {
 
 /**
  * 把 HTTP 状态码翻成用户能转述的一句话（只在后端没给 data.error 时使用）。
- * 不写"请联系开发者"这类空话 —— 每条都指向用户自己能做的下一步。
+ * 不写"请联系开发者"这类空话，每条都指向用户自己能做的下一步。
  */
 function httpStatusText(status) {
   const s = Number(status) || 0;
@@ -792,8 +777,8 @@ function httpStatusText(status) {
 async function api(path, options = {}) {
   // keepalive 由调用方按需传（配置保存的 POST 用它：页面卸载后请求仍能完成）
   // timeoutMs：请求级超时（AbortSignal.timeout）。用量页统计接口在历史数据多、
-  // 后端忙时可能长时间无响应 —— 没有超时兜底的话加载态会永远转下去，
-  // 到点抛错让页面能显示失败原因 + 重试按钮（R49）。
+  // 后端忙时可能长时间无响应，没有超时兜底的话加载态会永远转下去。
+  // 到点抛错让页面能显示失败原因 + 重试按钮。
   const { keepalive, timeoutMs, ...rest } = options;
   try {
     const res = await fetch(path, {
@@ -807,23 +792,23 @@ async function api(path, options = {}) {
       ...(timeoutMs && !rest.signal ? { signal: AbortSignal.timeout(timeoutMs) } : {})
     });
     const data = await res.json().catch(() => ({}));
-    // 2026-10-20：后端没给 data.error 时，旧代码直接抛 `HTTP 500` —— 用户看到的是
-    // 「保存失败：HTTP 500」，既不知道是谁的问题，也不知道下一步干什么。
-    // 状态码分档翻译成人话；后端给了 error 就以它为准（src/error-l10n.js 已本地化）。
+    // 后端没给 data.error 时不能直接抛 `HTTP 500`：用户既不知道是谁的问题，
+    // 也不知道下一步干什么。状态码分档翻译成人话；后端给了 error 就以它为准
+    // （src/error-l10n.js 已本地化）。
     if (!res.ok) throw new Error(data.error || httpStatusText(res.status));
     return data;
   } catch (e) {
-    // R112：网络层失败单独计数。服务端 keep-alive 超时后 Chromium 若复用了那条
+    // 网络层失败单独计数。服务端 keep-alive 超时后 Chromium 若复用了那条
     // 半死 socket，fetch 会抛 TypeError: "Failed to fetch"（此时 curl 依然正常，
-    // 是渲染端 socket 池的问题，不是服务端挂了）。连续失败说明池卡死了 ——
+    // 是渲染端 socket 池的问题，不是服务端挂了）。连续失败说明池卡死了，
     // 触发一次自愈（重建 SSE + 必要时整页重载），否则用量页/会话列表会永远停
-    // 在那张转圈的"加载中…"上，只能重启，即用户反馈的"卡加载"。
+    // 在那张转圈的"加载中…"上，只能重启。
     if (e && e.name === 'TypeError' && /Failed to fetch|NetworkError|network/i.test(String(e.message))) {
       noteNetworkFailure();
-      // R125-P2-1：网络层失败单独转译。旧代码原样往上抛 "Failed to fetch"，
-      // 群友看到的是一段英文，既不知道该重试还是该查端口，也没法转述给别人。
-      // ⚠️ 这条路径同时覆盖「服务真没起（端口不通）」与 R112 那条
-      //    「服务端活着、但渲染端 socket 池卡了（keep-alive 半死 socket）」——
+      // 网络层失败单独转译。原样往上抛 "Failed to fetch"，用户看到的是一段英文，
+      // 既不知道该重试还是该查端口，也没法转述给别人。
+      // ⚠️ 这条路径同时覆盖「服务真没起（端口不通）」与上面那条
+      //    「服务端活着、但渲染端 socket 池卡了（keep-alive 半死 socket）」，
       //    两者前端表现完全一样，所以文案里两种可能都写上，别只说一种。
       throw new Error('连不上控制台服务（网络层失败：服务可能没起、端口被占、被杀软拦截，或连接被重置）');
     }
@@ -859,14 +844,12 @@ const loadingStatus = $('#loading-status');
 const loadingLogs = $('#loading-logs');
 let appReady = false;
 let bootLogs = [];
-// R125-P0-3：失败卡片里的日志 <pre> 一旦渲染出来，就存引用；
+// 失败卡片里的日志 <pre> 一旦渲染出来，就存引用；
 // setLoadingStatus 在后台继续轮询期间同步更新它，卡片日志实时滚动而不是定格。
 let failureLogEl = null;
-// R125-P1-3：页面加载时刻。bootLogs 每行带一个「距今多少秒」。
-// 群友截图里那种 5~6 秒一行、整齐得像钟摆的日志，光看墙钟时间看不出所以然
-// （2026-10-14 群友那张图：19:21:46 → 19:21:51 → 19:21:57 … 每步 5~6 秒）。
-// 带上偏移才能一眼看出「这是 5 秒超时 + 1 秒间隔的固定步长」，
-// 而不是"服务每隔 5 秒才动一下"——后者会让人以为服务在挣扎，其实它只是没被问到。
+// 页面加载时刻。bootLogs 每行带一个「距今多少秒」。
+// 光看墙钟时间分不清"服务每 5 秒才动一下"和"5 秒超时 + 1 秒间隔的固定步长"，
+// 带上偏移才能一眼看出是后者。
 const bootT0 = Date.now();
 
 function setLoadingStatus(text) {
@@ -875,14 +858,14 @@ function setLoadingStatus(text) {
   const tail = bootLogs.slice(-12).join('\n');
   if (loadingStatus) loadingStatus.textContent = text;
   if (loadingLogs) loadingLogs.textContent = tail;
-  // R125-P0-3：后台轮询期间，失败卡片里的日志也跟着滚，用户能实时看到"服务在动"。
+  // 后台轮询期间，失败卡片里的日志也跟着滚，用户能实时看到"服务在动"。
   if (failureLogEl) failureLogEl.textContent = tail;
 }
 
-// 2026-10-23：启动壳日志默认折叠 —— 原来 <pre> 常显，萌新一启动先被一堵等宽小字
-// 墙迎面砸上来。现在折成一行「查看详细日志」，点了才展开；展开态只活到本次启动
+// 启动壳日志默认折叠：常显一堵等宽小字墙对新手不友好。
+// 折成一行「查看详细日志」，点了才展开；展开态只活到本次启动
 // （overlay 整个会被 remove，没有落盘的必要）。失败卡片（showBootFailure）里的
-// 日志仍然常显 —— 那时候用户就是来看日志找原因的。
+// 日志仍然常显，那时候用户就是来看日志找原因的。
 const loadingLogsToggle = $('#loading-logs-toggle');
 if (loadingLogsToggle && loadingLogs) {
   loadingLogsToggle.addEventListener('click', () => {
@@ -895,7 +878,7 @@ if (loadingLogsToggle && loadingLogs) {
 
 function hideLoading() {
   appReady = true;
-  failureLogEl = null;   // R125-P0-3：自愈后卡片已收起，断开日志引用
+  failureLogEl = null;   // 自愈后卡片已收起，断开日志引用
   if (loadingOverlay) {
     loadingOverlay.style.transition = 'opacity .25s ease';
     loadingOverlay.style.opacity = '0';
@@ -903,10 +886,10 @@ function hideLoading() {
   }
 }
 
-/** R125-P0-1：探测「控制台服务（HTTP）本身活着吗」—— 不碰任何业务逻辑。
- *  /api/version 是零依赖的极简路由（routes.js 的 `/api/version`），拿它当"服务活着"的证据。
+/** 探测「控制台服务（HTTP）本身活着吗」，不碰任何业务逻辑。
+ *  /api/version 是零依赖的极简路由，拿它当"服务活着"的证据。
  *
- *  为什么需要：旧逻辑从头到尾只探 /api/status 一个接口，于是
+ *  为什么需要：只探 /api/status 一个接口的话，
  *    · HTTP 没起（端口拒绝连接）→ 报"服务还没响应：请求超时"
  *    · HTTP 起了但 /api/status 慢（旧版本 / OneBot 未连）→ 也报同一句
  *  两类故障被当成一种，而它们的自救方法完全不同（前者查端口和杀软，
@@ -925,9 +908,9 @@ let lastConsoleAlive = null;
 
 async function pollUntilReady(startedAt) {
   try {
-    // ⚠️ 单次请求必须有超时（R45）：fetch 在网络栈层面"既不 resolve 也不 reject"时，
-    //    await 会永久挂住 —— 启动循环停在第一次调用上，界面永远显示最开始那句
-    //    "正在启动 QQ Agent 服务…"（R44 用户看到的就是这个）。加了超时至少能继续下一轮。
+    // ⚠️ 单次请求必须有超时：fetch 在网络栈层面"既不 resolve 也不 reject"时，
+    //    await 会永久挂住，启动循环停在第一次调用上，界面永远显示最开始那句
+    //    "正在启动 QQ Agent 服务…"。加了超时至少能继续下一轮。
     const status = await api('/api/status', { signal: AbortSignal.timeout(5000) });
     lastConsoleAlive = true;
     if (!status.onebot?.connected) setLoadingStatus(status.onebot?.diagnosis || '协议端已就绪，正在等机器人上线…');
@@ -941,14 +924,14 @@ async function pollUntilReady(startedAt) {
     // e.message 已被 api() 转译过（超时 → 「请求超时（5 秒无响应）」、
     // 网络层 → 「连不上控制台服务（…）」），这里直接用，不再判 e.name。
     const why = e?.message || String(e);
-    // R125-P0-1：失败时补一次"服务到底活着没"，两类故障写进日志时分开说。
+    // 失败时补一次"服务到底活着没"，两类故障写进日志时分开说。
     const alive = await pingConsole();
     lastConsoleAlive = alive;
     setLoadingStatus(alive
       ? `服务在跑，但状态接口没回：${why}（已等待 ${secs} 秒）`
       : `连不上控制台服务：${why}（已等待 ${secs} 秒）`);
-    // R125-P0-3：45 秒只是"该给用户看卡片了"的门槛，不是"放弃"的门槛。
-    // 超过 45 秒返回 'giveup'（让 bootLoop 渲染卡片），但**仍然继续轮询**——
+    // 45 秒只是"该给用户看卡片了"的门槛，不是"放弃"的门槛。
+    // 超过 45 秒返回 'giveup'（让 bootLoop 渲染卡片），但仍然继续轮询：
     // 后端一旦能回（慢机器建完索引、OneBot 连上、或只是瞬时网络抖动恢复），
     // 下一轮 pollUntilReady 直接返回 'ok'，bootLoop 原地恢复，不再卡死等手动刷新。
     return Date.now() - startedAt > 45000 ? 'giveup' : 'fail';
@@ -956,7 +939,7 @@ async function pollUntilReady(startedAt) {
 }
 
 /** 启动失败兜底界面：不再无限转圈，给出原因、实时日志和自救按钮；且后台仍在轮询，
- *  后端一旦恢复会自动收起卡片继续走（见 bootLoop 的 giveup 分支，R125-P0-3）。
+ *  后端一旦恢复会自动收起卡片继续走（见 bootLoop 的 giveup 分支）。
  *  本函数只负责"渲染一次卡片"，重复进入只更新日志文本、不重建 DOM。 */
 function showBootFailure() {
   const card = document.querySelector('#loading-overlay .loading-card');
@@ -970,8 +953,8 @@ function showBootFailure() {
   title.textContent = '界面没能启动完成';
   const sub = document.createElement('div');
   sub.className = 'loading-sub';
-  // R125-P0-1：按"服务到底活着没"给两套不同的引导 —— 死端口（ECONNREFUSED / 杀软拦截）
-  // 和"端口在、业务没好"是两种完全不同的自救路径，别再混着说。
+  // 按"服务到底活着没"给两套不同的引导：死端口（ECONNREFUSED / 杀软拦截）
+  // 和"端口在、业务没好"是两种完全不同的自救路径。
   sub.textContent = lastConsoleAlive === false
     ? '页面连不上控制台服务（HTTP 端口没起 / 被杀软拦截 / 端口被占）。后端多半没起来，看下面的日志找原因，或点「打开日志目录」排查。'
     : '控制台服务 45 秒内还没完全就绪。后端多半是正常在跑的，通常是页面这一侧没能连上它，或 OneBot 还在连 —— 后台仍在重试，连上会自动继续。';
@@ -987,7 +970,7 @@ function showBootFailure() {
   btnRow.style.gap = '8px';
   btnRow.style.flexWrap = 'wrap';
 
-  // ① 重新加载界面（带 6 秒冷却，R125-P2-5：防止手抖连点把刚起来的页面又刷掉）
+  // ① 重新加载界面（带 6 秒冷却，防止手抖连点把刚起来的页面又刷掉）
   const btn = document.createElement('button');
   btn.className = 'btn btn-small';
   btn.id = 'boot-retry-btn';
@@ -1006,7 +989,7 @@ function showBootFailure() {
     }, 1000);
   });
 
-  // ② 打开日志目录（R125-P0-2：需主进程桥 shell.openPath）
+  // ② 打开日志目录（需主进程桥 shell.openPath）
   const logBtn = document.createElement('button');
   logBtn.className = 'btn btn-small';
   logBtn.textContent = '打开日志目录';
@@ -1015,7 +998,7 @@ function showBootFailure() {
     try { window.qqaDesktop?.openLogDir?.(); } catch (_) { /* 无桌面壳时忽略 */ }
   });
 
-  // ③ 复制错误详情（R125-P0-2：纯前端，便于发群里/贴给开发者）
+  // ③ 复制错误详情（纯前端，便于发群里/贴给开发者）
   const copyBtn = document.createElement('button');
   copyBtn.className = 'btn btn-small';
   copyBtn.textContent = '复制错误详情';
@@ -1031,19 +1014,19 @@ function showBootFailure() {
   btnRow.append(btn, logBtn, copyBtn);
   card.append(title, sub, pre, btnRow);
 
-  // R125-P2-4：通知主进程把这次启动失败 + 尾部日志写进主进程日志，便于远程排查。
+  // 通知主进程把这次启动失败 + 尾部日志写进主进程日志，便于远程排查。
   try { window.qqaDesktop?.reportBootFailure?.({ logs: (bootLogs || []).slice(-12), alive: lastConsoleAlive }); } catch (_) { /* 上报失败不影响错误卡片展示 */ }
 }
 
 async function bootLoop() {
   const startedAt = Date.now();
   let shownFailure = false;
-  // R125-P0-3：45 秒后只"亮卡片"不"放弃"，后端一旦恢复即原地收起卡片继续走，
-  // 彻底解决"卡 45 秒就死、只能手动刷新"的体感。看门狗的 60 秒重载作为兜底仍有效。
-  // ⚠️（2026-10-19 修）上限从"240 次"改为"24 分钟"硬时间预算：旧实现按"每轮
-  //    ~6 秒"（状态接口超时 5s + 探测 2.5s + sleep 1s）估出"≈24 分钟"，但只有
-  //    超时路径才这么慢 —— 最常见的死端口（ECONNREFUSED）毫秒级失败，240 轮
-  //    ≈4 分钟就穷尽退出，"后台仍在重试"的承诺恰恰在最需要它的场景最先失效。
+  // 45 秒后只"亮卡片"不"放弃"，后端一旦恢复即原地收起卡片继续走。
+  // 看门狗的 60 秒重载作为兜底仍有效。
+  // ⚠️ 上限是 24 分钟硬时间预算，不是轮数：旧实现按"每轮约 6 秒"估出"≈24 分钟"，
+  //    但只有超时路径才这么慢。最常见的死端口（ECONNREFUSED）毫秒级失败，
+  //    按 240 轮算约 4 分钟就穷尽退出，"后台仍在重试"的承诺恰恰在最需要它的
+  //    场景最先失效。
   const BOOT_MAX_MS = 24 * 60_000;
   while (Date.now() - startedAt < BOOT_MAX_MS) {
     const result = await pollUntilReady(startedAt);
@@ -1075,9 +1058,8 @@ function assessReadiness(cfg, status) {
   const allowOk = (cfg.allow?.groups?.length || cfg.allow?.private?.length || cfg.allowAllWhenEmpty);
   checks.push({ ok: !!allowOk, label: allowOk ? `白名单：${(cfg.allow.groups || []).length} 个群 / ${(cfg.allow.private || []).length} 个好友` : '还没有配置白名单（必填）', fix: allowOk ? null : 'settings-allow' });
   // status 在启动早期为空：state.status 初值是 null，而设置页可能在首次 /api/status
-  // 返回前就被渲染（loadSettings → renderSettings → 页头体检）。这里只防了 cfg 没防
-  // status，导致 `status.onebot.diagnosis` 抛 TypeError，被 error-boot 弹成右下角报错。
-  // 归一化后按"状态未知"表述，既不崩也不误报"机器人没连上"。
+  // 返回前就被渲染（loadSettings → renderSettings → 页头体检）。归一化后按
+  // "状态未知"表述，既不因 `status.onebot.diagnosis` 抛错，也不误报"机器人没连上"。
   const ob = status?.onebot || {};
   const obOk = ob.connected;
   checks.push({
@@ -1090,36 +1072,31 @@ function assessReadiness(cfg, status) {
   return { ready: urlOk && modelOk && allowOk && obOk, checks };
 }
 
-// r94：横幅内容签名。refreshStatus 每轮都会调到这里，而旧实现只要横幅该显示
-// 就无条件 `banner.innerHTML = html` —— 值没变也把整块重建（两个按钮和它们的
-// click 监听器一起重造）。暂停中 / 一直未连接时，用户看到横幅周期性闪一下。
-// 现在内容串不变就不动 DOM（按钮与监听器原地保留）。
+// 横幅内容签名。refreshStatus 每轮都会调到这里，无条件 `banner.innerHTML = html`
+// 会连按钮和监听器一起重造，暂停中 / 一直未连接时横幅会周期性闪一下。
+// 内容串不变就不动 DOM（按钮与监听器原地保留）。
 let lastBannerHtml = null;
 function renderBanner() {
   const banner = $('#banner');
   const s = state.status;
   let show = false;
   let html = '';
-  // 预算保险丝已移除：原先这里有一个 pauseReason === 'budget' 的分支
   if (state.paused) {
     show = true;
     html = '⏸ 机器人已暂停，不会处理任何消息。';
   } else if (state.statusStale) {
-    // 2026-10-23（P1-3）：后端持续无响应（01-boot.js 连续 3 次 /api/status 失败）
-    // 时，顶栏改了口径，但主界面左栏身份卡还是旧数据、而"曾经连上又掉线"的
-    // 情况旧逻辑压根不亮横幅 —— 用户以为一切正常，反复戳界面。这里补一条
-    // 醒目横幅 + 一个"重新加载页面"的出路。
+    // 后端持续无响应（01-boot.js 连续 3 次 /api/status 失败）时顶栏改了口径，
+    // 但左栏身份卡还是旧数据，"曾经连上又掉线"也不会亮横幅，用户以为一切正常。
+    // 这里补一条醒目横幅 + 一个"重新加载页面"的出路。
     show = true;
     html = '🛑 和控制台失去联系，界面显示的可能还是旧状态'
       + ' <button class="btn btn-small" id="banner-reload-btn">重新加载页面</button>';
   } else if (s && !s.onebot.connected && !s.onebot.everConnected) {
     show = true;
-    // 2026-10-19：横幅此前是纯文字，想动手只能去找顶栏就绪圆点（hover 才知道能点）。
-    // 补一个直达按钮 —— 与签名机制兼容：html 变了才重建，监听器在重建分支里补挂。
-    // 2026-10-20：原文案把未连接一律归因于「连接组件是否启动」，可最常见的其实是
-    // 机器人 QQ 没登录（协议端好着呢）。这里按协议端端口是否在监听分两档说。
-    // 2026-10-23：协议端改由用户自装（SnowLuma / NapCat），所以不再说"没启动"，
-    // 而是"没在运行 / 没监听端口" —— 用户可能是压根没装。
+    // 带一个直达按钮，不让用户去找顶栏就绪圆点（hover 才知道能点）。
+    // 与签名机制兼容：html 变了才重建，监听器在重建分支里补挂。
+    // 按协议端端口是否在监听分两档：最常见的其实是机器人 QQ 没登录（协议端好着呢），
+    // 其次是协议端压根没装，所以文案说"没在运行 / 没监听端口"而不是"没启动"。
     const protoUp = !!s.protocol?.portOpen;
     html = protoUp
       ? '🔌 机器人没连上 · 多半是机器人 QQ 还没登录 <button class="btn btn-small" id="banner-goto-connection-btn">去排查</button>'
@@ -1131,11 +1108,10 @@ function renderBanner() {
       html += ` <button class="btn btn-small" id="banner-resume-btn">恢复</button>
         <button class="btn btn-small btn-danger" id="banner-resume-read-btn" title="恢复运行，并把暂停期间积压的所有未读消息直接标记为已读（不再处理）">恢复并全部标为已读</button>`;
     }
-    // r94：内容没变就不重建（见 lastBannerHtml 的说明）
+    // 内容没变就不重建（见 lastBannerHtml 的说明）
     if (html !== lastBannerHtml) {
       lastBannerHtml = html;
       banner.innerHTML = html;
-      // 注意：横幅里从来没有 #banner-goto-settings 这个元素（旧的死监听，已删）
       const resumeBtn = $('#banner-resume-btn');
       if (resumeBtn) resumeBtn.addEventListener('click', () => resumePause({ skipBacklog: false }));
       const resumeReadBtn = $('#banner-resume-read-btn');
@@ -1159,8 +1135,7 @@ async function resumePause({ skipBacklog = false } = {}) {
     await refreshStatus();
     if (state.tab === 'chats') loadChats({ quiet: true });
   } catch (e) {
-    // 2026-10-20：原来只写 console —— 用户点横幅上的「恢复」，失败时界面毫无反应，
-    // 只能再点一次（还是没反应），看起来像按钮坏了。必须说出来。
+    // 只写 console 的话，用户点横幅上的「恢复」失败时界面毫无反应，看起来像按钮坏了。
     console.error('恢复失败:', e);
     try { qaAlert(`恢复运行失败：${e?.message || e}\n\n机器人仍处于暂停状态。请确认程序还在运行，然后再试一次。`); } catch { /* 弹窗不可用则只留控制台 */ }
   }
@@ -1168,29 +1143,25 @@ async function resumePause({ skipBacklog = false } = {}) {
 
 function switchTab(name) {
   // 离开设置页（无论去哪）前，先把防抖窗口内还没落盘的改动立即保存。
-  // 必须在页签切换、任何 loadXxx 触发**之前**做：等切走之后表单 DOM 还在
-  // （只是视图隐藏）其实也能读，但"正在输入的最后一个字段"可能只过了
-  // 防抖窗口的一部分 —— 不 flush 的话这次改动要等 600ms 定时器到点，
-  // 期间用户看到的其它页签数据（用量/状态）就是旧配置算出来的。
+  // 必须在页签切换、任何 loadXxx 触发之前做：不 flush 的话这次改动要等
+  // 600ms 定时器到点，期间用户看到的其它页签数据（用量/状态）就是旧配置算出来的。
   if (state.tab === 'settings' && name !== 'settings') flushSettingsSaves();
-  // 2026-10-22：人设预览浮层是挂在 body 下的全局单例（人设市场页 / 已安装人设页
-  // 共用），不再随页面容器一起隐藏 —— 切页时必须主动关掉，否则它会一直盖在新页面上。
+  // 人设预览浮层是挂在 body 下的全局单例（人设市场页 / 已安装人设页共用），
+  // 不随页面容器一起隐藏，切页时必须主动关掉，否则它会一直盖在新页面上。
   if (typeof closePersonaPreview === 'function') {
     try { closePersonaPreview(); } catch { /* 浮层没开时是空操作 */ }
   }
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
-  // ⚠️（2026-10-10 r86 修 P2）可访问性：把「当前页」用 aria 明确标出来。
-  //    此前只用 .active 这个**纯视觉**类表达选中态 —— 屏幕阅读器读导航时
-  //    听到的是一排没有状态差异的按钮，用户根本不知道自己在哪一页。
-  //    aria-current="page" 是 WAI-ARIA 对「当前页」的标准表达（对比 aria-selected
-  //    是给 tablist 用的）。二级左栏的具体项由 syncChrome 负责（它才知道 name 归属哪个组）。
+  // 可访问性：把「当前页」用 aria 明确标出来。只用 .active 这个纯视觉类表达
+  // 选中态时，屏幕阅读器读到的是一排没有状态差异的按钮。
+  // aria-current="page" 是 WAI-ARIA 对「当前页」的标准表达（aria-selected 是给
+  // tablist 用的）。二级左栏的具体项由 syncChrome 负责（它才知道 name 归属哪个组）。
   $$('.tab').forEach((t) => {
     if (t.classList.contains('active')) t.setAttribute('aria-current', 'page');
     else t.removeAttribute('aria-current');
   });
-  // R91：切页挂起子动画（PCL2 AniControlEnabled）。110ms 挂载窗口内
-  // body 带 .switching，CSS 会把非活动视图的过渡全部关掉，避免旧页
-  // 残留的悬停态 / 浮层过渡在切换瞬间闪一下。
+  // 切页挂起子动画：110ms 挂载窗口内 body 带 .switching，CSS 会把非活动视图
+  // 的过渡全部关掉，避免旧页残留的悬停态 / 浮层过渡在切换瞬间闪一下。
   document.body.classList.add('switching');
   clearTimeout(document.body.__swTimer);
   document.body.__swTimer =
@@ -1210,16 +1181,16 @@ function switchTab(name) {
   if (state.quoteMode && name !== 'chats') exitQuoteMode();   // 离开存档页自动退出金句勾选
   if (name === 'sessions') loadSessions();
   // 壁纸页（内置模块 src/wallpaper 前端）：每次进入都重新拉列表，插件热重载换了壁纸能立刻看到。
-  // 用 typeof 守卫 —— 14-wallpaper.js 若没装（纯核心部署），这里不能抛错。
+  // 用 typeof 守卫，14-wallpaper.js 若没装（纯核心部署），这里不能抛错。
   if (name === 'wallpaper' && typeof loadWallpaperPage === 'function') loadWallpaperPage();
   // 桌宠页（desktop-pet 插件）：进入才启动 4s 轮询与预览 URL 管理，离开立即停止并回收
-  // ObjectURL —— 轮询跑在别的页面上会白耗电，预览不回收会漏内存。
+  // ObjectURL，轮询跑在别的页面上会白耗电，预览不回收会漏内存。
   // typeof 守卫与壁纸页同口径：没装插件时这里不能抛错。
   if (name === 'desktop-pet' && typeof loadDesktopPetPage === 'function') loadDesktopPetPage();
   else if (typeof stopDesktopPetPage === 'function') stopDesktopPetPage();
   if (name === 'chats') loadChats();
   // 群名补底：设置页（人设分群按钮/活跃设置分群下拉）用 chatNameOf 取名字，
-  // 依赖 state.chats —— 若用户没先进过存档页这里是空的，会只显示群号。
+  // 依赖 state.chats，若用户没先进过存档页这里是空的，会只显示群号。
   // 进设置页时悄悄拉一次（quiet，失败不报错），列表已在就跳过。
   if (name === 'settings' && !(state.chats || []).length) {
     api('/api/chats').then((d) => { state.chats = d.chats || []; }).catch(() => {});
@@ -1228,14 +1199,14 @@ function switchTab(name) {
   if (name === 'usage') loadUsageView({ force: true });
   if (name === 'skills') loadModulePage('skill');
   if (name === 'plugins') loadModulePage('plugin');
-  // 2026-10-22：已安装的人设页（左栏「下载 → 已安装 → 人设」）
+  // 已安装的人设页（左栏「下载 → 已安装 → 人设」）
   if (name === 'personas') loadPersonasPage();
   if (name === 'harness') loadHarnessPage();
   if (name === 'connection') loadConnectionPage();
   if (name === 'settings') {
-    // 2026-10-23 修复：loadSettings 首行 await api('/api/config') 失败即 reject，
-    // 此前无人 catch → 未处理拒绝；设置页保持空白或旧内容，没有任何提示与重试入口，
-    // 用户看到的就是"点了设置没反应"。这里兜底成一张带「重试」的错误卡。
+    // loadSettings 首行 await api('/api/config') 失败即 reject，不 catch 会留下
+    // 未处理的拒绝，设置页保持空白或旧内容且没有重试入口（表现为"点了设置没反应"）。
+    // 这里兜底成一张带「重试」的错误卡。
     loadSettings().catch((e) => {
       const box = document.getElementById('settings-form');
       if (!box) return;
@@ -1249,7 +1220,7 @@ function switchTab(name) {
 
 // ── 自定义下拉框（美化原生 <select>）──
 // 原生 select 的弹出列表是操作系统渲染的，改不了样式、也没法做过渡动画。
-// 这里把每个 <select> 换成自绘的 .sel 组件（隐藏原 select 但保留在 DOM ——
+// 这里把每个 <select> 换成自绘的 .sel 组件（隐藏原 select 但保留在 DOM，
 // val()/chk() 与 change 监听全部照常工作，getElementById 绑定零改动）。
 // 由 MutationObserver 自动接管所有后渲染出来的 select（设置页/弹窗/连接页）。
 function enhanceOneSelect(sel) {
@@ -1268,20 +1239,20 @@ function enhanceOneSelect(sel) {
   menu.className = 'sel-menu';
   wrap.appendChild(head);
   sel.after(wrap);
-  // ⚠️（r107）菜单 portal 到 body：脱离 .sel 祖先的 backdrop-filter / overflow /
-  //    transform 子树，软件渲染下下拉动画不再拖累毛玻璃层逐帧重光栅（卡顿根因）。
+  // ⚠️ 菜单 portal 到 body：脱离 .sel 祖先的 backdrop-filter / overflow / transform
+  //    子树，软件渲染下下拉动画不再拖累毛玻璃层逐帧重光栅（这是卡顿的根因）。
   document.body.appendChild(menu);
-  // UI-24：portal 菜单与触发器互相关联 —— 页面重绘（innerHTML）销毁 wrap 时，
+  // portal 菜单与触发器互相关联：页面重绘（innerHTML）销毁 wrap 时，
   // 由全局 MutationObserver 的 removedNodes 分支据此回收 body 上的菜单，
-  // 否则每次重绘都泄漏一棵含全部 option 的子树（连接页日志面板每次刷新一次）。
+  // 否则每次重绘都泄漏一棵含全部 option 的子树。
   wrap._selMenu = menu;
   menu._selWrap = wrap;
 
   const label = () => (sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '');
   const syncHead = () => { head.firstElementChild.textContent = label(); };
-  // 缓存菜单渲染快照：打开时先比较 options；内容没变就绝不重建 innerHTML。
-  // 原先每次点击都把整个选项列表（有些下拉有上百项）销毁并重新创建，随后又
-  // 立刻读取几何信息触发布局 —— 弹出瞬间主线程忙着重建 DOM，动画第一帧就掉了。
+  // 缓存菜单渲染快照：打开时先比较 options，内容没变就不重建 innerHTML。
+  // 每次点击都重建整个选项列表（有些下拉有上百项），随后又立刻读几何信息触发
+  // 布局，弹出瞬间主线程忙着重建 DOM，动画第一帧就掉了。
   let menuSnapshot = [];
   let menuSelectedIndex = -1;
   const syncMenu = () => {
@@ -1313,10 +1284,9 @@ function enhanceOneSelect(sel) {
     menu.style.maxHeight = '';
   };
   wrap._selClose = close;   // 供全局的滚动/点外收起逻辑复位
-  // 2026-10-23 修复（键盘可达性）：原生 select 被 display:none 之后，键盘用户
-  // 只能 Tab 到触发条、Enter 展开，然后方向键毫无反应 —— 等于无法更改任何下拉选项。
-  // 这里在触发条上补方向键/Home/End 直接改选中项（与原生 select 行为对齐），
-  // Enter/Space 仍由 button 的默认行为展开菜单。
+  // 键盘可达性：原生 select 被 display:none 之后，键盘用户 Tab 到触发条、Enter 展开，
+  // 方向键毫无反应，等于无法更改任何下拉选项。这里在触发条上补方向键/Home/End
+  // 直接改选中项（与原生 select 行为对齐），Enter/Space 仍由 button 的默认行为展开菜单。
   head.addEventListener('keydown', (e) => {
     if (sel.disabled) return;
     const n = sel.options.length;
@@ -1345,9 +1315,8 @@ function enhanceOneSelect(sel) {
       if (typeof w._selClose === 'function') w._selClose();
       else w.classList.remove('open');
     });
-    // ⚠️（2026-10-10 r86）不能直接用 classList.toggle('open') —— 那会绕过 close()，
-    //    导致收起时展开期写下的内联定位（position/left/width/zIndex…）残留，
-    //    下次展开若走别的分支就会用到陈旧坐标。这里显式分支。
+    // ⚠️ 不能直接用 classList.toggle('open')：那会绕过 close()，展开期写下的内联
+    //    定位（position/left/width/zIndex…）残留下来，下次展开会用到陈旧坐标。
     if (wrap.classList.contains('open')) {
       close();          // 再点一次 = 收起（并复位内联样式）
       return;
@@ -1355,48 +1324,28 @@ function enhanceOneSelect(sel) {
     // 先完成测量与定位，最后才加 .open：这样浏览器首次绘制菜单时就已处于最终位置，
     // 避免菜单先按旧坐标开始动画、紧接着被 fixed/宽度/top 等样式改写造成跳帧。
     {
-    // 菜单可滚动后，展开时把选中项滚进可视区（长列表不再"选中的在下面看不到")
-      // 视口自适应（2026-09-20）：菜单是绝对定位的，下拉框贴近窗口底部时
-      // 会被设置页滚动口裁掉一截（图示反馈）。空间不够就上弹或限高 ——
-      // 保证菜单永远完整落在最近的滚动容器（通常是 .settings-pane）可视区内。
+      // 视口自适应：空间不够就上弹或限高，保证菜单完整落在可视区内。
       //
-      // ⚠️（2026-10-10 r86 修 P1）原实现只做了"上弹/限高"，但在**模态框**里会失效：
-      //    .sel-menu 是 position:absolute，定位上下文是 .sel；而模态框的
-      //    .model-modal-body 带 overflow:auto（style.css:2277）。absolute 定位的
-      //    菜单一旦超出该 body 就被**裁掉**，并且它随 body 一起滚动 ——
-      //    实测贴近底部展开时菜单高度 112px、可见 0px，选项完全点不到。
-      //    限高治不了根：根因是"裁剪容器"而非"空间不足"。
-      //    改用 position:fixed 把菜单**提离**所有 overflow 祖先的裁剪：fixed 的
-      //    包含块是视口，不再受任何祖先 overflow 影响。此时用 head 的视口坐标
-      //    手动定位（top/left/width），上弹/限高逻辑依旧照用。
-      // close() 已在收起时复位所有内联坐标；这里不重复清空（避免多余的样式写入）。
+      // ⚠️ 菜单必须用 position:fixed。它原本是 .sel 的子节点（absolute 定位），
+      //    在模态框里会失效：模态框的 .model-modal-body 带 overflow:auto，
+      //    菜单一旦超出就被裁掉并随 body 滚动，实测贴近底部展开时高度 112px、
+      //    可见 0px，选项完全点不到。限高治不了根，根因是"裁剪容器"而非"空间不足"；
+      //    fixed 的包含块是视口，不受任何祖先 overflow 影响。
+      //    用 head 的视口坐标手动定位（top/left/width），上弹/限高逻辑照旧。
+      // close() 已在收起时复位所有内联坐标，这里不重复清空。
       const hr = head.getBoundingClientRect();
-      // ⚠️（2026-10-11 r107 根治"下拉弹出卡顿"）
-      //    根因：自绘菜单原本是 .sel 的子节点，而市场页 .mk-filter-panel 带了
-      //    backdrop-filter:blur(14px)。在 Chromium 软件合成（本应用默认关 GPU）
-      //    下，**任何在 backdrop-filter 子树里做动画的后代都会迫使那一层毛玻璃
-      //    每帧重新光栅化** —— 这就是"弹出来卡一下"的真正元凶，比 transform
-      //    本身重得多。
-      //    解法是把菜单**从子树里 portal 出去**：创建时挂到 document.body，
-      //    于是它同时脱离了 (a) backdrop-filter 毛玻璃层 (b) 任何祖先 overflow
-      //    裁剪 (c) 自定义 fixed 包含块。三者一次性解决，且不再需要下面的
-      //    裁剪/包含块探测与坐标补偿。菜单用 position:fixed + head 视口坐标
-      //    统一定位即可。
       menu.style.position = 'fixed';
       // ⚠️ 横向刻意不取整：hr.left/width 常为小数（如 210.4px），round 后菜单
-      //    会比触发按钮窄最多 0.5px、左缘偏移 —— 人眼对竖边对齐敏感，就是之前
-      //    反馈的"左右像素偏移"。交浏览器做亚像素定位。top/bottom 仍取整。
+      //    会比触发按钮窄最多 0.5px、左缘偏移，人眼对竖边对齐敏感。
+      //    交浏览器做亚像素定位。top/bottom 仍取整。
       menu.style.left = hr.left + 'px';
       menu.style.width = hr.width + 'px';
       menu.style.right = 'auto';
-      // ⚠️ 层号不要写死数字 —— 读 0.5 段的层号令牌（见 style.css）。
-      //    原写 260、注释说"高于 .model-modal-overlay(200)"，但 r93(UI-11)
-      //    早已把遮罩抬到 900/910：260 比遮罩还低 650 层，于是**凡是开在
-      //    modal 里的 <select>，展开的菜单整块被压在遮罩底下**（模型配置的
-      //    「视频理解方式」就是这个症状）。改用变量后与 .sel-menu 的 CSS
-      //    兜底同源，不会再因某一侧漏改而走偏。
-      //    取值 920：高于 900/910（要在 modal 里展开），低于 .loading-overlay(999)
-      //    ——首启加载遮罩必须压住一切可交互元素。
+      // ⚠️ 层号不要写死数字，读 style.css 里的层号令牌。写死 260 时它比
+      //    .model-modal-overlay 的 900/910 还低，凡是开在 modal 里的 <select>，
+      //    展开的菜单整块被压在遮罩底下。读变量后与 .sel-menu 的 CSS 兜底同源，
+      //    不会因某一侧漏改而走偏。取值 920：高于 900/910（要在 modal 里展开），
+      //    低于 .loading-overlay(999)（首启加载遮罩必须压住一切可交互元素）。
       //    getComputedStyle 只在展开时读一次，开销可忽略；读不到时兜底 920。
       menu.style.zIndex =
         getComputedStyle(document.documentElement).getPropertyValue('--z-sel-menu').trim() || '920';
@@ -1451,9 +1400,8 @@ function enhanceOneSelect(sel) {
         if (typeof w._selClose === 'function') w._selClose();
         else w.classList.remove('open');
       });
-      // UI-25：孤儿菜单兜底 —— wrap 已随页面重绘销毁、portal 菜单还挂在 body 上
+      // 孤儿菜单兜底：wrap 已随页面重绘销毁、portal 菜单还挂在 body 上
       // （带 .open + 内联 fixed + pointer-events:auto，上面那轮遍历够不到它）。
-      // 点外/Esc/滚动时顺手把这种彻底回收，而不是永远关不掉。
       document.querySelectorAll('.sel-menu.open').forEach((m) => {
         if (!m._selWrap || !m._selWrap.isConnected) m.remove();
       });
@@ -1464,8 +1412,8 @@ function enhanceOneSelect(sel) {
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') closeAll();
     });
-    // ⚠️（2026-10-10 r86）展开态可能是 position:fixed（模态框内），它**不随页面滚动**。
-    //    任何滚动/窗口尺寸变化都会让菜单与它的 head 脱位 → 直接收起，比错位更稳。
+    // ⚠️ 展开态是 position:fixed，不随页面滚动。任何滚动/窗口尺寸变化都会让
+    //    菜单与它的 head 脱位，直接收起比错位更稳。
     //    capture=true：滚动事件不冒泡，必须用捕获阶段才能收到任意滚动容器的滚动。
     const closeAllOnMove = () => closeAll();
     window.addEventListener('resize', closeAllOnMove);
@@ -1489,9 +1437,9 @@ function startSelectEnhancer() {
   new MutationObserver((muts) => {
     for (const m of muts) {
       m.addedNodes.forEach((n) => { if (n.nodeType === 1) scan(n); });
-      // UI-24：wrap 随页面重绘被移出 DOM 时回收其 portal 菜单。延迟到下一轮
-      // 任务再判定 isConnected：若是「搬迁」（先 remove 再 insert 同一节点），
-      // 届时节点已重新入树，不误杀；真正的销毁则 isConnected 仍为 false。
+      // wrap 随页面重绘被移出 DOM 时回收其 portal 菜单。延迟到下一轮任务再判定
+      // isConnected：若是「搬迁」（先 remove 再 insert 同一节点），届时节点已重新
+      // 入树，不误杀；真正的销毁则 isConnected 仍为 false。
       if (m.removedNodes.length) {
         setTimeout(() => {
           m.removedNodes.forEach((n) => {
@@ -1507,22 +1455,21 @@ function startSelectEnhancer() {
   }).observe(document.body, { childList: true, subtree: true });
 }
 
-/* ── R75：输入框"点了却不聚焦"的自愈兜底 + 取证埋点 ──────────────────────
-   症状（2026-09-24 群友反馈）：点到文本框里，光标不出现、敲键盘没反应，
-   **只有输入框**这样（按钮一切正常），且"有的时候又能恢复"。
+/* ── 输入框"点了却不聚焦"的自愈兜底 + 取证埋点 ──────────────────────────
+   症状：点到文本框里，光标不出现、敲键盘没反应，只有输入框这样（按钮一切
+   正常），且"有的时候又能恢复"。
 
-   这条链路的可能成因有五六个（DOM 重建夺焦 / 祖先 user-select:none /
-   Electron 拖拽区吞事件 / 窗口失焦回流 / 输入法组字被拆），在拿到现场数据前
-   逐个猜是不负责任的。**这里做两件确定有益的事**：
-     ① 兜底：一次指针按下结束后，若目标本该聚焦却没聚焦 —— 替浏览器补一次
+   可能成因有五六个（DOM 重建夺焦 / 祖先 user-select:none / Electron 拖拽区
+   吞事件 / 窗口失焦回流 / 输入法组字被拆），拿到现场数据前逐个猜没有意义。
+   这里做两件确定有益的事：
+     ① 兜底：一次指针按下结束后，若目标本该聚焦却没聚焦，替浏览器补一次
         focus()。这本来就是浏览器该做的，补上不会引入新语义；
      ② 取证：每次兜底命中都用 console.error 打一条结构化诊断
-        （level 3 = error → 主进程 R71 的 console-message 监听会落盘，
-         打包版也能在 data/logs 里拿到），把"当时谁抢了焦点 / 谁是命中目标"
-        一并记下来。
+        （level 3 = error → 主进程的 console-message 监听会落盘，
+         打包版也能在 data/logs 里拿到），记下当时谁抢了焦点、谁是命中目标。
 
    刻意收缩作用域：只处理 INPUT/TEXTAREA/SELECT/contenteditable，且排除
-   disabled —— 点了按钮、点了普通区域一律不干预。 */
+   disabled。点了按钮、点了普通区域一律不干预。 */
 (function initInputFocusGuard() {
   if (window.__inputFocusGuardBound) return;
   window.__inputFocusGuardBound = true;
@@ -1574,12 +1521,11 @@ function startSelectEnhancer() {
 /**
  * 跳到「设置 → 媒体工具」并滚到 ffmpeg 那一段。
  *
- * 为什么要统一入口：这处跳转以后会被多个地方调用（壁纸导入、视频抽帧、
- * 大图压缩的降级提示……）。若各页各写一遍"切 tab + 设分区 + 等一拍再滚"，
- * 迟早出现某处漏了 flushSettingsSaves 或节拍不对，表现成"点了没反应"。
+ * 统一入口的原因：这处跳转会被多个地方调用（壁纸导入、视频抽帧、大图压缩的
+ * 降级提示）。各页各写一遍"切 tab + 设分区 + 等一拍再滚"，迟早出现某处漏了
+ * flushSettingsSaves 或节拍不对，表现成"点了没反应"。
  *
- * 与 wpBackToSettings 的区别：那个去的是「外观与数据」，这里去「media」分区。
- * 两者复用同一套 switchTab + 延时滚动的口径。
+ * 与 wpBackToSettings 的区别：那个去「外观与数据」，这里去「media」分区。
  *
  * @param {{ note?: string }} [opts] note 会短暂高亮在状态条上，用来说明"为什么要装"
  */

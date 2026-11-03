@@ -49,10 +49,10 @@ function initDesktopPetPage() {
   const root = dpQ('#desktop-pet-page');
   if (!root || root.dataset.initialized) return;
   root.dataset.initialized = 'true';
-  /* 2026-10-24 整页重设计：外壳走全站设计语言（.snowluma-page-card / .sl-* / .btn / .field），
+  /* 整页重设计：外壳走全站设计语言（.snowluma-page-card / .sl-* / .btn / .field），
      与「连接」「自检」页同宽同款。所有 ID 与 data-dp-* 钩子原样保留，JS 逻辑不动。
      旧版这里是一套 dp-card/dp-btn 私有组件，引用的令牌已在扁平化时改名，
-     var() 取不到值 → 边框/圆角/配色整页失效（IACVT），详见 desktop-pet-panel.css 顶部注释。 */
+     var() 取不到值，边框/圆角/配色整页失效（IACVT），详见 desktop-pet-panel.css 顶部注释。 */
   root.innerHTML = `<div class="dp-wrap snowluma-page-card">
     <div class="sl-head">
       <div class="sl-head-main">
@@ -240,7 +240,7 @@ function initDesktopPetPage() {
 }
 
 /* 页内导航高亮：哪一区滚进视口上方就点亮哪一项。
-   用 IntersectionObserver 而不是 scroll 事件 —— 轮询每 4 秒拉一次状态、
+   用 IntersectionObserver 而不是 scroll 事件：轮询每 4 秒拉一次状态、
    用户也可能一边滚动一边编辑表单，监听器只切 class，不碰任何数据。 */
 let dpSpy = null;
 function dpNavButtons() { return dpQa('.dp-nav [data-dp-scroll]'); }
@@ -393,9 +393,9 @@ function dpLoadPreviews() {
       dpPreviewCache.set(url, record);
       record.promise = (async () => {
         // 这里能带请求头（fetch），所以用 x-console-token 而不是 withToken()。
-        // ⚠️ 必须是 CONSOLE_AUTH_TOKEN || CONSOLE_MARKER：CONSOLE_MARKER 只是
-        //    Electron 下由主进程换成真凭据的占位符；浏览器/headless 里没人替换它，
-        //    配置了 server.token 时只发 marker 会恒 401（预览图全部消失）。
+        // 必须是 CONSOLE_AUTH_TOKEN || CONSOLE_MARKER：CONSOLE_MARKER 只是
+        // Electron 下由主进程换成真凭据的占位符；浏览器/headless 里没人替换它，
+        // 配置了 server.token 时只发 marker 会恒 401（预览图全部消失）。
         const response = await fetch(url, { headers: { 'x-console-token': CONSOLE_AUTH_TOKEN || CONSOLE_MARKER }, signal: controller.signal, credentials: 'same-origin' });
         if (!response.ok || !/^image\/png(?:;|$)/i.test(response.headers.get('content-type') || '')) throw new Error('角色预览暂不可用');
         const blob = await response.blob();
@@ -458,7 +458,7 @@ function dpRenderDynamic() {
   const stats = dpData.stats || {};
   const observing = dpObservePending || runtime.observing;
   // 状态条：一行四段（插件 / 桌面窗口 / 当前角色 / 桌宠）。
-  // 刻意不用四张卡片 —— 四个几乎等重的绿框会把页面顶部堆成一坨，还抢下面分区面板的层级；
+  // 刻意不用四张卡片：四个几乎等重的绿框会把页面顶部堆成一坨，还抢下面分区面板的层级；
   // 一切正常时它就该安静，只有插件没开 / 窗口没连 / 角色加载失败时才追加一行说明。
   const dpFacts = [
     { k: '插件', v: runtime.active === false ? '未启用' : '已启用', ok: runtime.active !== false },

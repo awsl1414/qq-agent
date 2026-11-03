@@ -67,8 +67,8 @@ node --test tests/sticker-grace.test.mjs   # 跑单个测试文件
 | 规则 | 何时加载 | 内容 |
 |---|---|---|
 | `conventions.md` | 始终 | 术语一致性、根因修复、通用编码规范、更新日志、解耦判断、兼容代码边界 |
-| `frontend.md` | 编辑 `ui/**` 时 | 前端规范与页面设计、浏览器基线 |
-| `backend.md` | 编辑 `src/**`、`electron/**` 时 | 提示词契约、扩展装载、发送链路、Electron 边界 |
+| `frontend.md` | 编辑 `ui/` 下的文件、任意 `.css` / `.html` 时 | 前端规范与页面设计、浏览器基线 |
+| `backend.md` | 编辑 `src/`、`electron/`、`plugins/`、`skills/`、`tests/` 时 | 提示词契约、扩展装载、发送链路、Electron 边界 |
 
 修 bug 时先读 `conventions.md` 的「修问题」一节：找本质原因、从底层修，不做表面修复。
 升版本时读「更新日志」一节：把 `## 未发布` 转成版本条目并压缩。
@@ -78,7 +78,7 @@ node --test tests/sticker-grace.test.mjs   # 跑单个测试文件
 以下已确认无调用方或已过时，遇到时顺手处理，不要在此基础上继续加东西：
 
 - `src/tool-registry.js` 的 `isToolEnabledLegacy`，全仓仅 1 处引用（自身定义）
-- `src/harness/fix/index.js` 里"保留常量只为兼容旧测试引用"的常量
+- `src/harness/dev/index.js` 的 `CTX_KEEP_TAIL`，自 2026-10-15 起不再使用，只剩一处导出、没有调用方或测试引用
 
 ## 相关文档
 

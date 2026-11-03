@@ -13,15 +13,15 @@ import {
 /**
  * 同步收藏时向协议端请求的条数。
  *
- * ⚠️ 这个数**不该**跟 `promptMaxStickers` 挂钩（R129 修）。`promptMaxStickers` 是
- * 「每次往提示词里列几个表情」——一个**提示词预算**设置，默认 10；旧实现用
- * `promptMaxStickers * 10` 当拉取量（默认 100），等于让"提示词里想列几个"
- * 顺手决定了"本地库最多存几个"：收藏超过 100 张的用户每次同步都会把多出来的
- * 永久删掉。两件事没有关系，所以这里用独立的常量。
+ * 这个数不该跟 `promptMaxStickers` 挂钩。`promptMaxStickers` 是「每次往提示词里
+ * 列几个表情」，一个提示词预算设置，默认 10；旧实现用 `promptMaxStickers * 10`
+ * 当拉取量（默认 100），等于让"提示词里想列几个"顺手决定了"本地库最多存几个"：
+ * 收藏超过 100 张的用户每次同步都会把多出来的永久删掉。两件事没有关系，
+ * 所以这里用独立的常量。
  *
- * 500 是协议端的上限（旧代码里也是 `Math.min(500, …)`）。请求上限值还有个额外好处：
- * 「拿到的条数 < 请求的条数」就成了"服务端已经把收藏给完了"的可靠证据
- * （见 stickers.js 的 isStickerFetchComplete）—— 剪枝只在这条证据成立时才做。
+ * 500 是协议端的上限。请求上限值还有个额外好处：「拿到的条数 < 请求的条数」
+ * 就成了"服务端已经把收藏给完了"的可靠证据（见 stickers.js 的
+ * isStickerFetchComplete），剪枝只在这条证据成立时才做。
  */
 const SYNC_FETCH_COUNT = 500;
 
@@ -40,9 +40,9 @@ export function localStickerPath(raw) {
   if (!full.toLowerCase().startsWith(root.toLowerCase())) return null;
   try {
     if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return null;
-    // ⚠️ 必须校验**非空**（R130 修）：写入被中断会留下 0 字节的残骸，
-    //   它"存在且是文件"，于是会被当成可用的本地转存 —— 表情从此永久发不出去
-    //   （D2 每次同步都把它粘回来，也换不回远端直链）。
+    // 必须校验非空：写入被中断会留下 0 字节的残骸，它"存在且是文件"，
+    // 于是会被当成可用的本地转存，表情从此永久发不出去
+    // （每次同步都把它粘回来，也换不回远端直链）。
     if (fs.statSync(full).size <= 0) return null;
   } catch { return null; }
   return full;
@@ -51,8 +51,8 @@ export function localStickerPath(raw) {
 export class StickerManager {
   constructor(api) {
     this.api = api;
-    // entries 始终是**完整库**（含已隐藏条目）。隐藏只是把 id 记进 this.hidden，
-    // 由 visible() 在消费点摘出去 —— 详见 lib/stickers.js 的隐藏名单注释。
+    // entries 始终是完整库（含已隐藏条目）。隐藏只是把 id 记进 this.hidden，
+    // 由 visible() 在消费点摘出去，详见 lib/stickers.js 的隐藏名单注释。
     this.entries = loadStickerStore();
     this.hidden = loadHiddenSet();
     this.syncedAt = 0;
@@ -70,8 +70,8 @@ export class StickerManager {
    * @returns {{ok: boolean, id: string|null, alreadyHidden?: boolean}}
    */
   hide(ref) {
-    // ⚠️ 用**精确**匹配（`findStickerExact`），不用 findSticker 的 url 子串兜底 ——
-    //    删除是破坏性操作，模糊匹配会删错对象（详见 stickers.js 的 findStickerExact 注释）。
+    // 用精确匹配（`findStickerExact`），不用 findSticker 的 url 子串兜底：
+    // 删除是破坏性操作，模糊匹配会删错对象（详见 stickers.js 的 findStickerExact 注释）。
     const target = findStickerExact(this.entries, String(ref ?? ''));
     if (!target) return { ok: false, id: null };
     const alreadyHidden = isHidden(target, this.hidden);
@@ -99,19 +99,19 @@ export class StickerManager {
   }
 
   /**
-   * 把"本地转存"的表情图导出一份到**页面读得到的地方**（R130 修）。
+   * 把"本地转存"的表情图导出一份到页面读得到的地方。
    *
    * 病灶：查看器跑在 iframe 里，只有 `/plugin-panel/sticker/@data/`
    *   （= `<DATA_DIR>/plugin-data/sticker/`）这一条通道，而本地转存是
-   *   `file:///`，浏览器读不了 —— 所以面板上一律画占位。
-   *   这在 D2 之前影响不大（同步会把 url 覆盖回图床直链，能热链显示），
-   *   D2 让 url 稳定指向本地文件之后，**凡是发出过的表情在面板上就都看不见了**。
+   *   `file:///`，浏览器读不了，所以面板上一律画占位。
+   *   本地缓存还没接管 url 时影响不大（同步会把 url 覆盖回图床直链，能热链显示），
+   *   让 url 稳定指向本地文件之后，凡是发出过的表情在面板上就都看不见了。
    *   修发送健壮性反而弄坏了面板，所以这边必须补上。
    *
    * 做法：复制到 `plugin-data/sticker/img/`，由 buildViewSnapshot 换成
    *   `../@data/img/<name>`。该目录走的是既有通道，扩展名白名单里本来就有
-   *   png/jpg/webp/gif —— 不用动宿主，也不需要 ffmpeg/缩略图库。
-   *   ⚠️ 是**原样复制**不是压缩：表情本来就小（几十 KB），没必要引入图像依赖。
+   *   png/jpg/webp/gif，不用动宿主，也不需要 ffmpeg/缩略图库。
+   *   是原样复制不是压缩：表情本来就小（几十 KB），没必要引入图像依赖。
    *
    * @returns {Map<string,string>} id → 相对 URL（页面可直接拼到 src 上）
    */
@@ -145,8 +145,8 @@ export class StickerManager {
 
   /**
    * 清掉没人引用的缩略图。
-   * ⚠️ 两道保险：库为空时**完全不动**（否则一次加载时序问题就会把缩略图全删光）；
-   *     以及 10 分钟宽限（跟 pruneOrphanImages 一致），避免同步中途误删。
+   * 两道保险：库为空时完全不动（否则一次加载时序问题就会把缩略图全删光）；
+   * 以及 10 分钟宽限（跟 pruneOrphanImages 一致），避免同步中途误删。
    */
   #pruneThumbs(dir, wanted) {
     if (!(this.entries || []).length) return 0;
@@ -232,15 +232,15 @@ export class StickerManager {
   }
 
   /**
-   * D2：把"同步时被远端 url 覆盖回去"的本地转存路径换回来。
+   * 把"同步时被远端 url 覆盖回去"的本地转存路径换回来。
    *
-   * 病灶：`mergeStickerLibrary` 里是 `url: item.url || old.url` —— 远端有 url 就
+   * 病灶：`mergeStickerLibrary` 里是 `url: item.url || old.url`，远端有 url 就
    *   无脑覆盖。而 QQ 图床直链带 rkey，大约 1 小时过期，过期后表情就发不出去。
-   *   `ensureSendable` 本来会在**发送前**重新落地一份，但那要等到真要发的时候，
+   *   `ensureSendable` 本来会在发送前重新落地一份，但那要等到真要发的时候，
    *   而且落地失败的兜底链（get_image / 重新下载）在直链过期时也救不回来。
    *   更糟的是 `localFile` 以前没进 `normalizeStickerEntry`，存一轮就没了。
    *
-   * 改法：同步后逐个回填 —— 只要本地文件还在受控目录里，就用它，不信任远端直链。
+   * 改法：同步后逐个回填，只要本地文件还在受控目录里，就用它，不信任远端直链。
    * `localStickerPath` 顺带保证了路径没跑出 sticker-images/，免得回填成任意文件。
    *
    * @returns {number} 回填的条数
@@ -296,7 +296,7 @@ export class StickerManager {
   }
 
   /**
-   * 找一个**可用**的表情 —— 已隐藏的算找不到，这样发送/看图/备注都会被挡住，
+   * 找一个可用的表情：已隐藏的算找不到，这样发送/看图/备注都会被挡住，
    * 不会出现"删了还能发"的漏网之鱼。
    */
   async find(ref) {
@@ -307,7 +307,7 @@ export class StickerManager {
   }
 
   note(id, patch) {
-    // 已删除的表情不能再备注 —— 否则"删了还能改"，而且改 updatedAt 会让它
+    // 已删除的表情不能再备注，否则"删了还能改"，而且改 updatedAt 会让它
     // 在「按最近更新」排序里往前冒，等于删了个寂寞。
     const target = findStickerExact(this.entries, String(id ?? ''));
     if (target && isHidden(target, this.hidden)) return null;
@@ -327,7 +327,7 @@ export class StickerManager {
   async collect(messageId, { url, note = '', file = '', tags = [], usage = '' } = {}) {
     if (!this.config?.collectEnabled) throw new Error('收藏表情功能未开启');
     const now = Date.now();
-    // 标签归一化：模型可能给数组、也可能给"无语,翻白眼"这种串 —— 两种都收。
+    // 标签归一化：模型可能给数组、也可能给"无语,翻白眼"这种串，两种都收。
     // 上限 20 个（与 applyStickerNote 同口径），空串丢掉。
     const normTags = (Array.isArray(tags) ? tags : String(tags ?? '').split(/[,，、;；\s]+/))
       .map((t) => String(t ?? '').trim())

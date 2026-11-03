@@ -1,11 +1,10 @@
-// 「打包带走 / 接收整包」——把一个实例的扩展 + 数据装进一个 zip，另一个实例拆开收下。
+// 「打包带走 / 接收整包」：把一个实例的扩展 + 数据装进一个 zip，另一个实例拆开收下。
 //
-// ── 与 migrate.js 的分工 ──────────────────────────────────────────────────
-//   migrate.js 面向"同一台机器上的另一个 data 目录"（路径直读）。
-//   本模块面向"发给别人 / 换一台机器"：把同样的数据**装成包**，再加扩展。
-//   数据落地仍然复用 migrate.applyImport —— 一套合并/去重/备份逻辑，不另起炉灶。
+// 与 migrate.js 的分工：migrate.js 面向"同一台机器上的另一个 data 目录"（路径直读）；
+// 本模块面向"发给别人 / 换一台机器"，把同样的数据装成包，再加扩展。数据落地
+// 仍然复用 migrate.applyImport，一套合并/去重/备份逻辑，不另起炉灶。
 //
-// ── 包里有什么（v1）────────────────────────────────────────────────────────
+// 包里有什么（v1）：
 //   bundle.json                 来源、时间、逐项清单（人可读，脚本也可校验）
 //   modules/skills/<dir>/**     勾选的技能
 //   modules/plugins/<dir>/**    勾选的插件
@@ -13,16 +12,15 @@
 //   data/memory/**              群友印象
 //   data/*.json                 用量统计 / 提醒 / 表情配置
 //
-// ── 包里**永远没有**什么 ───────────────────────────────────────────────────
+// 包里永远没有什么：
 //   config.json（含 apiKey、QQ 号、网关 token、身份字段）
-//   plugin-data/（插件私有存储 —— account-pool 这类里面就是账号凭据）
+//   plugin-data/（插件私有存储，account-pool 这类里面就是账号凭据）
 //   logs / 各类 cache / *.lock / window-state（运行态，搬过去只会制造脏状态）
-//   这条边界写死在这里，不做成开关：一旦能"顺手带上密钥"，包就会被随手发出去。
+// 这条边界写死在这里，不做成开关：一旦能"顺手带上密钥"，包就会被随手发出去。
 //
-// ── 安全立场 ─────────────────────────────────────────────────────────────
-//   解包只解到 data/import-bundles/<id>/ 临时区，**不直接写 skills/ 或 plugins/**。
-//   扩展必须由调用方（routes）逐个送进锻造台过闸 + 人工确认，才可能落地。
-//   数据导入沿用 migrate 的备份 + 回滚。
+// 安全立场：解包只解到 data/import-bundles/<id>/ 临时区，不直接写 skills/ 或
+// plugins/。扩展必须由调用方（routes）逐个送进锻造台过闸 + 人工确认，才可能落地。
+// 数据导入沿用 migrate 的备份 + 回滚。
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -46,7 +44,7 @@ const BUNDLE_MAX_TOTAL = 512 * 1024 * 1024;
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_BUNDLE_ZIP_BYTES = 256 * 1024 * 1024;
 const SKIP_DIR = new Set(['node_modules', '.git', '.svn', '__pycache__', '.cache', '.forge-tmp']);
-// .forge-origin.json 记录的是「这台机器上它从哪来」——跟着包走会让接收端误以为
+// .forge-origin.json 记录的是「这台机器上它从哪来」，跟着包走会让接收端误以为
 // 自己也是从那个草稿装出来的。系统垃圾同理，一律不带。
 const SKIP_FILE = new Set(['.forge-origin.json', 'Thumbs.db', '.DS_Store']);
 
@@ -88,7 +86,7 @@ function readManifest(dir) {
       if (t.charCodeAt(0) === 0xFEFF) t = t.slice(1);
       const j = JSON.parse(t);
       if (j && typeof j === 'object') return { manifest: j, file: name };
-    } catch { /* 清单坏了就当没有 —— 打包侧不做修复，那是锻造台的事 */ }
+    } catch { /* 清单坏了就当没有，打包侧不做修复，那是锻造台的事 */ }
   }
   return null;
 }
@@ -402,7 +400,7 @@ export function inspectBundle({ filePath = '', buffer = null } = {}) {
     return { ok: false, error: `解包失败：${e.message}` };
   }
 
-  // 以**磁盘上实际存在的目录**为准列模块（不照抄清单：清单可能被改过，
+  // 以磁盘上实际存在的目录为准列模块（不照抄清单：清单可能被改过，
   // 而且用户要看到的是"这个包里真的有什么可以装"）。
   const modules = [];
   for (const kind of ['skill', 'plugin']) {
@@ -433,7 +431,7 @@ export function inspectBundle({ filePath = '', buffer = null } = {}) {
 
   // 数据侧复用 migrate 的扫描：能给出"源有几条 / 目标有几条 / 会多出多少"，
   // 接收端据此决定要不要导、导哪些会话。
-  // 只有模块、没有数据的包是合法形态（有人只想送扩展）—— 不要把它报成"扫描失败"。
+  // 只有模块、没有数据的包是合法形态（有人只想送扩展），不要报成"扫描失败"。
   const dataRoot = path.join(root, 'data');
   let scan = null;
   if (fs.existsSync(dataRoot)) {

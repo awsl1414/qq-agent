@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>QQ Agent 悬浮窗</title>
   <!-- CSP 与 ui/index.html 同口径（src/app.js 的静态服务还会以 HTTP 头再下发一份，
-       两份取交集）。这里放行内联样式（style-src 'unsafe-inline'）—— 小窗刻意不引
-       /style.css：主样式 8.8k 行是为整个控制台准备的，一张小卡片用不上，
-       每次开窗全量拉一遍纯浪费。脚本必须是外链（script-src 没有 unsafe-inline）。 -->
+       两份取交集）。这里放行内联样式（style-src 'unsafe-inline'）， 小窗刻意不引
+       /style.css：主样式是给整个控制台准备的，一张小卡片用不上。
+       脚本必须是外链（script-src 没有 unsafe-inline）。 -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'" />
   <style>
     /* 主题变量（深色为默认；主题由 JS 按后端 config.ui.theme 切 data-theme）。
@@ -16,7 +16,7 @@
       --card-top: #1e2532;                 /* 卡片顶部（渐变亮端） */
       --card-bg: #141821;                  /* 卡片底部（渐变暗端） */
       /* 同两色的 rgb 通道 + alpha：主进程按 widget.opacity 调 alpha 实现
-         背景不透明度（30~100%，默认档 50%）。这里是首帧的初值 —— 取 0.5
+         背景不透明度（30~100%，默认档 50%）。这里是首帧的初值，取 0.5
          与默认档一致：透明窗口刚开时不会先闪一下不透明深色卡。
          transparent 关掉时 alpha<1 会叠在 mica 毛玻璃背板上（见 main.js
          createWidgetWindow），得到了磨砂效果。 */
@@ -37,15 +37,14 @@
       /* 卡片圆角只有一个来源（与 electron/main.js createWidgetWindow 对齐）：
          · 默认（真透明，html 上没类）→ DWM 不参与分层窗口的圆角，页面画 12px；
          · 不透明 / 毛玻璃（html.wd）→ 圆角由 Win11 DWM 裁，页面必须画直角。
-           页面再画 12px 圆弧会跟 DWM 的 8px 圆弧对不上，两弧之间露出一片窗口底色
-           —— 用户反馈的"角上一块黑"就是它。
+           页面再画 12px 圆弧会跟 DWM 的 8px 圆弧对不上，两弧之间露出一片窗口底色。
          ⚠️ 默认值取"页面画圆角"而不是直角：配置是页面起来后异步拉的，若默认直角，
-         真透明档在首帧会先闪一下方角。反过来则不会 —— 不透明档里 DWM 的 8px 裁切
+         真透明档在首帧会先闪一下方角。反过来则不会：不透明档里 DWM 的 8px 裁切
          比页面的 12px 更紧，多画的那点圆弧直接被裁掉，看起来完全一样。 */
       --wcard-radius: 12px;
       /* 描边也要跟着圆角来源走：DWM 档下页面是直角矩形，1px 描边沿着方形边缘画，
          会被 DWM 的 8px 圆弧从四角切掉半截（边缘线走到角上突然断掉，比没有还难看）。
-         所以 DWM 档干脆不画描边 —— 边缘交给 DWM 的裁切 + 系统阴影。 */
+         所以 DWM 档干脆不画描边，边缘交给 DWM 的裁切 + 系统阴影。 */
       --wcard-border: 1px solid var(--line);
     }
     /* widget.js 每次拉到 /api/config 后按 widget.transparent **取反**挂/摘这个类 */
@@ -77,7 +76,7 @@
       -webkit-user-select: none;
     }
     /* 整卡可拖（主进程无边框窗口，没有标题栏可抓）。
-       副作用：卡片内不能选中文字 —— 状态卡片没有这个需求，可接受。 */
+       副作用：卡片内不能选中文字。状态卡片没有这个需求，可接受。 */
     .wcard {
       -webkit-app-region: drag;
       position: relative;        /* 自绘菜单 absolute inset:0 的基准（否则会以视口为基准） */
@@ -90,11 +89,11 @@
       background: linear-gradient(165deg, rgba(var(--card-top-rgb), var(--card-alpha)), rgba(var(--card-bg-rgb), var(--card-alpha)) 62%);
       border: var(--wcard-border);
       border-radius: var(--wcard-radius);
-      /* 这里原有一条 box-shadow，**画不出来**：卡片 height:100% 铺满窗口，
-         body 又是 overflow:hidden，28px 的外阴影全被裁掉，纯属死代码。
+      /* 不要给 .wcard 加 box-shadow：卡片 height:100% 铺满窗口，
+         body 又是 overflow:hidden，外阴影全被裁掉，画不出来。
          窗口的立体感在不透明档由 DWM 的窗口阴影提供（见 main.js）；
-         真透明档是分层窗口，DWM 一般不给阴影，要留阴影得给窗口留内边距 ——
-         那会把卡片整体缩小一圈，不值当。别把这条加回来。
+         真透明档是分层窗口，DWM 一般不给阴影，要留阴影得给窗口留内边距，
+         那会把卡片整体缩小一圈，不值当。
          ⚠️ backdrop-filter 在 Windows 的透明窗口上**糊不到桌面**（Chromium 拿不到
          窗口背后的像素），只能糊页面内部的东西。真想要"磨砂透明"，用不透明档 +
          acrylic 背板（见 main.js），不要指望这一行。 */

@@ -1,7 +1,7 @@
 // 思考/推理参数方言表。
 //
 // 为什么需要"方言"这一层：同一件事（让模型先思考再回答）在各家的参数名完全不同，
-// 而且**发错参数会被网关直接 400 拒绝**，不是被忽略。常见写法：
+// 而且发错参数会被网关直接 400 拒绝，不是被忽略。常见写法：
 //   DeepSeek 思考模型   thinking: { type: 'enabled' | 'disabled' }
 //   Qwen / 通义         enable_thinking: true / false（+ thinking_budget）
 //   智谱 GLM            thinking: { type: 'enabled' }
@@ -41,7 +41,7 @@ export const MODEL_RULES = [
   { dialect: 'gemini', host: null, model: /gemini/i, supports: ['off', 'on', 'budget'] },
   { dialect: 'openrouter', host: /openrouter\.ai$/i, model: /./, supports: ['effort', 'budget'] },
   { dialect: 'xai', host: /x\.ai$/i, model: /grok/i, supports: ['effort'] },
-  // 中转站常见：模型名带 deepseek/qwen 前缀但域名是自己的 —— 上面 host:null 的规则已覆盖
+  // 中转站常见：模型名带 deepseek/qwen 前缀但域名是自己的，上面 host:null 的规则已覆盖
   { dialect: 'generic', host: null, model: /./, supports: [] }
 ];
 
@@ -84,12 +84,12 @@ export function isOllamaEndpoint(baseUrl) {
 /**
  * 识别方言。返回 { dialect, label, supports, reason }。
  *
- * ⚠️ 必须**两轮匹配**（先域名、后模型名）来落实"域名优先"：
- *   规则表里 `host: null` 的模型名规则（如 claude / gemini / qwen）排在
- *   具体网关规则（openrouter）之前，单轮"从上往下第一个命中"会让
- *   `openrouter.ai` + `anthropic/claude-3.5-sonnet` 被判成 anthropic 直连，
- *   于是发出 `thinking:{...}` 而不是 OpenRouter 的 `reasoning:{...}` ——
- *   网关 400，思考模式实际失效（还要多打一次 API 去降级重试）。
+ * 必须两轮匹配（先域名、后模型名）来落实"域名优先"：
+ * 规则表里 `host: null` 的模型名规则（如 claude / gemini / qwen）排在
+ * 具体网关规则（openrouter）之前，单轮"从上往下第一个命中"会让
+ * `openrouter.ai` + `anthropic/claude-3.5-sonnet` 被判成 anthropic 直连，
+ * 于是发出 `thinking:{...}` 而不是 OpenRouter 的 `reasoning:{...}`，
+ * 网关 400，思考模式实际失效（还要多打一次 API 去降级重试）。
  */
 export function detectDialect({ baseUrl = '', model = '' } = {}) {
   const host = hostOf(baseUrl) || String(baseUrl || '').toLowerCase();
@@ -195,7 +195,7 @@ export function buildThinkingParams({ mode = 'auto', dialect = 'generic', effort
       break;
     }
     case 'ollama': {
-      // Ollama 的 think 参数只在新版本支持，且网关常拒绝未知字段 ——
+      // Ollama 的 think 参数只在新版本支持，且网关常拒绝未知字段，
       // 只在明确要求开启时才发
       if (m === 'on') { params.think = true; applied = true; }
       break;
@@ -209,7 +209,7 @@ export function buildThinkingParams({ mode = 'auto', dialect = 'generic', effort
   return { params, omitTemperature, applied };
 }
 
-/** 明确列出本 Skill 会往请求体里加的键（降级重试时要把它们摘掉）。 */
+/** 明确列出本插件会往请求体里加的键（降级重试时要把它们摘掉）。 */
 export const THINKING_BODY_KEYS = ['thinking', 'enable_thinking', 'thinking_budget', 'reasoning_effort', 'reasoning', 'think', 'extra_body'];
 
 /** 从请求体里摘掉思考相关字段（降级重试用）。 */
@@ -224,26 +224,26 @@ export function stripThinkingParams(body = {}) {
  * 要兼容三种字段写法：reasoning_effort / ReasoningEffort / "reasoning effort"
  * （商汤就是回 `field ReasoningEffort invalid` 的驼峰写法，只认下划线会漏判）。
  *
- * ⚠️ 判据不能太宽：早先用「只要文本里出现 thinking 且出现 invalid」，
- * 于是 `invalid model name: deepseek-thinking` 这种**模型名错误**也会被当成
- * "思考参数被拒" → 白白多打一次 API（还会把有用的错误信息掩盖掉）。
- * 现在要求字段名与拒绝词出现在**同一个片段**里，且片段看起来在说"参数/字段"。
+ * 判据不能太宽：早先用「只要文本里出现 thinking 且出现 invalid」，
+ * 于是 `invalid model name: deepseek-thinking` 这种模型名错误也会被当成
+ * "思考参数被拒"，白白多打一次 API（还会把有用的错误信息掩盖掉）。
+ * 现在要求字段名与拒绝词出现在同一个片段里，且片段看起来在说"参数/字段"。
  */
 export function looksLikeThinkingRejection(text) {
   const t = String(text || '');
   if (!t) return false;
 
-  // (?<![-\w]) —— 字段名必须是**独立词**。
+  // (?<![-\w])：字段名必须是独立词。
   // 这条挡住的正是 `invalid model name: deepseek-thinking`：那里的 thinking
   // 是模型名的一部分（前面是连字符），不是参数名，不该触发降级重试。
   const FIELD = '(?<![-\\w])(?:thinking|reasoning[\\s_-]*effort|reasoning[\\s_-]*content|enable[\\s_-]*thinking|budget[\\s_-]*tokens|include[\\s_-]*thoughts|extra_body|思考)';
   const REFUSAL = '(?:invalid|unknown|unrecognized|unsupported|not\\s+support(?:ed)?|unexpected|unused|未知|不支持|无效|无法识别|多余)';
 
-  // 1) 「字段 X 不合法」/「X 是未知参数」——字段名与拒绝词在同一小段内
+  // 1) 「字段 X 不合法」/「X 是未知参数」：字段名与拒绝词在同一小段内
   const near = new RegExp(`${FIELD}[^。.\\n]{0,24}${REFUSAL}|${REFUSAL}[^。.\\n]{0,24}${FIELD}`, 'i');
   if (near.test(t)) return true;
 
-  // 2) 引号形态：「'thinking' is not supported」——字段名被引号包起来
+  // 2) 引号形态：「'thinking' is not supported」，字段名被引号包起来
   const quoted = new RegExp(`["'\`]${FIELD}["'\`][^。.\\n]{0,24}${REFUSAL}`, 'i');
   return quoted.test(t);
 }

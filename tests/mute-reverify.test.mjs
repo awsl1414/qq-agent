@@ -1,22 +1,22 @@
-// 禁言复检集成测试（2026-10-22 晚，用户实测反馈「识别完禁言之后无法识别解禁」）。
+// 禁言复检集成测试（用户实测反馈「识别完禁言之后无法识别解禁」）。
 //
-// 背景：快路径回答"禁言中"时整条链短路，缓存/查询兜底永远轮不到。而禁言记录
-// 有两种翻不动的：时长未知的（F4 发送被拒兜底记的，永不到期）、有时长但被
-// 提前解禁且通知丢了的。复检逻辑：对"认为禁言中"的会话每 60s 用协议端查询
-// （no_cache 强制刷新）核一次，查到未禁言且记录够久就清除。
+// 快路径回答"禁言中"时整条链短路，缓存/查询兜底永远轮不到。而禁言记录有两种
+// 翻不动的：时长未知的（发送被拒兜底记的，永不到期）、有时长但被提前解禁且通知
+// 丢了的。复检逻辑：对"认为禁言中"的会话每 60s 用协议端查询（no_cache 强制刷新）
+// 核一次，查到未禁言且记录够久就清除。
 //
 // 本测试驱动真实 Orchestrator（#wakeInner 的禁言闸），stub 掉 store/sender，
 // 用可变的 shut_up_timestamp 模拟"禁言中/已解禁"，用可控的时钟偏移模拟
 // "记录建立了多久 / 距上次查询多久"。
 //
-// 运行：node --test tests/mute-reverify.test.mjs   （在 resources/app 目录下）
+// 运行：node --test tests/mute-reverify.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-// 数据目录指向临时位置（必须在 import config 之前 —— config.js 在加载期解析）
+// 数据目录指向临时位置（必须在 import config 之前，config.js 在加载期解析）
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qqagent-mute-reverify-'));
 process.env.QQ_AGENT_DATA_DIR = tmpDir;
 

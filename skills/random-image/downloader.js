@@ -1,10 +1,9 @@
-// setu 下载基础设施（从 setu.js 提取）：CDN 镜像管理、代理回退、临时文件、图片下载、去重源。
-// 依赖：config.js（常量）、util.js（detectImageMime）、safe-fetch.js（safeFetchBinary）
+// setu 下载基础设施：CDN 镜像管理、代理回退、临时文件、图片下载、去重源。
+// 依赖：config.js（常量）、safe-fetch.js（safeFetchBinary）
 import fs from 'node:fs';
 import path from 'node:path';
 import { safeFetchBinary } from '../../src/safe-fetch.js';
-// detectMime：项目的图片类型嗅探（按魔数判断，不看扩展名）。
-// 原社区版从 util.js 取 detectImageMime，本项目该函数位于 image-type.js 且名为 detectMime。
+// detectMime 按魔数判断图片类型，不看扩展名。
 import { detectMime } from '../../src/image-type.js';
 import {
   TMP_DIR, TMP_MAX_AGE_MS, IMAGE_UA, IMAGE_REFERER,
@@ -32,7 +31,7 @@ export function validateImageIntegrity(buf) {
     const t = buf.length;
     if (t < 12) return false;
     // PNG 以 IEND chunk 结尾：长度(00 00 00 00) + "IEND"(49 45 4E 44) + CRC(AE 42 60 82，IEND 的 CRC 是固定值)。
-    // 'I' 最早出现在 t-8（恰好结尾）处，尾部有冗余字节时更靠前 —— 从 t-8 向前扫到 72 字节窗口，
+    // 'I' 最早出现在 t-8（恰好结尾）处，尾部有冗余字节时更靠前。从 t-8 向前扫到 72 字节窗口，
     // 对 i 要求 i≥4（i-4 是长度字段下标）且 i+7≤t-1。
     for (let i = t - 8; i >= Math.max(4, t - 72); i--) {
       if (buf[i - 4] === 0x00 && buf[i - 3] === 0x00 && buf[i - 2] === 0x00 && buf[i - 1] === 0x00
@@ -289,7 +288,7 @@ export class SetuSource {
   }
 
   /**
-   * 冷却检查 + 占位，**必须原子完成**（单线程 JS 内同步执行，天然原子）。
+   * 冷却检查 + 占位必须原子完成（单线程 JS 内同步执行，天然原子）。
    * 之前"入口检查 cooldownActive → 全部下载完成才 markSent"是两步，
    * 两个并发请求会在对方的下载窗口内都通过检查，冷却防刷屏被穿透。
    * 占位有效期即冷却窗口本身：请求挂死也不会永久锁死发图。
@@ -329,7 +328,7 @@ export const defaultSetuSource = new SetuSource();
 /**
  * 候选按序下载：从质量最优的候选开始（调用方保证 urls 已按优先级排序），
  * 一批 max(limit, 4) 个并行下载（4 = 超采兜底，Pixiv 原图有下载失败率），
- * 成功者**按质量顺序**取用；不足 limit 张时继续下一批，直到候选用尽。
+ * 成功者按质量顺序取用；不足 limit 张时继续下一批，直到候选用尽。
  */
 export async function pickBestImages(urls, limit, downloadOne, isAcceptable, onAccepted) {
   const picked = [];

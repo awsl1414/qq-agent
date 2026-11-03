@@ -1,17 +1,17 @@
-// 〔信息架构 · 照原型 v2〕—— 一级 5 项 / 左栏每页一份 / 全屏页
+// 〔信息架构 · 照原型 v2〕，一级 5 项 / 左栏每页一份 / 全屏页
 'use strict';
 /* ══════════════════════════════════════════════════════════════
- 原型 v2 与 0.4.5 的差别只在「外壳」，不在数据：
+ 原型 v2 与 0.4.5 的差别只在外壳，不在数据：
    · 9 个页面（sessions/chats/memory/usage/skills/plugins/harness/connection/
      settings）两边同名，16 个渲染器一行不用改；
    · 差的是一级入口（9 平铺 → 5 平铺）、左栏（无 → 每页一份）、
      会话首页（列表+聊天 → PCL 启动页）+ 聊天进全屏页。
 
- 本段是唯一的新增逻辑层，做法是**包裹**而不是改写：
-   · switchTab 是全局函数声明（00-core.js），这里换成 wrapper →
+ 本段是唯一的新增逻辑层，做法是包裹而不是改写：
+   · switchTab 是全局函数声明（00-core.js），这里换成 wrapper，
      每次切页后同步顶栏高亮 / 左栏 / 全屏页，00-core 本体零改动；
    · 二级导航项复用 .tab 契约：带 data-tab 即可被 switchTab 认知，
-     但**不加 .tab 类**，避免吃到顶栏胶囊样式与 $$('.tab') 的 active 覆盖。
+     但不加 .tab 类，避免吃到顶栏胶囊样式与 $$('.tab') 的 active 覆盖。
  ══════════════════════════════════════════════════════════════ */
 (function () {
   var $ = function (s) { return document.querySelector(s); };
@@ -21,139 +21,101 @@
   var GROUPS = [
     { key: 'sessions', label: '会话', home: 'sessions', subs: ['sessions', 'chats', 'memory'] },
     { key: 'usage',    label: '用量', home: 'usage',    subs: ['usage'] },
-    // r91：导航栏「拓展」改名为「下载」。
-    // r97：左栏**只留两个市场页**，撤掉 r94 加的「已安装（技能 / 插件）」那段。
-    //   起因：r95 把"本机技能/插件的开关"整块搬进了「会话设置 → 扩展」（用户当时给的
-    //   参照是 PCL「版本设置 → Mod 管理」）；同一件事在「下载」页左栏再列一遍就成了
-    //   重复入口 —— 用户报「下载界面的这玩意是不是有点多余」。
-    //   ⚠️ R102 复盘 r97：当时只想着"别重复"，却把「管已装的」入口撤到了**看不见**的
-    //   地方 —— 它只剩「会话设置 → 扩展」一条路，而进会话设置要先点会话、再点齿轮，
-    //   绝大多数用户走不到（用户反馈原话：「有不少人反馈说找不到插件的位置，就是
-    //   不知道在哪个界面开关插件」）。市场的绿「已安装」钮又是个 disabled 的死按钮：
-    //   点不动，也不告诉你去哪开。
-    //   现在分工改成：**下载页左栏 = 一段「市场」（装新的）+ 一段「已安装」（管已装的）**，
-    //   后者直接落到带开关的 #view-skills / #view-plugins；市场卡片上那颗绿钮同时
-    //   改成可点的「管理」，点了跳过去并高亮那一张卡（见 16-market.js）。
-    // subs 仍含 skills/plugins —— groupOfTab 靠它把 switchTab('skills'/'plugins')
-    //   归到本组（否则顶栏高亮会掉回「会话」）。这两个页仍存在，只是入口在别处：
-    //   ① 会话设置 → 扩展 → 右栏「打开完整管理页」 ② 设置 → 扩展 的同名按钮。
+    // 「下载」页左栏分两段：市场（装新的）/ 已安装（管已装的）。
+    // 已安装段直接落到带开关的 #view-skills / #view-plugins；市场卡片上那颗绿钮
+    // 是「管理」，点了跳过去并高亮那一张卡（见 16-market.js）。
+    // subs 仍含 skills/plugins：groupOfTab 靠它把 switchTab('skills'/'plugins')
+    // 归到本组，否则顶栏高亮会掉回「会话」。
     { key: 'ext',      label: '下载', home: 'skillmarket',
       subs: ['skills', 'plugins', 'personas', 'skillmarket', 'pluginmarket', 'personamarket'],
       navSubs: ['skillmarket', 'pluginmarket', 'personamarket', 'skills', 'plugins', 'personas'] },
-    // 2026-10-18：harness ↔ 连接页对调。萌新点「工具」绝大多数是去看
-    // 机器人连上没有 / 该怎么装协议端，harness（自检 + 对话审查）是进阶排查
-    // 工具 —— home 决定点一级入口先进哪个页，subs 顺序决定左栏排列，两处一起换。
-    // 2026-10-23：页签 snowluma → connection（协议端改由用户自装，这一页只报连接）。
-    // 2026-10-24：桌宠并进本组（原为独立一级入口「data-top=pet」）。顶栏 6 项 → 5 项，
-    //   左栏 2 项 → 3 项：连接 / 自检 / 桌宠。桌宠与另两项同为"机器人跑不跑得起来 /
-    //   长什么样"的杂务，放在一级平铺反而挤掉了常用入口。
+    // home 决定点一级入口先进哪个页，subs 顺序决定左栏排列，两处一起改。
+    // 萌新点「工具」绝大多数是去看机器人连上没有、该怎么装协议端，
+    // harness（自检 + 对话审查）是进阶排查工具，所以连接在前。
+    // 桌宠与另两项同为"机器人跑不跑得起来 / 长什么样"的杂务，放在这里。
     { key: 'ops',      label: '工具', home: 'connection', subs: ['connection', 'harness', 'desktop-pet'] },
-    // 壁纸页（内置壁纸模块（src/wallpaper））。
-    // 2026-10-23：从「设置」组的二级页改成**独立一级入口**（放在设置右边）。
-    //   原因：settings 组的左栏渲染被 syncChrome 关掉了（settings 用自己那份
-    //   #settings-sidebar 分区菜单），所以 wallpaper 虽然写在 subs 里，
-    //   左栏永远不会画出「壁纸」这一项 —— 整页等于没有入口，用户报「切换不了壁纸」。
-    //   提成一级之后：顶栏点「壁纸」直接进页，左栏也不需要（见 syncChrome 的 is-none）。
+    // 壁纸页（内置壁纸模块 src/wallpaper）是独立一级入口。
+    // settings 组的左栏渲染被 syncChrome 关掉了（设置页用自己那份 #settings-sidebar），
+    // 所以写在 settings 的 subs 里左栏永远画不出「壁纸」，整页等于没有入口。
+    // 提成一级之后：顶栏点「壁纸」直接进页，左栏不需要（见 syncChrome 的 is-none）。
     { key: 'wallpaper', label: '壁纸', home: 'wallpaper', subs: ['wallpaper'] },
-    // 2026-10-24：原「桌宠」独立分组已撤 —— desktop-pet 并进 ops 组（见上面那条注释）。
-    //   groupOfTab 找不到归属会回退成「会话」组，顶栏高亮会掉到会话上，所以这里必须登记。
+    // groupOfTab 找不到归属会回退成「会话」组，顶栏高亮会掉到会话上，所以必须登记。
     { key: 'settings', label: '设置', home: 'settings', subs: ['settings'] }
   ];
   var SUB_LABEL = {
     sessions: '会话', chats: '存档', memory: '记忆', usage: '用量', skills: '技能',
     plugins: '插件', skillmarket: '技能下载', pluginmarket: '插件下载', personamarket: '人设下载',
-    // 2026-10-22：「已安装」段的第三项。技能/插件管开关，人设管"用哪一个"，
-    // 三者是同一层的东西，所以都挂在「已安装」下而不是另开一段。
+    // 技能/插件管开关，人设管"用哪一个"，三者是同一层的东西，都挂在「已安装」下。
     personas: '人设',
-    // 2026-10-20：曾改成 '自检'（页内三个模块叫「自检系统 / 对话审查 / 自动修复」，
-    // 取「自检」当页签名）。
-    // 2026-10-21 改回 'harness'：内置化后该页是**工具链工作台**（自检 / 对话审查 /
-    // 自动修复 / 锻造 / 工单 五块），「自检」已盖不住页内内容 —— 再叫自检，点进去
-    // 看到的却是一整排工单/锻造，名不副实。旁边 SnowLuma 本来就是英文名，一致。
-    // 2026-10-23 萌新化再改「自检」：左栏是小白第一眼看到的地方，英文 harness
-    //   等于没有指引；页内多模块由子页签自己呈现，入口名只负责"看病查问题"。
-    //   hover 说明走 navItemHtml 里给 harness 加的 title（结构上没有副标题位）。
+    // 英文 harness 对小白等于没有指引，页内多模块由子页签自己呈现，
+    // 入口名只负责"看病查问题"。hover 说明走 navItemHtml 里给 harness 加的 title。
     harness: '自检', connection: '连接', settings: '设置',
-    // 2026-10-24：桌宠并进「工具」左栏，需要左栏能显示的名字（此前它在一级入口，
-    //   顶栏按钮自带文字，这一项从未被用过）。
     'desktop-pet': '桌宠'
   };
   var SUB_ICON = {
-    // r108：与「会话选择」全屏页「页面」三项的图标对齐同一套设计（会话=双气泡 /
-    //   存档=归档箱 / 记忆=数据库圆柱），避免同一概念在两侧长成两副样子。
+    // 与「会话选择」全屏页「页面」三项的图标对齐同一套设计（会话=双气泡 /
+    // 存档=归档箱 / 记忆=数据库圆柱），避免同一概念在两侧长成两副样子。
     sessions: 'M5 4 h5 a2 2 0 0 1 2 2 v3 a2 2 0 0 1 -2 2 h-5 a2 2 0 0 1 -2 -2 v-3 a2 2 0 0 1 2 -2 z M14 13 h5 a2 2 0 0 1 2 2 v3 a2 2 0 0 1 -2 2 h-5 a2 2 0 0 1 -2 -2 v-3 a2 2 0 0 1 2 -2 z',
     chats: 'M2 4h20v4H2z M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8 M10 12h4',
     memory: 'M12 3c4.97 0 9 1.34 9 3s-4.03 3-9 3-9-1.34-9-3 4.03-3 9-3z M3 6v12c0 1.66 4.03 3 9 3s9-1.34 9-3V6 M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3',
     skills: 'M12 3l2.2 5.4L20 10l-5.8 1.6L12 17l-2.2-5.4L4 10l5.8-1.6z',
     plugins: 'M10 4h4v3a2 2 0 1 0 4 0h2v6h-3a2 2 0 1 0 0 4h3v3H7v-3a2 2 0 1 0 0-4H4V7h3a2 2 0 1 0 3 0z',
-    // 市场：下载箭头入库（r91 改名为「下载」子页）
+    // 市场：下载箭头入库
     skillmarket: 'M12 4v10M8 10l4 4 4-4M5 18h14',
     pluginmarket: 'M12 4v10M8 10l4 4 4-4M5 18h14',
-    // r113：人设市场**不能沿用上面那枚下载箭头** —— 技能/插件/人设三个并列时，
-    //   同一个图标出现三次等于没有区分度，用户会以为是同一个页面。
-    //   换成一枚人形（头 + 肩），与"人设"字面对上，也和左栏「人设与记忆」段的图标不同路。
+    // 人设市场不能沿用上面那枚下载箭头：技能/插件/人设三个并列时，
+    // 同一个图标出现三次等于没有区分度。用一枚人形（头 + 肩），与"人设"字面对上。
     personamarket: 'M12 10.6a3.3 3.3 0 1 0 0-6.6 3.3 3.3 0 0 0 0 6.6zM4.8 19.5c.9-3.2 3.7-5 7.2-5s6.3 1.8 7.2 5',
-    // 2026-10-22：「已安装的人设」。刻意不用 personamarket 那枚单人形 ——
-    //   两者在左栏上下紧挨着，同一个图标等于没有区分度。改成「人形 + 右侧三条
-    //   列表线」：左边是"这一个人"，右边是"一串"，对上"人设库"的语义。
+    // 「已安装的人设」也刻意不用 personamarket 那枚单人形：两者在左栏上下紧挨着。
+    // 改成「人形 + 右侧三条列表线」，左边是"这一个人"，右边是"一串"。
     personas: 'M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 19c.8-2.8 3.2-4.4 6-4.4s5.2 1.6 6 4.4M17 7h4M17 11h4M17 15h4',
     harness: 'M12 3v4M12 17v4M3 12h4M17 12h4M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6',
-    // 壁纸（内置壁纸模块（src/wallpaper））：相框 + 里面一座山，标准"图片/壁纸"语义。
+    // 壁纸（内置壁纸模块 src/wallpaper）：相框 + 里面一座山。
     wallpaper: 'M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z M7.5 10.2a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2z M3 16.5l4.8-4.3a1.6 1.6 0 0 1 2.1 0L15 17M13.2 14.6l2.6-2.3a1.6 1.6 0 0 1 2.1 0L21 15.5',
     // 桌宠（desktop-pet 插件）：与 index.html 顶栏那枚「猫头」同一套路径。
     'desktop-pet': 'M4 11l1.4-6 4.6 3h4l4.6-3L20 11v3a6 6 0 0 1-6 6h-4a6 6 0 0 1-6-6z M9.2 14h.01M14.8 14h.01',
     connection: 'M12 3v18M4 7l16 10M20 7L4 17',
-    /* r96：与顶栏导航「设置」项（index.html #tabs 的 data-top="settings"）**同一枚**图标。
-       它是两段 path（内圆 + 齿轮外圈）；此前「打开完整设置页」只抄了第一段内圆，
-       15px 下渲染成 4.4px 的小圈，看着像个列表圆点，与上面 ✦ 技能 / 插件 的真图标不是一路。 */
+    /* 与顶栏导航「设置」项（index.html #tabs 的 data-top="settings"）同一枚图标。
+       它是两段 path（内圆 + 齿轮外圈）；只抄第一段内圆的话，15px 下会渲染成
+       4.4px 的小圈，看着像个列表圆点。 */
     settings: 'M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z M19.4 14.5a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.11a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.11a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.11a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.11a1.7 1.7 0 0 0-1.56 1.03z'
   };
   /* 「用量」是单页，左栏照 PCL 做成本页分块的导航。
-     ⚠️ 2026-10-09（r29）：「锚点滚动」改成「同页切换」——
-        三块原本同时铺在同一个滚动区里（实测 #usage-page 内容 974px / 视口 826px），
-        点左栏只是把滚动条推 148px，画面里的三张图一张没少，用户报「这仨显得很没用」。
-        现在点哪一项就只显示哪一块，左栏才是真的导航。
-        dim 取值必须与 04-archive-usage.js 里 [data-block] 的三个值逐字一致。 */
+     点哪一项就只显示哪一块（早先三块同时铺在同一个滚动区里，点左栏只是推一下
+     滚动条，画面里的三张图一张没少）。
+     dim 取值必须与 04-archive-usage.js 里 [data-block] 的三个值逐字一致。 */
   var USAGE_ANCHORS = [
     { dim: 'days',   label: '按天',   icon: 'M4 19V5M4 19h16M8 16v-5M12 16V8M16 16v-3' },
     { dim: 'chats',  label: '按会话', icon: 'M4 5h16v11H8l-4 4z' },
     { dim: 'models', label: '按模型', icon: 'M4 7h16M4 12h10M4 17h7' },
-    // 2026-10-19：插件维度（token 归因）。dim 必须与 04-archive-usage.js 里
+    // 插件维度（token 归因）。dim 必须与 04-archive-usage.js 里
     // [data-block="plugins"] 与 style.css 的 data-udim 选择器逐字一致。
     { dim: 'plugins', label: '按插件', icon: 'M4 8h7v7H4zM13 4h7v7h-7zM13 13h7v7h-7zM4 17h7v3H4z' }
   ];
   var usageDim = 'days';     // 用户选中的维度（对齐原型 usageAnchor 默认 usage-day）
   /* ══════════ 全屏页 · 会话设置（真·按会话）══════════
-     ⚠️ 2026-10-09（r33）：这一页原先的做法是把 #settings-form **整体借过来**、
-        只显示全局的前三个分区（人设与记忆 / 聊天 / 工具与技能）。实测后果：
-          · 它和导航栏「设置」是**同一份内容**（同一个 DOM 节点被 appendChild 搬走），
-            用户原话「一个放全局设置，一个放对话的设置，二者不要重复」；
-          · 左栏「当前会话」一直显示「未选择会话」—— 它根本没绑定任何会话。
-        现在改成**真·按会话**：只放"能按单个会话覆盖"的项
-        （白名单归属 / 人设覆盖 / 响应档位 / 指令禁言 / 群成员屏蔽），
-        全局默认值仍只属于导航栏「设置」页，两页不再有重复内容。
-     ⚠️ 全局页那边**一个字符没动**（用户 r33 拍板）：设置→人设的「分会话按钮
-        网格」、设置→聊天→活跃设置里的分群档位，是"跨会话批量管理"的入口，
-        语义上属于全局页，保留。 */
+     这一页只放"能按单个会话覆盖"的项（白名单归属 / 人设覆盖 / 响应档位 /
+     指令禁言 / 群成员屏蔽），全局默认值仍只属于导航栏「设置」页，两页不重复。
+     全局页那边不动：设置→人设的「分会话按钮网格」、设置→聊天→活跃设置里的
+     分群档位，是"跨会话批量管理"的入口，语义上属于全局页。 */
 
   var setupChat = '';        // 当前正在配置的会话 chatKey（'' = 还没选）
 
-  /* ── r95：这一页左栏的「视图」────────────────────────────────────
-     'chat'  = 按会话的设置（默认，r33 起的正文）
+  /* ── 这一页左栏的「视图」────────────────────────────────────
+     'chat'  = 按会话的设置（默认，正文）
      'skill' / 'plugin' = 本机已安装的技能 / 插件（卡片 + 开关）
-     用户原话：「技能、插件这俩玩意能不能放到『会话设置』里面去」——
-     PCL 的对应关系是「启动页『版本设置』 → 左栏『Mod 管理』 → 列表」，
+     对应 PCL 的「启动页『版本设置』 → 左栏『Mod 管理』 → 列表」，
      所以入口做在左栏、列表出在右栏（同一页切换，不跳页）。 */
   var setupView = 'chat';
 
   /* 左栏「扩展」两项右侧的计数：本机已装几个 / 几个生效。
      取 state.skills（/api/skills 那一份），与「下载 → 技能 / 插件」页同源。
-     ⚠️ kind 为 null（自定义根目录）归入**技能**，与 renderModulePage 的归类逐字一致 ——
-        不然左栏说「技能 3 个」、点进去却列了 4 张卡。 */
+     kind 为 null（自定义根目录）归入技能，与 renderModulePage 的归类逐字一致，
+     否则左栏说「技能 3 个」、点进去却列了 4 张卡。 */
   function extStatOf(kind) {
     var st = { total: 0, on: 0 };
     // 人设的数据源是 /api/persona-templates（state.personaTemplates），
-    // 与技能/插件的 /api/skills 不是同一份 —— 统计口径交给 19-personas.js 的
+    // 与技能/插件的 /api/skills 不是同一份，统计口径交给 19-personas.js 的
     // personaStatOf()，免得这里再算一遍、两边慢慢漂开。
     if (kind === 'persona') {
       try {
@@ -174,7 +136,7 @@
     return st;
   }
   /* 左栏那一条：图标与「下载」页左栏用的是同一份 SUB_ICON，认起来是一回事。
-     aria-current 与 .on 同源（r86 的教训：视觉高亮读屏读不到）。 */
+     aria-current 与 .on 同源（视觉高亮读屏读不到）。 */
   function extEntryHtml(kind, label, icon) {
     var st = extStatOf(kind);
     var on = setupView === kind;
@@ -184,15 +146,15 @@
       '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="' + icon +
       '" stroke-linejoin="round" stroke-linecap="round"/></svg>' +
       '<span>' + label + '</span>' +
-      // 人设是单选，"生效"这个词对不上 —— 用"使用中"。技能/插件保持"生效"。
+      // 人设是单选，"生效"这个词对不上，用"使用中"。技能/插件保持"生效"。
       '<span class="su-ext-n">' + st.total + ' 个 · ' + st.on + (kind === 'persona' ? ' 使用中' : ' 生效') + '</span></button>';
   }
   /* 进「技能 / 插件」时补拉一次 /api/skills。
-     用户完全可能从没点过导航栏「下载」页 —— 那时 state.skills 还是空的，
+     用户完全可能从没点过导航栏「下载」页，那时 state.skills 还是空的，
      左栏会写「技能 0 个 · 0 生效」、右栏一张卡都没有，看着像"东西被我弄丢了"。
-     ⚠️ 只在这一页仍停在同一个视图时回写：拉取期间用户可能已经改点会话或关页，
-        不能把画面抢回来。extLoading 保证一次访问只拉一遍
-        （renderSetupPane 会在筛选/开关后反复重渲染，次次都拉就成轮询了）。 */
+     只在这一页仍停在同一个视图时回写：拉取期间用户可能已经改点会话或关页，
+     不能把画面抢回来。extLoading 保证一次访问只拉一遍
+     （renderSetupPane 会在筛选/开关后反复重渲染，次次都拉就成轮询了）。 */
   var extLoading = '';
   function refreshSetupExt(kind) {
     if (typeof loadSkillsStatus !== 'function') return;
@@ -201,14 +163,14 @@
     loadSkillsStatus().then(function () {
       if (!bigpage || bigpage.hidden || setupView !== kind) { extLoading = ''; return; }
       renderSetupNav();     // 左栏那两条的计数也要跟着更新
-      // ⚠️ extLoading 要等这次重画**结束**再放开：renderSetupPane 内部又会调
-      //    refreshSetupExt —— 提前清空就成了"渲染→拉取→渲染→拉取"的轮询。
+      // extLoading 要等这次重画结束再放开：renderSetupPane 内部又会调
+      // refreshSetupExt，提前清空就成了"渲染→拉取→渲染→拉取"的轮询。
       renderSetupPane();
       extLoading = '';
     }).catch(function () { extLoading = ''; });
   }
 
-  /* 标题条右侧那句话随视图换（'chat' 用 r33 的原话）。 */
+  /* 标题条右侧那句话随视图换。 */
   function setSetupCrumb(view) {
     var el = $('#bp-crumb');
     if (!el) return;
@@ -249,19 +211,19 @@
     if (k.kind === 'private') return '私聊 ' + k.id;
     return String(chatKey || '');
   }
-  /* 右栏标题用：名字（群号） / 群 群号 —— 既好认又能核对身份。 */
+  /* 右栏标题用：名字（群号） / 群 群号，既好认又能核对身份。 */
   function chatLabel(chatKey) {
     var nm = chatNameOfKey(chatKey), k = splitKey(chatKey);
     if (k.kind === 'group') return nm ? (nm + '（' + k.id + '）') : ('群 ' + k.id);
     if (k.kind === 'private') return nm ? (nm + '（' + k.id + '）') : ('私聊 ' + k.id);
     return String(chatKey || '');
   }
-  /* ── 白名单键归一化（r60）─────────────────────────────────────────
-     后端权威格式是**裸号**（src/app.js allowed() 直接 includes(String(id))，
+  /* ── 白名单键归一化 ──────────────────────────────────────────
+     后端权威格式是裸号（src/app.js allowed() 直接 includes(String(id))，
      设置页表单、跨会话发送工具同样按裸号比对）。此前 setupChatList 用精确
-     字符串去重、setAllowState 还写入带前缀的 chatKey —— 裸号与 group:号
+     字符串去重、setAllowState 还写入带前缀的 chatKey，裸号与 group:号
      在左栏里各渲染一行，就是用户看到的"两个相同的群"。读取时一律归一化、
-     写入时一律落裸号，两端格式从此不再分叉。 */
+     写入时一律落裸号，两端格式不再分叉。 */
   function bareIdOf(entry) {
     var m = String(entry).match(/^(?:group|private):(.+)$/);
     return m ? m[1] : String(entry);
@@ -274,7 +236,7 @@
     return map;
   }
   /* 可配置的会话清单：白名单(群 ∪ 私聊) 在前，state.chats 里其余的补在后面
-     （标记 inAllow=false —— 用户可能在会话列表里看到一个还没加白名单的群）。 */
+     （标记 inAllow=false，用户可能在会话列表里看到一个还没加白名单的群）。 */
   function setupChatList() {
     var seen = {}, out = [];
     Object.keys(allowMapOf()).forEach(function (k) { if (k && !seen[k]) { seen[k] = 1; out.push({ key: k, inAllow: true }); } });
@@ -295,7 +257,7 @@
     return Boolean(p.roleText || p.participation || p.customRules || p.systemPromptOverride);
   }
   /* 该群单独档位（滑条位置 0~100）；没有单独设置返回 null。
-     ⚠️ 后端只有 store.unifiedTier === false 时才看 groupSliderPos（src/config.js 的 `storeConfigForChat`）。 */
+     后端只有 store.unifiedTier === false 时才看 groupSliderPos（src/config.js 的 storeConfigForChat）。 */
   function groupSliderOf(chatKey) {
     var c = cfgNow(), k = splitKey(chatKey);
     var m = (c.store || {}).groupSliderPos || {};
@@ -305,7 +267,7 @@
     return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : null;
   }
   var TIER_TEXT = { 1: '仅艾特', 2: '+关键词', 3: '+随机', 4: '全响应' };
-  /* 该会话当前**实际生效**的档位摘要（含来源：本群单独 / 跟随全局）。 */
+  /* 该会话当前实际生效的档位摘要（含来源：本群单独 / 跟随全局）。 */
   function effectiveTierOf(chatKey) {
     var c = cfgNow(), st = c.store || {};
     var k = splitKey(chatKey);
@@ -366,7 +328,7 @@
 
   /* ══════════ 侧栏宽度 ══════════
      启动页 300 / 导航页 176 / 存档·记忆（要列群聊）268 / 设置 196。
-     用户拖过分隔条后 --pane-w 落在 #sidebar 行内样式上，此后**统一覆盖**各页默认值 ——
+     用户拖过分隔条后 --pane-w 落在 #sidebar 行内样式上，此后统一覆盖各页默认值，
      否则「拖宽了启动页、切到设置又缩回去」会让人以为拖动没生效。 */
   function syncSidebarWidth(name, group) {
     if (!sidebar) return;
@@ -375,11 +337,10 @@
     else if (name === 'chats' || name === 'memory') cls = 'is-wide';
     else if (group.key === 'settings') cls = 'is-set';
     // 壁纸页是整页布局（左壁纸库、右预览，自己带两栏），再挂一条 176px 左栏
-    // 只会白白吃掉一块宽度 → 整条侧栏收起。is-none 的样式见 style.css
+    // 只会白白吃掉一块宽度，所以整条侧栏收起。is-none 的样式见 style.css
     // 「每页一份的固定宽度」那一节。
     else if (group.key === 'wallpaper') cls = 'is-none';
-    // 2026-10-24：桌宠不再是"整页单页一级"（已并进 ops 组左栏），这里不再特例 ——
-    //   它和技能/插件页一样走 is-nav，左栏 176px，面板自己缩。
+    // 桌宠已并进 ops 组左栏，和技能/插件页一样走 is-nav，左栏 176px，面板自己缩。
     else cls = 'is-nav';
     sidebar.classList.remove('is-launch', 'is-nav', 'is-wide', 'is-set', 'is-none');
     sidebar.classList.add(cls);
@@ -387,7 +348,7 @@
 
   /* ══════════ 用量页的「统计维度」切换 ══════════
      后端 stats.mode：'today' | '24h' | 'days' | 'all'（src/app.js 的 rangeWindow）。
-     只有 'days' 时按天那块才有内容 —— 04-archive-usage.js 会把它整块 display:none。
+     只有 'days' 时按天那块才有内容，04-archive-usage.js 会把它整块 display:none。
      stats 参数：传本次**将要渲染**的那份统计（切时间范围时用，避免拿上一次的 mode 判断）；
               不传则取 state.usageRenderArgs（04 每次渲染都会写）。 */
   function usageModeOf(stats) {
@@ -403,17 +364,17 @@
     return !!m && m !== 'days';      // 「今日 / 24 小时」→ 按天没有内容
   }
   /* 「今日」范围下按天没内容 → 降级显示「按会话」。
-     ⚠️ 只降级**显示**，不动 usageDim：用户切回「近 7 天 / 近 30 天」时「按天」要自己亮回来。 */
+     只降级显示，不动 usageDim：用户切回「近 7 天 / 近 30 天」时「按天」要自己亮回来。 */
   function usageDimNow(stats) {
     return (usageDim === 'days' && usageOff(stats)) ? 'chats' : usageDim;
   }
 
   /* 把「一次只显示一块」写进 DOM（页面 + 左栏选中/置灰一起刷，两处永远同步）。
-     ⚠️ 这里**只**写 #usage-page 上的 data-udim，绝不写内联 display ——
-        updateUsagePage 每次都会给按天块写内联 style.display（按 mode 决定），
-        内联优先级高于一切选择器，我们写的那份会被它当场顶掉，
-        表现为「切到按会话后按天又自己冒出来」。可见性交给 style.css 第 14 节
-        的属性选择器 + !important 决定，那边才是唯一权威。 */
+     这里只写 #usage-page 上的 data-udim，绝不写内联 display：
+     updateUsagePage 每次都会给按天块写内联 style.display（按 mode 决定），
+     内联优先级高于一切选择器，我们写的那份会被它当场顶掉，
+     表现为「切到按会话后按天又自己冒出来」。可见性交给 style.css 第 14 节
+     的属性选择器 + !important 决定。 */
   function applyUsageDim(stats) {
     var cur = usageDimNow(stats);
     var off = usageOff(stats);
@@ -430,7 +391,6 @@
 
   /* ══════════ 左栏二级导航 ══════════ */
   // 左栏结构上没有副标题位，hover 说明走原生 title 属性（不动 DOM 结构与既有 class）。
-  // 2026-10-23：harness（自检）先加；2026-10-24：桌宠并进左栏时补同款。
   var SUB_TITLE = {
     harness: '给机器人看病、查问题',
     'desktop-pet': '桌面上的 Live2D 小伙伴：今日用量卡片、开发工单'
@@ -438,8 +398,8 @@
   function navItemHtml(sub, active) {
     const subTitle = SUB_TITLE[sub] ? ' title="' + SUB_TITLE[sub] + '"' : '';
     return '<button class="sn-item' + (active ? ' on' : '') + '" type="button" data-sub="' + sub + '"' +
-      // ⚠️（2026-10-10 r86 修 P2）当前二级页要能被读屏识别。视觉靠 .on / .sn-bar，
-      //    但对屏幕阅读器来说「一排长得一样的按钮」等于没有导航状态。
+      // 当前二级页要能被读屏识别。视觉靠 .on / .sn-bar，
+      // 但对屏幕阅读器来说「一排长得一样的按钮」等于没有导航状态。
       (active ? ' aria-current="page"' : '') +
       ' role="button" tabindex="0"' + subTitle +
       '<span class="sn-bar"></span>' +
@@ -452,14 +412,14 @@
     if (!sideNav) return;
     if (group.key === 'usage') {
       var cur = usageDimNow();
-      // 「今日」下按天没有内容 → 该置灰不可点，不能做成"点了没反应"的哑按钮（r26 的教训）
+      // 「今日」下按天没有内容 → 该置灰不可点，不能做成"点了没反应"的哑按钮
       var offDay = usageOff();
       var h = '<div class="sn-sec">统计维度</div>';
       USAGE_ANCHORS.forEach(function (a) {
         var isOff = offDay && a.dim === 'days';
         h += '<button class="sn-item' + (a.dim === cur ? ' on' : '') + (isOff ? ' is-off' : '') +
           '" type="button" data-usage-dim="' + a.dim + '"' + (isOff ? ' aria-disabled="true"' : '') +
-          // aria-current 与视觉的 .on 同源（r86 修 P2）
+          // aria-current 与视觉的 .on 同源
           (a.dim === cur ? ' aria-current="true"' : '') +
           ' role="button" tabindex="0">' +
           '<span class="sn-bar"></span>' +
@@ -470,17 +430,16 @@
       return;
     }
     if (group.key === 'sessions') {
-      // 存档 / 记忆 与「会话」同属一级，但首页被启动块占满 —— 给它们补一份
+      // 存档 / 记忆 与「会话」同属一级，但首页被启动块占满，给它们补一份
       // 「消息记录」导航，否则这两个页在界面上没有任何入口（只有会话设置里的跳转）。
       sideNav.innerHTML = '<div class="sn-sec">消息记录</div>' +
         GROUPS[0].subs.map(function (s) { return navItemHtml(s, s === name); }).join('');
       return;
     }
-    // R102：「下载」页左栏分两段 ——「市场」（装新的）/「已安装」（管已装的）。
-    //   写法与上面 usage / sessions 两个 case 一致（一个 .sn-sec 小标题 + 若干 .sn-item）。
-    //   两段的条目合起来与 GROUPS 里 ext.navSubs **逐项对应**，要增减条目两处一起改。
-    //   ⚠️ 这一段顺带修掉了「点进技能 / 插件页后左栏两条都不高亮」——
-    //      此前这两个二级页在左栏根本没有对应按钮，.sn-item.on 无处可挂。
+    // 「下载」页左栏分两段：市场（装新的）/ 已安装（管已装的）。
+    // 写法与上面 usage / sessions 两个 case 一致（一个 .sn-sec 小标题 + 若干 .sn-item）。
+    // 两段的条目合起来与 GROUPS 里 ext.navSubs 逐项对应，要增减条目两处一起改。
+    // 技能 / 插件两个二级页此前在左栏没有对应按钮，.sn-item.on 无处可挂，点进去两条都不高亮。
     if (group.key === 'ext') {
       var extSeg = function (title, list) {
         return '<div class="sn-sec">' + title + '</div>' +
@@ -490,10 +449,7 @@
                           extSeg('已安装', ['skills', 'plugins', 'personas']);
       return;
     }
-    // r91：左栏渲染 navSubs（默认回退到 subs），而不是 subs —— 二级页可以"存在但不出现在左栏"。
-    //   r94 曾在这里加过一层 navSections（按段渲染 + .sn-sec 小标题），只给「下载」组用；
-    //   r97 撤掉那段后已无调用方，遂一并删除，免得留个没人用的分支。
-    //   R102：上面 ext 那段就是"按段渲染"的正式版 —— 只给「下载」组用，其余组仍是一整段。
+    // 左栏渲染 navSubs（默认回退到 subs），而不是 subs：二级页可以"存在但不出现在左栏"。
     var navSubs = group.navSubs || group.subs;
     sideNav.innerHTML = navSubs.map(function (s) { return navItemHtml(s, s === name); }).join('');
   }
@@ -505,20 +461,17 @@
   function bpWindowBtns() {
     var d = window.qqaDesktop;
     var minB = $('#bp-min'), maxB = $('#bp-max');
-    // ⚠️ 2026-10-09（r25）：没有桌面壳时**只不绑事件，不再隐藏**。
-    //    原先的 else 分支写 `minB.hidden = true`，于是用浏览器打开控制台 /
-    //    预览页（无 window.qqaDesktop）时全屏页右上角只剩一颗 ✕ ——
-    //    与真机、与原型都不一致（原型在浏览器里也画着最小化），用户会报"按钮消失了"。
-    //    而且隐藏依赖本文件成功执行：脚本报错 / 渲染进程冻结都会停在隐藏态。
-    //    现在：看得见由 HTML 保证，点得动由这里保证。
+    // 没有桌面壳时只不绑事件，不隐藏按钮。隐藏的话，用浏览器打开控制台 /
+    // 预览页（无 window.qqaDesktop）时全屏页右上角只剩一颗 ✕，与真机、与原型都不一致；
+    // 而且隐藏依赖本文件成功执行，脚本报错 / 渲染进程冻结都会停在隐藏态。
+    // 现在：看得见由 HTML 保证，点得动由这里保证。
     if (minB && d && d.minimize) minB.addEventListener('click', function () { d.minimize(); });
     if (maxB && d && d.toggleMaximize) maxB.addEventListener('click', function () { d.toggleMaximize(); });
-    // ⚠️ 关闭必须**无条件**绑定。早期写法把 #bp-x 和 min/max 一起塞进 if (d) 里，
-    //    于是没有 window.qqaDesktop 时全屏页关不掉（返回键能用，只坏在这一条路径）。
-    //    r54：三颗按钮同权（硬规矩 17）—— min/max 都作用于**真实窗口**，
-    //    ✕ 却只关遮罩回主界面，用户报「点 x 没有关闭」。有桥时改调 d.close()
-    //    （与主顶栏 #win-close-btn 同款）；关全屏页仍由 ← 返回键 / Esc 承担。
-    //    无桥（浏览器 / 预览）才退回 closeBigPage，预览里 ✕ 依旧点得动。
+    // 关闭必须无条件绑定。早期写法把 #bp-x 和 min/max 一起塞进 if (d) 里，
+    // 于是没有 window.qqaDesktop 时全屏页关不掉（返回键能用，只坏在这一条路径）。
+    // min/max 都作用于真实窗口，✕ 却只关遮罩回主界面，所以有桥时改调 d.close()
+    // （与主顶栏 #win-close-btn 同款）；关全屏页仍由 ← 返回键 / Esc 承担。
+    // 无桥（浏览器 / 预览）才退回 closeBigPage。
     $('#bp-x') && $('#bp-x').addEventListener('click', function () {
       if (d && typeof d.close === 'function') { d.close(); return; }
       closeBigPage();
@@ -526,8 +479,8 @@
   }
 
   /* ── 左栏：会话选择（= 这一页到底在配置谁）────────────────────── */
-  // 2026-10-15：头像方块与 15-chat-chrome.js 的会话列表同风格（qlogo 直链 + 首字
-  // 兜底；error 用捕获委托揭兜底 —— CSP 禁内联 onerror，见 15 的 bindAvatarFallback）。
+  // 头像方块与 15-chat-chrome.js 的会话列表同风格（qlogo 直链 + 首字兜底；
+  // error 用捕获委托揭兜底，CSP 禁内联 onerror，见 15 的 bindAvatarFallback）。
   // chatKey 形如 group:123456 / private:654321（冒号分隔），与 qqAvatarUrl 的正则一致。
   function setupAvatarHtml(key, label) {
     var m = /^(group|private):(\d{5,12})$/.exec(String(key || ''));
@@ -548,7 +501,7 @@
 
   /* 一次扫描 state.sessions 按 chatKey 汇总：总数 / 进行中数 / 最近一条摘要。
      口径与 15-chat-chrome.js 的 chatGroups 逐字一致（进行中 = running | waiting，
-     摘要取 startedAt 最新一条的 trigger，42 字截断）—— 两页左栏显示同一个数。 */
+     摘要取 startedAt 最新一条的 trigger，42 字截断），两页左栏显示同一个数。 */
   function sessionStatsByChat() {
     var map = {};
     try {
@@ -578,10 +531,10 @@
     return hay.toLowerCase().indexOf(q) >= 0;
   }
 
-  /* 一行会话 = 与「会话选择」页左栏 chatRow 同款排布（R131：用户要求两页一致）：
+  /* 一行会话 = 与「会话选择」页左栏 chatRow 同款排布（两页一致）：
      [头像] [名称 + 最近会话摘要] [计数胶囊]。
      本页专属的两枚标记不破坏主排布：「未加白名单」折进摘要行末；
-     「已设人设」仍是右侧第二颗胶囊（r95 语义保留）。 */
+     「已设人设」是右侧第二颗胶囊。 */
   function setupChatRowHtml(it, stats) {
     var g = stats[it.key] || { total: 0, active: 0, last: '' };
     var pill = g.active
@@ -607,7 +560,7 @@
     var shown = list.filter(function (it) { return setupHit(it, stats, setupQ); });
     var h = '<div class="bp-sec bp-sec-row"><span>选择会话</span>' +
       '<span class="cc-cnt" id="bp-cnt">' + (list.length ? list.length + ' 个' : '') + '</span>' +
-      // r60：+ 添加会话（用户要求在这一页直接加群聊/私聊）—— 弹窗见 openAddChatModal
+      // + 添加会话（用户要求在这一页直接加群聊/私聊），弹窗见 openAddChatModal
       '<button class="bp-add" id="bp-add-chat" type="button" title="添加群聊 / 私聊" aria-label="添加群聊 / 私聊">' +
       '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 1.2v7.6M1.2 5h7.6"/></svg></button></div>';
     if (!list.length) {
@@ -623,8 +576,8 @@
     return h;
   }
 
-  /* 搜索框两枚图标 —— 与 15-chat-chrome.js 左栏搜索框逐字符相同
-     （那边的常量在它自己的 IIFE 里，跨不过来说明显式复制一份）。 */
+  /* 搜索框两枚图标，与 15-chat-chrome.js 左栏搜索框逐字符相同
+     （那边的常量在它自己的 IIFE 里，跨不过来，只能显式复制一份）。 */
   var ICON_MAG = 'M675.9168 242.816C556.3008 123.2 362.4448 123.2 242.8288 242.816 123.2128 362.432 123.2128 556.288 ' +
     '242.8288 675.904 362.4448 795.52 556.3008 795.52 675.9168 675.904 795.5328 556.288 795.5328 362.432 675.9168 ' +
     '242.816L675.9168 242.816ZM1000.7168 892.48C1030.6048 922.368 1030.6048 970.816 1000.7168 1000.704 ' +
@@ -638,7 +591,7 @@
     var left = $('#bp-setup-left');
     if (!left) return;
     var list = setupChatList();
-    // R131：搜索框 —— 与「会话选择」页左栏同款（.bp-search + sticky 挡板，
+    // R131：搜索框，与「会话选择」页左栏同款（.bp-search + sticky 挡板，
     // 样式见 style.css 的 #bp-setup-left .bp-search-wrap 两条）。
     var h = '<div class="bp-search-wrap" id="bp-q-wrap">' +
       '<div class="bp-search">' +
@@ -648,14 +601,10 @@
       '<svg viewBox="0 0 20 20"><path d="' + ICON_X + '" fill="currentColor" stroke="none"/></svg></button>' +
       '</div></div>';
     // ── 段顺序：扩展 → 会话清单 → 全部设置 ──────────────────────────────
-    // 2026-10-22：**「扩展」从会话清单下方挪到上方**。会话选择页左栏是
-    // 「页面导航在上、会话清单在下」，而这边原来反过来（清单在上、扩展在下），
-    // 两个左栏同一屏看过去结构不一致 —— 用户拿两张截图指出后统一到"导航在上"。
-    // 「全部设置」仍留在最底：它是次要出口，不该压在日常要点的东西上面。
-    //
-    // r95：本机已安装的技能 / 插件 —— 带开关的列表就出在右栏（PCL「版本设置 → Mod 管理」）。
-    // 2026-10-22：加「人设」。技能/插件管的是开关，人设管的是"用哪一个"，
-    // 三者都是"本机已装的东西"，所以同列在「扩展」段。
+    // 「扩展」放在会话清单上方，与「会话选择」页左栏（页面导航在上、会话清单在下）
+    // 保持一致。技能/插件管的是开关，人设管的是"用哪一个"，三者都是"本机已装的东西"，
+    // 所以同列在「扩展」段，带开关的列表出在右栏（PCL「版本设置 → Mod 管理」）。
+    // 「全部设置」留在最底：它是次要出口，不该压在日常要点的东西上面。
     h += '<div class="bp-sec">扩展</div>' +
       extEntryHtml('skill', '技能', SUB_ICON.skills) +
       extEntryHtml('plugin', '插件', SUB_ICON.plugins) +
@@ -669,7 +618,7 @@
     left.innerHTML = h;
   }
 
-  /* 打字时的轻量刷新（R131）：只换行容器，搜索框本身不重建 —— 焦点与光标不丢。
+  /* 打字时的轻量刷新：只换行容器，搜索框本身不重建，焦点与光标不丢。
      #bp-rows 不存在（清单全空、连行容器都没建）时退回全量重画。 */
   function applySetupFilter() {
     var rows = $('#bp-rows');
@@ -687,11 +636,11 @@
   function renderSetupPane() {
     var box = $('#bp-setup-scroll');
     if (!box) return;
-    // r95：左栏点了「技能 / 插件」→ 右栏借这块滚动区渲染本机列表。
+    // 左栏点了「技能 / 插件」→ 右栏借这块滚动区渲染本机列表。
     // 渲染复用「下载 → 技能 / 插件」那一套（renderModulePage），compact 模式：
-    //   只出「标题 + 计数 + 状态筛选 + 卡片」，不出「去市场 / ＋添加 / 刷新」——
-    //   那几颗钮带全局唯一 id，而 #view-skills / #view-plugins 一直挂在 DOM 里，
-    //   再来一份同 id 的 DOM 会让 $() 只认先出现的那一个，另一份变成哑按钮。
+    // 只出「标题 + 计数 + 状态筛选 + 卡片」，不出「去市场 / ＋添加 / 刷新」，
+    // 那几颗钮带全局唯一 id，而 #view-skills / #view-plugins 一直挂在 DOM 里，
+    // 再来一份同 id 的 DOM 会让 $() 只认先出现的那一个，另一份变成哑按钮。
     if (setupView !== 'chat') {
       setSetupCrumb(setupView);
       // 人设走另一套渲染：数据源是 /api/persona-templates，不是 /api/skills，
@@ -722,7 +671,7 @@
     var c = cfgNow();
     var k = splitKey(key);
     var isGroup = k.kind === 'group';
-    var inAllow = !!allowMapOf()[key];   // r60：归一化比对（裸号白名单 vs 带前缀 chatKey）
+    var inAllow = !!allowMapOf()[key];   // 归一化比对（裸号白名单 vs 带前缀 chatKey）
 
     // ① 白名单
     var allowCard =
@@ -761,9 +710,8 @@
       '</div></section>';
 
     // ③ 响应档位（仅群聊；私聊永远跟随全局，后端 storeConfigForChat 里写死了）
-    //    r35 起只做「看状态 + 就地入口」：编辑（拖档位 / 峰谷 / 清除单独设置）
-    //    统一收进「活跃设置」弹窗 —— 原先这里的下拉框与弹窗滑条改的是同一份
-    //    groupSliderPos[群号]，两套控件两种交互，正是用户指出的重复。
+    //    这里只做「看状态 + 就地入口」：编辑（拖档位 / 峰谷 / 清除单独设置）
+    //    统一收进「活跃设置」弹窗，避免下拉框与滑条改同一份 groupSliderPos 却两套交互。
     var eff = effectiveTierOf(key);
     var tierCard = '';
     if (isGroup) {
@@ -849,7 +797,7 @@
       applySetupFilter();
       return;
     }
-    // r95：「技能 / 插件」两条 —— 点开 = 右栏换成那一类的本机列表；
+    // 「技能 / 插件」两条：点开 = 右栏换成那一类的本机列表；
     // 再点一次同一条（或改点任一会话）退回按会话的设置。
     var ex = e.target.closest && e.target.closest('[data-setup-ext]');
     if (ex) {
@@ -867,7 +815,7 @@
       renderSetupPane();
     }
   });
-  // R131：搜索输入 —— 只重画清单段（搜索框不重建，打字不丢焦点）
+  // R131：搜索输入，只重画清单段（搜索框不重建，打字不丢焦点）
   suLeft && suLeft.addEventListener('input', function (e) {
     if (!e.target || e.target.id !== 'bp-q') return;
     setupQRaw = String(e.target.value || '');
@@ -876,9 +824,9 @@
     if (qc2) qc2.dataset.show = setupQ ? '1' : '0';
     applySetupFilter();
   });
-  // 2026-10-23 修复：会话行（setupChatRowHtml 里是 role="button" + tabindex="0"）此前
-  //   只有 click 委托 —— 键盘能 Tab 到、按回车没反应，等于键盘用户进不去任何会话。
-  //   焦点必须在行本身；直接 click() 复用上面那条委托的全部分支。
+  // 会话行（setupChatRowHtml 里是 role="button" + tabindex="0"）此前只有 click 委托，
+  // 键盘能 Tab 到、按回车没反应，等于键盘用户进不去任何会话。
+  // 焦点必须在行本身；直接 click() 复用上面那条委托的全部分支。
   suLeft && suLeft.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     var t = e.target;
@@ -895,13 +843,13 @@
     if (fb) fb.hidden = false;
   }, true);
 
-  /* ── 「+ 添加会话」弹窗（r60；r62 加「拉取群聊」）─────────────────
-     照「活跃设置」弹窗同款外壳（modelModalShell，遮罩层号 910 —— 现由
+  /* ── 「+ 添加会话」弹窗 ─────────────────────────────────
+     照「活跃设置」弹窗同款外壳（modelModalShell，遮罩层号 910，现由
      style.css 0.5 段的 --z-model-modal-overlay 统一给值，盖过 #bigpage 的 60）：
      类型选群聊/私聊 + 纯数字 ID，落白名单裸号。
-     r62：ID 右侧多一个「拉取群聊 / 拉取好友」按钮 —— 调 GET /api/onebot/groups
-     （私聊走 /api/onebot/friends）把机器人已加入的列表拉下来，选一个即回填 ID，
-     省掉手抄群号。机器人没连上时后端返 502，这里降级成一行提示，手动填号照旧可用。
+     ID 右侧多一个「拉取群聊 / 拉取好友」按钮，调 GET /api/onebot/groups
+     （私聊走 /api/onebot/friends）把机器人已加入的列表拉下来，选一个即回填 ID。
+     机器人没连上时后端返 502，这里降级成一行提示，手动填号照旧可用。
      保存 = POST /api/config {allow:{groups|private:{__replace__:[...]}}}
      （数组必须整体替换，deepMerge 对数组是覆盖不是拼接）。 */
   function openAddChatModal() {
@@ -974,7 +922,7 @@
           '<br />机器人可能没连上 OneBot（没上报' + unit + '列表）。手动填号一样能添加。</div>';
       }).then(function () {
         pullBtn.disabled = false; pullBtn.textContent = pullLabel();
-      }).catch(function () { /* r108：兜底自检 unhandledRejection —— 按钮状态在 then 内已恢复 */ });
+      }).catch(function () { /* 兜底自检 unhandledRejection，按钮状态在 then 内已恢复 */ });
     });
     overlay.querySelector('#bp-add-cancel').addEventListener('click', function () { closeModelModal(overlay); });
     var okBtn = overlay.querySelector('#bp-add-ok');
@@ -1014,7 +962,7 @@
       setAllowState(on).then(function () { renderSetupNav(); renderSetupPane(); })
         .catch(function (err) { t.checked = !on; suAlert('保存失败：' + (err && err.message ? err.message : err)); });
     }
-    // r35：#su-tier 下拉框已移除 —— 档位编辑统一走「活跃设置」弹窗（su-active-config）
+    // #su-tier 下拉框已移除，档位编辑统一走「活跃设置」弹窗（su-active-config）
   });
   suPane && suPane.addEventListener('click', function (e) {
     var t = e.target;
@@ -1027,7 +975,7 @@
       clearPersonaOwn().then(function () { renderSetupNav(); renderSetupPane(); })
         .catch(function (err) { suAlert('清除失败：' + (err && err.message ? err.message : err)); });
     } else if (t.id === 'su-active-config') {
-      // r35：带上当前群 —— 弹窗分群模式下直接聚焦它，不用再在群列表里点一次
+      // 带上当前群，弹窗分群模式下直接聚焦它，不用再在群列表里点一次
       try {
         if (typeof openActiveConfigModal === 'function') {
           var fk = splitKey(setupChat);
@@ -1048,7 +996,7 @@
   function setAllowState(on) {
     var c = cfgNow(), k = splitKey(setupChat);
     var field = k.kind === 'private' ? 'private' : 'groups';
-    // r60：读出来归一化成裸号（顺带清历史遗留的带前缀键），写回也落裸号 ——
+    // 读出来归一化成裸号（顺带清历史遗留的带前缀键），写回也落裸号：
     // 后端 allowed() 只认裸号，写入 group:xxx 等于没加白名单。
     var seenA = {}, arr = [];
     (((c.allow || {})[field]) || []).map(bareIdOf).map(String).forEach(function (x) {
@@ -1060,7 +1008,7 @@
     patch.allow[field] = { __replace__: arr };
     return suSave(patch);
   }
-  // r35：setGroupTier() 已随档位下拉框一并移除 —— 档位写入由「活跃设置」弹窗
+  // setGroupTier() 已随档位下拉框一并移除，档位写入由「活跃设置」弹窗
   // 的保存逻辑负责（09-community.js openActiveConfigModal 的 #ac-save）。
   function clearMute() {
     var c = cfgNow(), k = splitKey(setupChat);
@@ -1083,10 +1031,9 @@
     if (!bigpage) return;
     bpMode = mode === 'setup' ? 'setup' : 'chat';
     bigpage.hidden = false;
-    // 2026-10-23 修复（回归）：这里原先是 remove/add `bp-in` 类做淡入 —— 但 `.bp-in`
-    // 是批量价格弹窗的输入框类（style.css:3373 `.bp-in { width: 74px; padding: 4px 6px }`），
-    // 类名撞车后全屏页被压成 **74px 宽**（用户截图：点「会话选择」只剩左栏一条，
-    // 右侧露出会话首页的更新报告）。
+    // 这里原先是 remove/add `bp-in` 类做淡入，但 `.bp-in` 是批量价格弹窗的输入框类
+    // （style.css:3373 `.bp-in { width: 74px; padding: 4px 6px }`），类名撞车后全屏页
+    // 被压成 74px 宽（点「会话选择」只剩左栏一条，右侧露出会话首页的更新报告）。
     // 现在改用 WAAPI 播入场：不碰 class、不触发 15-chat-chrome 的 class MutationObserver。
     // 同时清掉可能残留的 bp-in，避免旧类继续压宽度。
     bigpage.classList.remove('bp-in');
@@ -1107,12 +1054,12 @@
     } else {
       $('#bp-title') && ($('#bp-title').textContent = '会话设置');
       setSetupCrumb('');
-      // r95：每次打开这一页都回到「按会话」—— 上次停在「技能」不留着，
-      //      这一页的默认身份仍是"这个会话的设置"。
+      // 每次打开这一页都回到「按会话」，上次停在「技能」不留着，
+      // 这一页的默认身份仍是"这个会话的设置"。
       setupView = 'chat';
-      // ⚠️ r33 起**不再借用** #settings-form：这一页有自己的按会话内容（renderSetupPane），
-      //     #settings-form 留在 #view-settings 原地，导航栏「设置」页随时可用、两页互不干扰。
-      //     首选会话：上次选过的沿用，否则白名单第一个（都由左栏列表里切换）。
+      // 这一页有自己的按会话内容（renderSetupPane），不再借用 #settings-form：
+      // #settings-form 留在 #view-settings 原地，导航栏「设置」页随时可用、两页互不干扰。
+      // 首选会话：上次选过的沿用，否则白名单第一个（都由左栏列表里切换）。
       var list = setupChatList();
       var keys = list.map(function (x) { return x.key; });
       if (keys.indexOf(setupChat) < 0) setupChat = keys[0] || '';
@@ -1128,14 +1075,12 @@
     bigpage.classList.remove('mode-chat', 'mode-setup');
   }
 
-  /* r95：关掉全屏页 → 切到指定的一级页。**两步之间必须隔一拍。**
+  /* 关掉全屏页 → 切到指定的一级页。两步之间必须隔一拍。
      15-chat-chrome.js 的 sync() 挂在 #bigpage 的 hidden / class 变化上（MutationObserver），
      它会在微任务里把 tab 还原成"打开全屏页之前那一页"（那个文件里的 bpPrevSub）。
-     同一 tick 里紧跟的 switchTab 会被它当场顶掉 —— 实测（r95）：
-       ·「打开完整设置页」点完停在会话首页，设置页根本没进去；
-       · 新加的「打开完整管理页」同理。
-     放进 setTimeout（宏任务，永远排在 MutationObserver 的微任务之后）就落到它后面，
-     落点才是我们要的那一页。 */
+     同一 tick 里紧跟的 switchTab 会被它当场顶掉：「打开完整设置页」点完停在会话首页，
+     设置页根本没进去。
+     放进 setTimeout（宏任务，永远排在 MutationObserver 的微任务之后）就落到它后面。 */
   function closeBigPageThen(tab) {
     closeBigPage();
     setTimeout(function () {
@@ -1145,11 +1090,10 @@
   // 06-settings-render.js 的「打开完整管理页」要走同一条路径（跨文件的私有函数只能这么给）
   window.closeBigPageThen = closeBigPageThen;
 
-  /* 2026-10-23 修复：给 02-sse-sessions.js 的 chat-update 一个刷新「会话设置」右栏的入口。
-     群内发 /安静 改的是禁言态，右栏卡片不重绘就会一直显示「未禁言」——
-     用户以为指令没生效（02:90-93 的注释就是为这件事写的，但那段判断引用的是
-     setupChat / renderSetupPane，两者都是本 IIFE 私有的，typeof 恒为 undefined，
-     所以从来没有真的执行过）。
+  /* 给 02-sse-sessions.js 的 chat-update 一个刷新「会话设置」右栏的入口。
+     群内发 /安静 改的是禁言态，右栏卡片不重绘就会一直显示「未禁言」，用户以为指令没生效。
+     （02 里那段判断引用的是 setupChat / renderSetupPane，两者都是本 IIFE 私有的，
+     typeof 恒为 undefined，所以从来没真的执行过。）
 
      内部自己判「当前是不是会话设置模式、有没有选中会话」，不在该状态时是空操作，
      调用方不需要知道这些细节。 */
@@ -1172,20 +1116,19 @@
     }
   });
   bigpage && bigpage.addEventListener('click', function (e) {
-    // ⚠️ 会话设置页的按会话交互（选会话 / 各块按钮）由 suPane / suLeft 上的
-    //    委托处理，这里只管「打开完整设置页」这一条跨页跳转。
+    // 会话设置页的按会话交互（选会话 / 各块按钮）由 suPane / suLeft 上的
+    // 委托处理，这里只管「打开完整设置页」这一条跨页跳转。
     if (e.target.closest && e.target.closest('[data-setup-all]')) {
-      // r95：原先是 closeBigPage() + switchTab('settings') 同一 tick 连做 ——
-      //      15-chat-chrome.js 的 sync() 随后把 tab 还原回"打开前那一页"，
-      //      设置页根本进不去（实测停在会话首页）。改走隔一拍的版本。
+      // 不能 closeBigPage() + switchTab('settings') 同一 tick 连做：
+      // 15-chat-chrome.js 的 sync() 随后把 tab 还原回"打开前那一页"，设置页根本进不去。
       closeBigPageThen('settings');
     }
   });
 
   /* ══════════ 左栏交互 ══════════ */
-  // 「开始对话」：r51 —— 机器人未运行时，这个按钮是 PCL 隐喻里的「启动游戏」：
-  // 拉起机器人用的 QQ（协议端由用户自己装、自己启动，2026-10-23 起不再托管），
-  // 进度写在副标题上，而不是直接跳会话界面。已连接时才保持旧行为（进全屏会话页并选中第一个）。
+  // 「开始对话」：机器人未运行时，这个按钮是 PCL 隐喻里的「启动游戏」：
+  // 拉起机器人用的 QQ（协议端由用户自己装、自己启动），进度写在副标题上，
+  // 而不是直接跳会话界面。已连接时才保持旧行为（进全屏会话页并选中第一个）。
   // 启动节奏与设置页 quick-start-btn 保持一致。
   $('#launch-btn') && $('#launch-btn').addEventListener('click', async function () {
     var btn = this;
@@ -1212,9 +1155,8 @@
     var qqReady = !!(st && st.qqPortable && st.qqPortable.ready);
     var qqRunning = !!(st && st.qqPortable && st.qqPortable.running);
     var protoUp = !!(st && st.protocol && st.protocol.portOpen);
-    // r90：ready=false = 便携副本没装且本机也没检测到 QQ —— 旧的"去点一键安装"
-    //   指引在这时候必然失败（没源可复制）。改成让人去装 QQ / 重新检测。
-    // 2026-10-23：「连接与启动」分区已改名「连接 QQ」，指路文案跟着改口。
+    // ready=false = 便携副本没装且本机也没检测到 QQ，此时"去点一键安装"的指引
+    // 必然失败（没源可复制），改成让人去装 QQ / 重新检测。
     if (!qqReady) { setSub('没找到可用的 QQ：先装一个新版 QQ（QQNT），然后到 设置 → 连接 QQ 重试'); return; }
 
     btn.dataset.starting = '1';
@@ -1240,11 +1182,10 @@
         return;
       }
       setSub('等待机器人上线…（首次登录要扫码，可能要一两分钟）');
-      // ⚠️（2026-10-17）旧实现只等 **30 秒** 就报「连接超时」—— 而这 30 秒里用户
-      //   很可能还没扫码登录（首次登录本来就要一两分钟）。小白看到"超时"就以为失败，
-      //   回去再点一次，越点越乱。现在：最多等 5 分钟，每 ~16 秒把"在等什么、
-      //   现在该做什么"写清楚。
-      //   ⚠️ 与设置页 quick-start-btn 的等待节奏保持一致（两处是同一套启动链）。
+      // 旧实现只等 30 秒就报「连接超时」，而这段时间用户很可能还没扫码登录
+      // （首次登录本来就要一两分钟），小白看到"超时"就以为失败，回去再点一次。
+      // 现在最多等 5 分钟，每 ~16 秒把"在等什么、现在该做什么"写清楚。
+      // 与设置页 quick-start-btn 的等待节奏保持一致（两处是同一套启动链）。
       var WAIT_STEP = 2000;
       var WAIT_MAX = 5 * 60 * 1000;
       var connected = false;
@@ -1283,7 +1224,7 @@
     syncIdentity();
   });
 
-  // 二级导航点击（每次渲染后重新绑定 —— 内容是 innerHTML 重建的）
+  // 二级导航点击（每次渲染后重新绑定，内容是 innerHTML 重建的）
   sideNav && sideNav.addEventListener('click', function (e) {
     var el = e.target.closest && e.target.closest('[data-sub],[data-usage-dim]');
     if (!el) return;
@@ -1326,104 +1267,23 @@
     });
   })();
 
-  /* ══════════ 会话首页的「更新报告」（r99-C）══════════
-     用户诉求：「这个地方我希望可以放更新报告方便用户查看」。
-     内容走**本地数据**（下面这个数组），不接线上更新检查 —— 离线也看得见，
+  /* ══════════ 会话首页的「更新报告」══════════
+     内容走本地数据（下面这个数组），不接线上更新检查，离线也看得见，
      改完刷新界面即可，不用重新打包。
 
-     ⚠️ 要改内容只改 STAGE_CHANGELOG：**新的放最前面**，数组第 1 条会带「最新」标记。
-        字段：version 版本号（建议与 resources/app/package.json 的 version 对齐）
-              date    日期 YYYY-MM-DD
-              items   这次改了什么，一条一行，写给用户看（别写内部术语）
-        数组清空 → 整块不渲染，.stage-empty 回到原来的居中布局。
-     ⚠️ 卡片由本段自己 insertBefore 进 .stage-empty，**不动 index.html**。
+     要改内容只改 STAGE_CHANGELOG：新的放最前面，数组第 1 条会带「最新」标记。
+     字段：version 版本号（与 resources/app/package.json 的 version 对齐）
+           date    日期 YYYY-MM-DD
+           items   这次改了什么，一条一行，写给用户看（别写内部术语）
+     数组清空 → 整块不渲染，.stage-empty 回到原来的居中布局。
+     卡片由本段自己 insertBefore 进 .stage-empty，不动 index.html。
 
-     r106：① 位置从「视觉中心」改到「页面底部」（CSS 那边 margin 由 auto 0 改成 auto 0 0）；
-           ② 卡片右上角加 × —— 关掉后把**当前最新那一版的 version** 写进 localStorage
-              （qa.stageReportClosed）；下次启动版本号对得上就整块不渲染。
-              换了新版本（改 STAGE_CHANGELOG 第 1 条的 version）→ 对不上 → 自动再出现一次。
-              所以「按版本记住」的维护约定是：**要重新推给所有人，必须把 version 改成新号**；
-              只改 items 而不动 version，已经关掉过的用户不会再看到。
-              version 与 date 都为空的条目退化成「只在本次会话内关闭」，不写盘。
-
-     r108：用户「更新报告的内容也更新一下」—— 0.4.7 这一版前后做了 30 多轮（R76~R108），
-           而原 items 只覆盖到 R95~R100 那一段，明显过时（例：完全没有 R102 插件入口、
-           R106 卡片可关闭、R107 设置页切换动画）。本轮把**整版**面向用户的改动汇总
-           重写成下面 8 条：稳定性 / 全 App 动效 / 各界面左栏统一 / 插件入口 / 滚动性能 /
-           输入框焦点 / 设置页切换动画 / 这张卡片自身。口径一律「用户能感知到什么」，
-           不写内部术语（不写「左栏左右留白对齐」这类实现说法）。
-           ⚠️ r108 只改了 items、version 没动；**0.4.8 发布时（r109）version 已顶到新号 0.4.8、
-              date 同步刷新** —— 已经点过 × 的 0.4.7 用户会重新看到这版内容。 */
+     右上角 × 关掉后，把当前最新那一版的 version 写进 localStorage
+     （qa.stageReportClosed），下次启动版本号对得上就整块不渲染。
+     所以要重新推给所有人，必须把 version 改成新号；只改 items 而不动 version，
+     已经关掉过的用户不会再看到。version 与 date 都为空的条目退化成
+     「只在本次会话内关闭」，不写盘。 */
   var REPORT_KEY = 'qa.stageReportClosed';
-  /* r109（2026-10-17）：本版所有改动 —— 含半夜从上游修复版移植进来的那批、
-     用量页崩溃、SnowLuma 注入链路五项、崩溃/卡死加固、记忆索引瘦身、默认开关固化 ——
-     **统一归到 0.4.8.5，不另起新版本号**（用户明确要求"别乱升"）。
-     原 0.4.8.6 条目已并入 0.4.8.5 的 items，date 同步改成 2026-10-17。
-     ⚠️ 副作用（知情即可）：version 是「重新推给已关闭用户」的唯一开关，不升号 =
-     点过 × 且存的正是 0.4.8.5 的人不会再看到。本机实测存的关闭标记是 0.4.7 → 不受影响。
-
-     r133（2026-10-18）：0.4.8.6 **正式启用**（用户这次明确要求升到 0.4.8.6）。
-     上一版被并进 0.4.8.5 的那批内容仍留在 0.4.8.5 条目里不动，不重复搬。
-     本条只放 2026-10-18 当天的改动：使用引导（OOBE）、错误本地化真正接上、
-     Ctrl+V 一族、模型管理时序、默认人设重写、系统提示瘦身、就绪圆点缩写、
-     市场装扩展警告、以及悬停出两个提示窗口的修复。
-     ⚠️ 升号后，点过 × 且存的正是 0.4.8.5 的用户会**重新看到一次**这版报告 —— 符合预期。
-
-     r134（2026-10-19）：**不升版本号，把当天全部改动并入 0.4.8.6 的 items**（用户要求
-     「把今天所有的更新都写到 0.4.8.6 的更新报告里」）。当天做了：API 协议下拉
-     （openai / responses / anthropic / google / mistral）、全局 LLM 代理、
-     用量按插件归因、扩展安装预检与三档回执、扩展卡片熔断/调用性/警告徽章
-     + 自动适配、就绪度体检卡复活、启动 24 分钟硬预算、横幅直达按钮、SnowLuma 刷新保交互态、
-     工具集粘滞窗、表情收藏链路修复、多人同时 @ 漏回。date 同步改成 2026-10-19。
-     ⚠️ version 仍是 0.4.8.6：点过 × 且存的正是 0.4.8.6 的用户不会重新看到本次追加。
-
-     r135（2026-10-19 下午）：补当天后半天三项（提示词缓存结构优化 / 调用明细补账本 /
-     四个统计维度版式统一），并合并重复条目 5 组（收藏与短名两条 → 1、提供商添加后两条 → 1、
-     使用引导两条 → 1、界面小瑕疵两条 → 1、更新报告自身两条 → 1）；「多人同时 @」那条
-     并入「被 @ 未发言时不能提前结束」的保险。版本号仍 0.4.8.6。
-
-     r141（2026-10-20）：0.4.8.7 **正式启用** —— 用户要求「把今天所有的改动都放在更新报告上，
-     版本为 0.4.8.7」。原打算另起的 0.4.8.8（小窗贴边收起 / 背景不透明度 / 卡片内菜单）
-     已整段并入本条，package.json 的 version 同步为 0.4.8.7。
-     本条覆盖 2026-10-20 当天全部 16 轮改动：注入链路两轮专项审查、界面状态机、
-     新手自救卡、全站文案与入口校正、市场页可用性、SnowLuma 首屏三步化、
-     「测试连通性」恒 401、全站鉴权头复查、桌面悬浮小窗、下载页签卡顿、
-     「API 协议」保存不住、「保存不住」全站复查、发网图与安全开关入口、
-     冷启动设置页崩溃、市场超时与缓存、小窗贴边收起与不透明度、当日改动回归审查。
-     ⚠️ 升号后，点过 × 且存的正是 0.4.8.6 的用户会**重新看到一次**这版报告 —— 符合预期。
-
-     r143（2026-10-21）：0.4.8.8 **只修安装包、不动应用代码**，于是暴露了老做法的问题 ——
-     bump_versions() 是把第 1 条的 version 直接改成新号，不改内容，结果 0.4.8.7 那一整版
-     （小窗贴边收起 / 背景不透明度 / 安全开关…）被挂上了 0.4.8.8 的版本号，用户看到的
-     就是「0.4.8.8 = 小窗那一堆」，而真正的 0.4.8.7 条目在列表里消失了。
-     本轮把原第 1 条还原成 0.4.8.7 / 2026-10-20，另**新插**一条 0.4.8.8 只写安装包修复。
-     ⚠️ 维护约定：凡是「应用代码没变、只是重打包」的版本，都要新插一条，不要改第 1 条的号。
-
-     r144（2026-10-21 下午）：用户「全面审查一下今天所有的修复，并且更新一下软件首页的
-     更新报告，尽量把重复的内容合并一下」。当天下午第二轮做的是**分层记忆插件**的修复
-     （15:53~16:24，`plugins/mem-layered/*`），它不在 08:18 那一版 items 里 —— 本轮补齐，
-     并顺手把整条 0.4.8.8 对齐到 CHANGELOG.md 的 14 个条目：
-       · 新增 6 条：记忆检索塌缩 / 记忆权重被重置 / API Key 换不掉 / 单账号硬约束 /
-         三处白花的钱 / 雪茹日志两处
-       · 合并 2 组：「ffmpeg 没进包」并入「安装包」（本来讲的是同一件事的两个侧面）；
-         「设置页能看到记忆 4 个阈值」并入记忆检索那条（同属当天记忆相关改动）
-       · 6 条 → 11 条，语义不丢、重复不重
-     ⚠️ version 仍 0.4.8.8（沿用 r134 / r135 的既有做法：同一天追加不升号）。
-        副作用知情即可：点过 × 且存的正是 0.4.8.8 的用户不会再看到本次追加。
-
-     r145（2026-10-22）：用户「把所有更新都简化之后写到软件主页的 0.4.8.8 更新报告里」。
-     0.4.8.8 条目 r144 之后又做了三大块，本轮全部并入、统一简化成口语化条目：
-       ① 体验与编排（21:05–22:20）：被 @ 认不出自己 → 身份锚点三件套 + @ 判定行；
-          finish 被拦截后仍结束会话 → 补 `&& !result.isError`；「承诺发表情却没发」
-          → 同批发送 + 容量档；收藏支持 tags/usage。
-       ② 工程化（22:40–23:59）：self-fix 批准令牌生命周期修复；harness 四模块内置化
-          （self-doctor/self-fix/extension-forge/dev-orders → src/harness，core 类型）；
-          fix 开关入口、左栏「工具」二级页签名回 harness；speech-to-text 探测不再乐观
-          放行（缓存振荡）+ 本次基线重算（模块从拒载恢复加载）。
-       ③ 安全与语义（10-22 体检后）：密钥端点伪造同源一律 403；502 改 400/404；
-          拒发透传 usage errors；ffmpeg 随包解析。
-     ⚠️ version 仍 0.4.8.8（用户点名写进 0.4.8.8，不另起版本号）；date 同步 2026-10-22。
-        副作用知情即可：点过 × 且存的正是 0.4.8.8 的用户不会重新看到本次追加。 */
   /* 条目按「新增 / 修复 / 优化」开头，渲染层据此分组；同一件事只留一条。
      新版本加在数组最前面。 */
   var STAGE_CHANGELOG = [
@@ -1730,19 +1590,18 @@
     if (!host || !STAGE_CHANGELOG || !STAGE_CHANGELOG.length) return;
     var escHtml = (typeof esc === 'function') ? esc : function (s) { return String(s == null ? '' : s); };
 
-    /* r134（2026-10-18）：卡片重排 —— 之前 30 多条混排成一堵灰字墙，扫不出重点：
+    /* 卡片重排：之前 30 多条混排成一堵灰字墙，扫不出重点。
        ① 条目按开头动词自动归入「新增 / 优化 / 修复」三组（渲染层分类，
          STAGE_CHANGELOG 不用贴标签；分不进前两类的都算优化，例如
-         「默认人设…」「Windows 下…」「表情更积极了」—— 分组是扫读辅助，不求完美）；
+         「默认人设…」「Windows 下…」，分组是扫读辅助，不求完美）；
        ② 引号「」里的短词（问题名 / 功能名）加粗当扫读锚点，超过 24 字的引号
          多半是整句话，不动；
-       ③ 旧版本（第 2 版起）默认折叠成一行版本号，点版本行展开 —— 99% 的用户
-         只看最新一版，不该被迫滚过五个旧版本；展开状态只活在本次会话
-         （报告本身是常驻卡片，展开与否不落盘）。
-       ④ 2026-10-23：没完成启动引导的用户（config.onboarding.seen !== true，
-         读法照 18-onboarding.js 的 onboardingNeedsShow），**最新一版**也默认折成
-         一行「本版改了 N 项改进，点击展开」—— 萌新的首页不该一上来就被十几条
-         改进砸脸；已完成引导的老用户仍默认展开（与 r134 行为一致）。 */
+       ③ 旧版本（第 2 版起）默认折叠成一行版本号，点版本行展开：99% 的用户
+         只看最新一版。展开状态只活在本次会话，不落盘。
+       ④ 没完成启动引导的用户（config.onboarding.seen !== true，
+         读法照 18-onboarding.js 的 onboardingNeedsShow），最新一版也默认折成
+         一行「本版改了 N 项改进，点击展开」，萌新的首页不该一上来就被十几条
+         改进砸脸；已完成引导的老用户仍默认展开。 */
     function classifyItem(text) {
       if (/^新增/.test(text)) return 'add';
       if (/^(修掉|修复)/.test(text)) return 'fix';
@@ -1768,7 +1627,7 @@
     }
     if (!rows.length) return;
 
-    // r106：用户点 × 关掉之后，同版本不再出现（换了新版本自动再出现一次）。
+    // 用户点 × 关掉之后，同版本不再出现（换了新版本自动再出现一次）。
     // stamp 取最新那一版的 version，退而求其次取 date；两者都空就不记忆（只本次会话关闭）。
     var stamp = String(rows[0].version || rows[0].date || '');
     if (stamp) {
@@ -1821,14 +1680,14 @@
     if (note) host.insertBefore(box, note); else host.appendChild(box);
     host.classList.add('has-report');
 
-    // r134c：吸顶条的渐隐只在「真的滚动过」时出现（is-scrolled 开关）。
+    // 吸顶条的渐隐只在「真的滚动过」时出现（is-scrolled 开关）。
     // 停在顶部时第一条目不该被 ::after 渐变罩暗半截；滚回顶上就恢复。
     // 监听滚动容器自己即可，passive 不抢滚动性能。
     box.addEventListener('scroll', function () {
       box.classList.toggle('is-scrolled', box.scrollTop > 2);
     }, { passive: true });
 
-    // r134：旧版本折叠 —— 点版本行展开 / 收起；Enter / 空格同样可操作（role=button）。
+    // 旧版本折叠：点版本行展开 / 收起；Enter / 空格同样可操作（role=button）。
     var toggles = box.querySelectorAll('.sr-vh--toggle');
     for (var t = 0; t < toggles.length; t++) {
       (function (vh) {
@@ -1849,7 +1708,7 @@
       })(toggles[t]);
     }
 
-    // r106：× 关掉 —— 连同 has-report 一起摘掉，让 .stage-note 回到原来的居中布局
+    // × 关掉：连同 has-report 一起摘掉，让 .stage-note 回到原来的居中布局
     // （与「数组清空 → 不渲染卡片」走同一条路径，不留半截状态）。
     var xb = box.querySelector('#stage-report-close');
     if (xb) xb.addEventListener('click', function () {
@@ -1863,24 +1722,22 @@
      真机的连接状态由 01-boot.js 的 refreshStatus() 写进 #onebot-dot / #onebot-label，
      这里只做「搬运」：包装 refreshStatus，让它跑完后再镜像一次，不新增轮询。 */
   // R80（BUG-14）：写前比较缓存。旧逻辑每次 refreshStatus（本地配置 15s 一轮）
-  // 都无条件写 innerHTML / 重设 img.src —— 值没变也整块重建 DOM；头像更惨：
+  // 都无条件写 innerHTML / 重设 img.src，值没变也整块重建 DOM；头像更惨：
   // src 重设 = 重新走一次 CDN 加载，表现为头像周期性闪烁/闪白。
   // 现在记住「上次写进去的值 + 当时的元素引用」，签名没变就整个跳过；
-  // 元素引用也进签名 —— 万一边上别的地方把这块 DOM 重建了，不会被缓存骗过去。
+  // 元素引用也进签名，万一边上别的地方把这块 DOM 重建了，不会被缓存骗过去。
   var lastIdent = null;
   function syncIdentity() {
     var st = (typeof state !== 'undefined' && state.status) || {};
     var ob = st.onebot || {};
-    // ⚠️ 只信 state.status.onebot.connected，绝不"读顶栏 #onebot-label 的文字"兜底：
-    //    未连接时 01-boot.js 写进去的是后端诊断原文，例如
-    //    「协议端未运行或未监听 WS 端口」—— 里面含子串「运行」，
-    //    按关键字匹配就会把「未运行」误判成「已连接」。实测过：后端明明
-    //    connected:false，身份区却显示「在线 · 已连接 OneBot」，与右下角
-    //    那条「还没连上」的提示自相矛盾。state.status 是唯一权威来源。
+    // 只信 state.status.onebot.connected，绝不"读顶栏 #onebot-label 的文字"兜底：
+    // 未连接时 01-boot.js 写进去的是后端诊断原文，例如
+    // 「协议端未运行或未监听 WS 端口」，里面含子串「运行」，
+    // 按关键字匹配就会把「未运行」误判成「已连接」，与右下角「还没连上」的提示自相矛盾。
+    // state.status 是唯一权威来源。
     var on = !!ob.connected;
-    // 2026-10-23（P1-3）：后端持续无响应时（01-boot.js 的 statusFailStreak 判定），
-    // state.status 是**过期数据** —— 身份卡再写"在线 · 已连接 OneBot"就是撒谎，
-    // 而旧实现里这一刻界面一切如常，用户根本看不出后端已经挂了。
+    // 后端持续无响应时（01-boot.js 的 statusFailStreak 判定），state.status 是过期数据，
+    // 身份卡再写"在线 · 已连接 OneBot"就是撒谎，而用户根本看不出后端已经挂了。
     // 副标题改口径 + 圆点转灰；名字保留（是旧值，但比抹掉更认得出是谁）。
     // syncIdentity 由 wrapRefreshStatus 的 .then 每次触发（refreshStatus 内部吞错、
     // promise 恒 resolve），所以 stale 置位后的下一轮轮询就会走到这里。
@@ -1910,9 +1767,9 @@
     var avatarUsable = /^(https?:|data:|\/)/.test(url);
 
     // 「开始对话」副标题：有会话就显示第一个会话名，否则提示还没会话。
-    // r51：① 启动链进行中（starting）副标题是进度条，跳过重建；
-    //      ② 启动结束的结论（launchMsg，已连接/超时）要粘住——refreshStatus 的
-    //        重渲染不能把它盖回会话名，用户下次点击时才清除。
+    // ① 启动链进行中（starting）副标题是进度条，跳过重建；
+    // ② 启动结束的结论（launchMsg，已连接/超时）要粘住，refreshStatus 的重渲染
+    //    不能把它盖回会话名，用户下次点击时才清除。
     var sub = $('#launch-sub');
     var lb = $('#launch-btn');
     var launchVal = null;   // null = 这次不该写（没元素 / 进度条中）
@@ -1922,12 +1779,11 @@
       else {
         var items = $$('#session-items .session-item');
         var first = items[0];
-        // 2026-10-23 修复：取「会话名」而不是整个条目的 textContent，并且不再 slice(0, 18)。
-        //   旧写法有两处问题：① textContent 会把群名、时间、状态、统计连成一串，
-        //   截 18 字常常切在半个词上；② 硬切之后 CSS 的 text-overflow:ellipsis
-        //   永远不会触发（实测 scrollWidth === clientWidth），于是显示成
-        //   「战地五【9158】刻晴真爱粉交流群（」这种断在半句的残句。
-        //   现在只取名字，溢出交给 #launch-sub 的省略号。
+        // 取「会话名」而不是整个条目的 textContent，也不 slice：
+        // textContent 会把群名、时间、状态、统计连成一串，截断常常切在半个词上；
+        // 硬切之后 CSS 的 text-overflow:ellipsis 也永远不会触发（实测
+        // scrollWidth === clientWidth），于是显示成断在半句的残句。
+        // 现在只取名字，溢出交给 #launch-sub 的省略号。
         var nameEl = first && first.querySelector('.session-chat');
         var txt = nameEl
           ? String(nameEl.getAttribute('title') || nameEl.textContent || '').trim()
@@ -1974,17 +1830,17 @@
   function syncChrome(name) {
     var g = groupOfTab(name);
     // 顶栏一级高亮
-    // ⚠️（2026-10-23 晚）壁纸页已收回「设置 → 外观与数据」，顶栏不再有 data-top="wallpaper"
-    //    这颗按钮（见 index.html 该处注释）。但 GROUPS 里仍然保留 wallpaper 分组 ——
-    //    showNav / panes.settings 那些判断都靠 g.key 区分，归到 settings 组会把设置页内容
-    //    一起亮出来。所以这里单独做一次「归属映射」：进壁纸页时高亮设置，
-    //    否则会出现"切进壁纸页、顶栏一个都不亮"的迷路感。
+    // 壁纸页已收回「设置 → 外观与数据」，顶栏不再有 data-top="wallpaper" 这颗按钮
+    // （见 index.html 该处注释）。但 GROUPS 里仍保留 wallpaper 分组：
+    // showNav / panes.settings 那些判断都靠 g.key 区分，归到 settings 组会把设置页内容
+    // 一起亮出来。所以这里单独做一次归属映射：进壁纸页时高亮设置，
+    // 否则会出现"切进壁纸页、顶栏一个都不亮"的迷路感。
     var topKey = g.key === 'wallpaper' ? 'settings' : g.key;
     $$('#tabs .nav-item').forEach(function (b) {
       var on = b.dataset.top === topKey;
       b.classList.toggle('active', on);
-      // ⚠️（2026-10-10 r86 修 P2）一级导航同样要能"读"出选中态 ——
-      //    此前只有 .active 这个视觉类，读屏用户听到的是一排无差别的按钮。
+      // 一级导航同样要能"读"出选中态：此前只有 .active 这个视觉类，
+      // 读屏用户听到的是一排无差别的按钮。
       if (on) b.setAttribute('aria-current', 'page');
       else b.removeAttribute('aria-current');
     });
@@ -1994,11 +1850,11 @@
     var isLaunch = name === 'sessions';
     sideLaunch && (sideLaunch.hidden = !isLaunch);
     // 左栏中间那块：启动页是启动块、设置页是设置分区菜单，其余页是「二级导航」。
-    // ⚠️ 存档 / 记忆 也必须显示二级导航 —— 它们与「会话」同属一级，若这里一并隐掉，
-    //    用户就没有任何途径在这三页之间来回切（原型在 存档/记忆 页的左栏同时列
-    //    「消息记录」导航与群聊列表；本实现把列表交给该页自己的 .list-pane 承担）。
+    // 存档 / 记忆 也必须显示二级导航：它们与「会话」同属一级，若这里一并隐掉，
+    // 用户就没有任何途径在这三页之间来回切（原型在 存档/记忆 页的左栏同时列
+    // 「消息记录」导航与群聊列表；本实现把列表交给该页自己的 .list-pane 承担）。
     // 壁纸页同设置页：左栏不挂二级导航（它没有二级页，整页自己带两栏）。
-    // 桌宠 2026-10-24 起也走二级导航（ops 组第三项），所以这条判断里不再有 pet。
+    // 桌宠走二级导航（ops 组第三项），所以这条判断里没有 pet。
     var showNav = !isLaunch && g.key !== 'settings' && g.key !== 'wallpaper';
     sideNav && (sideNav.hidden = !showNav);
 
@@ -2008,7 +1864,6 @@
     panes.settings && (panes.settings.hidden = g.key !== 'settings');
     // r36：社区块已从左栏迁到设置页内容区底部（#view-settings > .settings-foot），
     // 随 view 显隐，这里不再管。
-
     syncSidebarWidth(name, g);
     // 存档 / 记忆 的左栏里要同时有「消息记录」导航（列在列表栏上方）
     if (!sideNav.hidden) renderSideNav(name, g);
@@ -2021,9 +1876,9 @@
     var rawSwitch = switchTab;
     switchTab = function (name) {
       var r = rawSwitch.apply(this, arguments);
-      // ⚠️（2026-10-17 N3 复核）**刻意静默**：syncChrome 只负责外壳高亮/左栏这类
-      //    纯视觉同步，失败时页面本身已经切过去了 —— 再弹一个提示框反而更打断。
-      //    保留 console.warn 作为线索即可。
+      // 刻意静默：syncChrome 只负责外壳高亮/左栏这类纯视觉同步，
+      // 失败时页面本身已经切过去了，再弹一个提示框反而更打断。
+      // 保留 console.warn 作为线索即可。
       try { syncChrome(name); } catch (e) { console.warn('[chrome] 同步失败：', e && e.message); }
       return r;
     };
@@ -2031,7 +1886,7 @@
 
   /* 包一层 renderSettings（06-settings-render.js 的全局函数，与 switchTab 同一种做法）：
      「会话设置」页的「编辑本会话人设」复用全局页的 openPerChatPersonaModal，那个弹窗
-     保存后只调 renderSettings() 刷全局页 —— 不包这一层，改完人设回到全屏页摘要还是旧的。 */
+     保存后只调 renderSettings() 刷全局页，不包这一层，改完人设回到全屏页摘要还是旧的。 */
   if (typeof renderSettings === 'function') {
     var rawRenderSettings = renderSettings;
     renderSettings = function () {
@@ -2042,8 +1897,8 @@
   }
 
   /* 包一层 updateUsagePage（04-archive-usage.js 的全局函数，与 switchTab 同一种做法）：
-     它每次都会重画三张图，而图表的宽度是量容器得来的 —— 隐藏的块 clientWidth 是 0，
-     会把图拉成整页宽。所以**先**把维度可见性定下来，**再**让它去量、去画。 */
+     它每次都会重画三张图，而图表的宽度是量容器得来的，隐藏的块 clientWidth 是 0，
+     会把图拉成整页宽。所以先把维度可见性定下来，再让它去量、去画。 */
   if (typeof updateUsagePage === 'function') {
     var rawUpdateUsage = updateUsagePage;
     updateUsagePage = function (stats) {

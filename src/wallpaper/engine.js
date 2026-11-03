@@ -1,4 +1,4 @@
-// 小红车壁纸（Wallpaper Engine）—— 内置模块 src/wallpaper/engine.js
+// 小红车壁纸（Wallpaper Engine），内置模块 src/wallpaper/engine.js
 // （2026-10-23 由「壁纸套件交接包」内置化，原 skills/wallpaper-engine 技能）：
 // 注册工具，由模型判断什么时候用。
 //
@@ -74,7 +74,7 @@ function currentState(install, list) {
 
 /**
  * 换完发预览图。
- * 预览图是 WE 工程目录里的 preview.gif/jpg，直接给本地路径让协议端自己读磁盘 ——
+ * 预览图是 WE 工程目录里的 preview.gif/jpg，直接给本地路径让协议端自己读磁盘，
  * 比 base64 内联省两个数量级（见 sender.sendImage 的注释）。
  * 预览图太大或发送失败都不算换壁纸失败：图是锦上添花，不能反过来把主流程搞挂。
  */
@@ -98,7 +98,7 @@ async function sendPreview(ctx, entry, enabled) {
  * 把预览图读成 data URL（给模型"看"用）。
  *
  * 为什么不用本地路径：模型只认 data URL / http 链接；路径是给协议端读磁盘用的。
- * 4MB 上限是"看得清"和"别把上下文烧穿"之间的折中 —— 工坊预览图多是 1~3MB 的 GIF，
+ * 4MB 上限是"看得清"和"别把上下文烧穿"之间的折中，工坊预览图多是 1~3MB 的 GIF，
  * 更大的（4K 动图十几 MB）发出去只会让请求变慢甚至 400。
  */
 function previewDataUrl(entry) {
@@ -328,7 +328,7 @@ export function setup(api) {
           };
         }
 
-        // preview：把当前壁纸的画面拿出来 —— 发给群里，同时作为图片交给自己看。
+        // preview：把当前壁纸的画面拿出来，发给群里，同时作为图片交给自己看。
         // 这样"现在这张好不好看""给我看看现在这张"才回答得出来，而不是只会念标题。
         if (action === 'preview') {
           const entry = state?.entry;

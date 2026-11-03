@@ -1,10 +1,10 @@
-// 〔通用弹窗外壳 / 模型选择 / 人设 / 白名单 / saveConfig〕——M9 拆分第 9 段
+// 〔通用弹窗外壳 / 模型选择 / 人设 / 白名单 / saveConfig〕
 'use strict';
 
-/* ── API 协议下拉（2026-10-19）────────────────────────────────────────────
+/* ── API 协议下拉 ─────────────────────────────────────────────────────────
    「模型管理 → 添加/编辑提供商」里的 API 协议选择。与后端 src/api-protocols.js
    的目录保持一致（id 必须逐一对应）。
-   ⚠️ UI 是经典脚本共享全局作用域 —— 本常量名带 QA_ 前缀防撞（ui-globals-check 口径）。 */
+   ⚠️ UI 是经典脚本共享全局作用域，本常量名带 QA_ 前缀防撞（ui-globals-check 口径）。 */
 const QA_API_PROTOCOLS = [
   { id: 'openai', label: 'OpenAI (Chat Completions)' },
   { id: 'openai-responses', label: 'OpenAI (Responses API)' },
@@ -27,14 +27,13 @@ function qaProtocolSelectHtml(selected) {
   ).join('');
 }
 
-/* ── 提示条文案写入（2026-10-21）─────────────────────────────────────────────
-   为什么要有它：本文件里所有 `#xxx-hint` / `#pick-result` / `#model-label` 提示
-   条都只存在于**当前分区**的 HTML 里（renderSettings 只重建 state.settingsSection
-   那一段）。设置页一旦重建 / 切区 / 重新进页面，旧节点就从 DOM 消失，而
-   `$('#xxx').textContent = …` 在查不到元素时直接抛
-   `TypeError: Cannot set properties of null (setting 'textContent')`。
-   更糟的是很多写入发生在 catch 里（如"选择失败：xxx"）—— 那会在处理错误的路上
-   二次抛错，用户看到的就只有"点了没反应"，控制台里一堆同一条报错。
+/* ── 提示条文案写入 ──────────────────────────────────────────────────────
+   本文件里所有 `#xxx-hint` / `#pick-result` / `#model-label` 提示条都只存在于
+   当前分区的 HTML 里（renderSettings 只重建 state.settingsSection 那一段）。
+   设置页一旦重建 / 切区 / 重新进页面，旧节点就从 DOM 消失，而
+   `$('#xxx').textContent = …` 在查不到元素时直接抛 TypeError。
+   更糟的是很多写入发生在 catch 里（如"选择失败：xxx"），那会在处理错误的路上
+   二次抛错，用户看到的只有"点了没反应"。
 
    ⇒ 元素缺席 = 静默跳过。提示条是锦上添花，不该有能力打断主流程。 */
 function setHintText(sel, text) {
@@ -43,16 +42,16 @@ function setHintText(sel, text) {
   return !!el;
 }
 
-/* ── body 滚动锁（2026-10-10 r86 修 P2）────────────────────────────────────
+/* ── body 滚动锁 ────────────────────────────────────────────────────────
    弹窗打开时锁住背后页面的滚动，关闭时还原。
 
-   为什么需要：无边框透明窗里，弹窗遮罩是 position:fixed 铺满视口，但**背后的
-   滚动容器仍在**。鼠标滚轮在遮罩上滑动会穿透到背后把列表滚走 —— 关掉弹窗后
-   用户发现自己刚才看的那一行不见了。移动端（触摸板惯性滚动）更明显。
+   为什么需要：无边框透明窗里，弹窗遮罩是 position:fixed 铺满视口，但背后的
+   滚动容器仍在。鼠标滚轮在遮罩上滑动会穿透到背后把列表滚走，关掉弹窗后
+   用户发现自己刚才看的那一行不见了。触摸板惯性滚动更明显。
 
-   ⚠️ 用**计数器**：弹窗会叠（模型选择 → 添加模型 → 人设选择），必须等全部关完
+   ⚠️ 用计数器：弹窗会叠（模型选择 → 添加模型 → 人设选择），必须等全部关完
       才解锁；用布尔量会被"第一个关掉的弹窗"提前解开。
-   ⚠️ 还原的是**打开前的原值**，不是写死 ''：页面可能本来就设了 overflow。 */
+   ⚠️ 还原的是打开前的原值，不是写死 ''：页面可能本来就设了 overflow。 */
 let __modalScrollLocks = 0;
 let __modalPrevBodyOverflow = null;
 function lockBodyScroll() {
@@ -77,30 +76,29 @@ function unlockBodyScroll(overlay) {
   }
 }
 
-/* ── 模态框焦点陷阱（2026-10-10 r86 修 P2）────────────────────────────────
-   让 Tab / Shift+Tab 在**最上层弹窗内**首尾循环，并把被程序性移出的焦点拽回。
+/* ── 模态框焦点陷阱 ─────────────────────────────────────────────────────
+   让 Tab / Shift+Tab 在最上层弹窗内首尾循环，并把被程序性移出的焦点拽回。
 
    为什么需要：无边框透明窗里弹窗打开后，焦点仍可 Tab 到背后的顶栏按钮
-   （最小化 / 关闭）——"弹窗还开着，回车却按到了后面"。读屏用户更难察觉。
+   （最小化 / 关闭），"弹窗还开着，回车却按到了后面"。读屏用户更难察觉。
 
-   设计：文档级**单例**。全局只装一次监听，弹窗通过 register/unregister 登记；
+   设计：文档级单例。全局只装一次监听，弹窗通过 register/unregister 登记；
    每次拦截时现算"最上层 overlay"是谁，不依赖各 overlay 自己保存状态。
    ⚠️ 现算 topmost 而不是缓存：弹窗会叠、会异步退场，缓存的"当前顶层"很容易过期。 */
 const __focusTraps = new Set();
 let __trapInstalled = false;
-// ⚠️ readonly 输入框**不算**可编辑焦点目标：人设弹窗的「选择人设」框
+// ⚠️ readonly 输入框不算可编辑焦点目标：人设弹窗的「选择人设」框
 // （#gp-pick / #pcp-pick）就是 readonly，焦点落在它上面时 Ctrl+V 等原生编辑
-// 命令会被 Chromium 静默吞掉（无 paste 事件、无反馈）—— 2026-10-18 修
-// 「人设界面 Ctrl+V 时灵时不灵」：Tab 循环与 focusin 兜底都不该把焦点
-// 往只读框上拽。
+// 命令会被 Chromium 静默吞掉（无 paste 事件、无反馈）。
+// Tab 循环与 focusin 兜底都不该把焦点往只读框上拽。
 const __FOCUSABLE = 'a[href], button:not([disabled]), input:not([type=hidden]):not([readonly]):not([disabled]),' +
   ' select:not([disabled]), textarea:not([readonly]):not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 // 「可编辑」焦点目标：接受 Ctrl+V/Ctrl+C/Ctrl+X/Ctrl+A 等原生编辑命令的控件。
-// 2026-10-18 修「Ctrl+V 时灵时不灵」一族问题的统一口径 —— 焦点停在 readonly
-// 输入框（各「选择人设/选择模型」框）、按钮或 body 上时，Chromium 对原生编辑
-// 命令静默无操作（不报错、无反馈）。三个使用点：弹窗打开自动聚焦、
-// requestClose 续编辑焦点拉回、closeModelModal 的只读顺延兜底。
+// 焦点停在 readonly 输入框（各「选择人设/选择模型」框）、按钮或 body 上时，
+// Chromium 对原生编辑命令静默无操作（不报错、无反馈）。
+// 三个使用点：弹窗打开自动聚焦、requestClose 续编辑焦点拉回、
+// closeModelModal 的只读顺延兜底。
 const __EDITABLE_SEL = 'input:not([type=hidden]):not([readonly]):not([disabled]),' +
   ' textarea:not([readonly]):not([disabled]), select:not([disabled])';
 
@@ -155,8 +153,8 @@ function installModalFocusTrap() {
   /* ③ 自动登记：任何进入 DOM 的 .model-modal-overlay 都纳入陷阱约束，
         不必要求创建方记得调用 registerFocusTrap。
         ⚠️ 这是"兜底中的兜底"：modelModalShell 是正规入口，但全项目存在
-           （且将来可能新增）直接手搓遮罩的路径 —— 焦点陷阱属于**安全/可达性
-           底线**，不该因为某条路径忘了登记就整体失效。
+           （且将来可能新增）直接手搓遮罩的路径。焦点陷阱属于安全/可达性底线，
+           不该因为某条路径忘了登记就整体失效。
         观察 body 的直接子节点增删即可（遮罩都是挂 body 下的一层）。 */
   try {
     new MutationObserver((muts) => {
@@ -179,7 +177,7 @@ function installModalFocusTrap() {
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Tab') return;
     // 启动引导（.ob-overlay）压在所有弹窗之上时让路：引导不在 model-modal 体系里，
-    // 不豁免的话焦点会被下面那层的陷阱拽回去，引导按钮点不动（2026-10-18）。
+    // 不豁免的话焦点会被下面那层的陷阱拽回去，引导按钮点不动。
     if (document.querySelector('.ob-overlay')) return;
     const overlay = __topModalOverlay();
     if (!overlay) return;
@@ -201,7 +199,7 @@ function installModalFocusTrap() {
   // ② focusin 兜底：代码 / 鼠标把焦点挪到弹窗外 → 立刻拽回最上层弹窗。
   //    捕获阶段监听，先于任何聚焦到达目标前就能感知。
   document.addEventListener('focusin', (e) => {
-    // 引导层在场时让路（同 Tab 循环的处理，2026-10-18）
+    // 引导层在场时让路（同 Tab 循环的处理）
     if (document.querySelector('.ob-overlay')) return;
     const overlay = __topModalOverlay();
     if (!overlay) return;
@@ -214,37 +212,31 @@ function installModalFocusTrap() {
 // ── 模型选择/添加/删除 模态框 ──
 function closeModelModal(overlay) {
   if (!overlay) return;
-  // R73：所有关闭路径（点遮罩 / 右上角 × / Esc / 自己的按钮）都在这里汇合 ——
-  //   统一派发 qa-close，让 09-dialogs.js 的 Promise 型对话框知道"我被关掉了"。
-  //   此前 Esc / × / 点遮罩三条路径只移除 DOM、不通知调用方 ——
-  //   `await qaConfirm(...)` 会永远挂在那里不 settle（2026-09-24 UI 审查 P2）。
+  // 所有关闭路径（点遮罩 / 右上角 × / Esc / 自己的按钮）都在这里汇合，
+  // 统一派发 qa-close，让 09-dialogs.js 的 Promise 型对话框知道"我被关掉了"。
+  // 不派发的话 `await qaConfirm(...)` 会永远挂在那里不 settle。
   try { overlay.dispatchEvent(new CustomEvent('qa-close')); } catch { /* ignore */ }
   // 先摘掉全局键盘监听并把焦点还给打开它的元素（可访问性）
   // ⚠️ removeEventListener 的第三参必须与 addEventListener 一致（都是捕获 true），
-  //    否则监听器不会被解绑 —— 弹窗关了却还在抢 Esc。
+  //    否则监听器不会被解绑，弹窗关了却还在抢 Esc。
   if (overlay._keyHandler) {
     document.removeEventListener('keydown', overlay._keyHandler, true);
     overlay._keyHandler = null;
   }
   // 焦点陷阱：从全局登记表里摘掉（真逻辑与监听器由 installModalFocusTrap 统一持有）
   unregisterFocusTrap(overlay);
-  // ── body 滚动锁（2026-10-10 r86 修 P2）──
-  // 弹窗打开时锁住背后的页面滚动，关闭时还原。
-  // ⚠️ 用**计数器**而不是布尔量：弹窗会叠（模型选择 → 添加模型 → 人设选择），
-  //    逐个关闭时只有全部关完才能解锁；用布尔量会被"第一个关掉的弹窗"提前解开，
-  //    于是上层弹窗还在，背景却又能滚了。
-  // ⚠️ 记录并还原**原值**而不是写死 ''：页面本身若因别的原因设了 overflow，
-  //    硬写 '' 会把它一并抹掉。
+  // ── body 滚动锁 ──
+  // 细节见 lockBodyScroll 上方的说明。
   unlockBodyScroll(overlay);
   const back = overlay._prevFocus;
   let restored = false;
   if (back && typeof back.focus === 'function' && back.isConnected && back !== document.body) {
     try { back.focus({ preventScroll: true }); restored = true; } catch { /* ignore */ }
-    // ⚠️ 2026-10-18：back 是 readonly 选择框（#gp-pick / #mc-model-pick /
-    //    .fb-model-pick / #cfg-mem-model-pick …）时，焦点停在只读框上，之后
-    //    弹窗/页面里所有 Ctrl+V、Ctrl+C 都被 Chromium 静默吞掉。子弹窗都是点
-    //    这些只读框打开的，机械归还必然复现 —— 顺延到同一容器内第一个可编辑
-    //    控件（弹窗内 → .model-modal；页面上 → form），从根上覆盖所有选择器。
+    // ⚠️ back 是 readonly 选择框（#gp-pick / #mc-model-pick / .fb-model-pick /
+    //    #cfg-mem-model-pick …）时，焦点停在只读框上，之后弹窗/页面里所有
+    //    Ctrl+V、Ctrl+C 都被 Chromium 静默吞掉。子弹窗都是点这些只读框打开的，
+    //    机械归还必然复现，所以顺延到同一容器内第一个可编辑控件
+    //    （弹窗内 → .model-modal；页面上 → form）。
     if (typeof back.matches === 'function' && back.matches('input[readonly], textarea[readonly]')) {
       focusFirstEditableAfter(back)
         || focusFirstEditableIn(back.closest('.model-modal') || back.closest('form') || document.body);
@@ -252,8 +244,8 @@ function closeModelModal(overlay) {
   }
   if (!restored) {
     // back 不可用（是 body、或已随页面重渲染被移除）→ 焦点不能留在 body 上
-    // （留在 body = 之后所有原生编辑命令静默失效）。落到"关掉本弹窗后的新
-    // 最上层"；没有叠层则还给设置页表单第一个可编辑控件。
+    // （留在 body = 之后所有原生编辑命令静默失效）。落到关掉本弹窗后的新最上层，
+    // 没有叠层则还给设置页表单第一个可编辑控件。
     const nextTop = Array.from(document.querySelectorAll('.model-modal-overlay:not(.closing)'))
       .filter((o) => o !== overlay).pop();
     if (nextTop) {
@@ -277,13 +269,12 @@ function closeModelModal(overlay) {
 
 /**
  * 弹窗外壳。
- * 主体方向判定：body **以 `<div class="model-modal-left"` 开头**才加 .row（横向），
+ * 主体方向判定：body 以 `<div class="model-modal-left"` 开头才加 .row（横向），
  * 其余一律纵向堆叠。
- * ⚠️ 曾经只要 body 里"包含" model-modal-left 就加 row —— 但复合结构的弹窗
- *    （顶部工具栏 + 中部双栏 + 底部提示，如批量价格编辑、模型添加）需要的是
- *    外层纵向、双栏在 .ma-body 内部横向。误判成 row 后，工具栏与提示文
- *    两个 flex 项把宽度吃光，.ma-body（flex:1, basis 0）被挤成 0 宽，
- *    整个内容区隐形（2026-09-05 批量价格弹窗"空白"事故）。
+ * ⚠️ 不能用"包含 model-modal-left"判定：复合结构的弹窗（顶部工具栏 + 中部双栏
+ *    + 底部提示，如批量价格编辑、模型添加）需要外层纵向、双栏在 .ma-body 内部横向。
+ *    误判成 row 后，工具栏与提示文两个 flex 项把宽度吃光，
+ *    .ma-body（flex:1, basis 0）被挤成 0 宽，整个内容区隐形。
  */
 
 /**
@@ -293,9 +284,8 @@ function closeModelModal(overlay) {
  * @param {string} [opts.foot] 底部按钮 HTML
  * @param {boolean} [opts.danger] 危险配色
  * @param {boolean} [opts.closeOnBackdrop=true] 点遮罩是否关闭。
- *   **编辑型弹窗必须传 false**：人设编辑器这类"填一半内容"的界面，误触外部
- *   直接关掉太伤体验（2026-10-18 用户反馈「点外边直接关闭」）。传 false 后仍有
- *   × / 取消 / Esc 三条明确退出路径，且未保存改动守卫照常提示。
+ *   编辑型弹窗必须传 false：人设编辑器这类"填一半内容"的界面，误触外部直接关掉
+ *   太伤体验。传 false 后仍有 × / 取消 / Esc 三条明确退出路径，且未保存改动守卫照常提示。
  */
 function modelModalShell({ head, body, foot = '', danger = false, closeOnBackdrop = true }) {
   const overlay = document.createElement('div');
@@ -306,7 +296,7 @@ function modelModalShell({ head, body, foot = '', danger = false, closeOnBackdro
         <span>${esc(String(head ?? ''))}</span>
         <button class="model-modal-close" type="button" aria-label="关闭" title="关闭（Esc）">×</button>
       </div>
-      <!-- body / foot 按 HTML 契约原样插入（调用方负责其内部转义）——
+      <!-- body / foot 按 HTML 契约原样插入（调用方负责其内部转义），
            head 是**标题语义**，走 esc()，与上面的 aria-label 保持一致。
            2026-10-07：原先 head 也未转义，一旦有调用方把会话标题/群名当 title
            传进来，就能借 <img src> 打出外传信标（脚本执行被 CSP 的 script-src 'self' 挡住，
@@ -315,27 +305,25 @@ function modelModalShell({ head, body, foot = '', danger = false, closeOnBackdro
       <div class="model-modal-foot">${foot || ''}</div>
     </div>`;
   document.body.appendChild(overlay);
-  // 锁住背后页面滚动（r86 修 P2），与 closeModelModal 的 unlockBodyScroll 成对
+  // 锁住背后页面滚动，与 closeModelModal 的 unlockBodyScroll 成对
   lockBodyScroll();
   overlay._scrollLocked = true;
-  // ── 未保存改动守卫（2026-10-17）──
-  // 群友反馈"管理员附加规则没法自动保存"：人设类弹窗是"改完点保存"的显式保存
-  // 模型（不能混进表单自动保存链，原因见 06-settings-render.js saveToMap 注释），
-  // 但此前 Esc / 点遮罩 / × 三条被动关闭路径会**静默丢弃**刚写的输入 ——
-  // 写了一半的规则随手一关就没了，感知上就是"没保存上"。
+  // ── 未保存改动守卫 ──
+  // 人设类弹窗是"改完点保存"的显式保存模型（不能混进表单自动保存链，原因见
+  // 06-settings-render.js saveToMap 注释），但 Esc / 点遮罩 / × 三条被动关闭路径
+  // 会静默丢弃刚写的输入，感知上就是"没保存上"。
   //
-  // 通用化：除 pcp/gp 等已显式挂 overlay.__dirtyGuard()（返回 true=有未保存改动）的
-  // 弹窗外，给**所有可编辑控件**自动挂监听 —— 用户真实编辑（e.isTrusted === true，
-  // 可精确排除程序化 dispatchEvent 的回填）就把 __userEdited 置真。requestClose 据此
-  // 弹确认，一次性覆盖所有"靠保存按钮落盘、但被动关闭会静默丢输入"的弹窗
-  // （人设/记忆印象/社区配置/广播/Doctor 等）。
+  // 除 pcp/gp 等已显式挂 overlay.__dirtyGuard()（返回 true=有未保存改动）的弹窗外，
+  // 给所有可编辑控件自动挂监听：用户真实编辑（e.isTrusted === true，可排除程序化
+  // dispatchEvent 的回填）就把 __userEdited 置真，requestClose 据此弹确认。
+  // 一次性覆盖所有"靠保存按钮落盘、但被动关闭会静默丢输入"的弹窗。
   //   · type=search 与 readonly/disabled 字段排除（过滤框是瞬态，不视为数据）。
   //   · 个别已自带实时保存的弹窗（如反馈草稿）可设 overlay._noDirtyGuard = true 退出。
   //   · 主动关闭（保存/取消等按钮直接调 closeModelModal）不经过守卫，语义不变。
   let __closing = false;
   let __userEdited = false;
   if (!overlay._noDirtyGuard) {
-    // 用**捕获阶段委托**而非逐元素挂监听：既能覆盖弹窗里**动态插入**的输入框，
+    // 用捕获阶段委托而非逐元素挂监听：既能覆盖弹窗里动态插入的输入框，
     // 也避免重复遍历 DOM。type=search 与 readonly/disabled 字段排除（过滤框属瞬态）。
     overlay.addEventListener('input', (e) => {
       const t = e.target;
@@ -355,8 +343,7 @@ function modelModalShell({ head, body, foot = '', danger = false, closeOnBackdro
     if (__closing || !overlay.isConnected) return;
     // 确认框的开合会把焦点带走：点遮罩触发时 activeElement 已是 body（遮罩不可
     // 聚焦，先 blur 了文本框），按 × 触发时是 × 按钮本身。「继续编辑」后焦点若
-    // 落在 body / 按钮上，弹窗里随后所有 Ctrl+V 都会静默失效（没有可编辑焦点
-    // 目标）—— 2026-10-18 修「人设界面 Ctrl+V 时灵时不灵」的第三条路径。
+    // 落在 body / 按钮上，弹窗里随后所有 Ctrl+V 都会静默失效。
     // 先记下进入时的焦点，续编辑时拉回弹窗内的可编辑控件。
     const focusBack = document.activeElement;
     if (!force && !overlay._noDirtyGuard && __isDirty()) {
@@ -389,19 +376,15 @@ function modelModalShell({ head, body, foot = '', danger = false, closeOnBackdro
   overlay.querySelector('.model-modal-close').addEventListener('click', () => requestClose());
 
   // ── 可访问性：Esc 关闭 + 焦点管理 ──
-  // 此前全项目只有一处 Escape 监听，且位于一个从未被调用的死函数里 ——
-  // 键盘用户打开弹窗后既关不掉、焦点也留在背景上，屏幕阅读器不播报对话框。
   const prevFocus = document.activeElement;
   const onKey = (e) => {
     if (e.key === 'Escape') {
-      // ⚠️ 必须在**捕获阶段**（见下方 addEventListener 第三参 true）拦下 Esc。
-      //    （2026-10-10 r86 修 P0）此前挂冒泡阶段 → 与 14-chrome.js 的
-      //    document 级 keydown（启动时注册，**先注册先执行**）打架：
-      //    14-chrome 先跑，读 e.defaultPrevented 仍是 false（本处理器还没轮到），
-      //    于是 closeBigPage() 把全屏页也关了 —— 按一次 Esc 两层同关。
-      //    捕获阶段从 document 向下传播时最先执行，preventDefault() 生效后
-      //    14-chrome 的冒泡处理器就能读到 true 而自行跳过。
-      //    （2026-10-17）改走 requestClose：有未保存改动时先弹确认，不再静默丢弃。
+      // ⚠️ 必须在捕获阶段（见下方 addEventListener 第三参 true）拦下 Esc。
+      //    挂冒泡阶段会与 14-chrome.js 的 document 级 keydown（启动时注册，
+      //    先注册先执行）打架：14-chrome 先跑时 e.defaultPrevented 还是 false，
+      //    于是 closeBigPage() 把全屏页也关了，按一次 Esc 两层同关。
+      //    捕获阶段最先执行，preventDefault() 生效后 14-chrome 会自行跳过。
+      //    走 requestClose：有未保存改动时先弹确认，不静默丢弃。
       e.preventDefault();
       e.stopPropagation();
       requestClose();
@@ -419,25 +402,18 @@ function modelModalShell({ head, body, foot = '', danger = false, closeOnBackdro
   // 第三参 true = 捕获阶段：先于所有冒泡监听器（含 14-chrome 的关全屏页）执行
   document.addEventListener('keydown', keyHandler, true);
 
-  // ── 焦点陷阱（2026-10-10 r86 修 P2）──
-  // 此前弹窗只做了两件事：打开时把焦点移进去、关闭时还给调用方。
-  // 中间的 Tab 完全没管 —— 无边框窗里焦点一旦 Tab 出弹窗，就会跑到背后的
-  // 顶栏最小化/关闭按钮上，"弹窗还开着，回车却按到了后面的按钮"。
-  //
-  // ⚠️ 实现放在**文档级**（见文件末尾 installModalFocusTrap），而不是给每个
-  //    overlay 各挂一份：
-  //    ① 弹窗可以叠，只有最上层该拦 —— 集中在一处判断最上层比自己各管各的更简单；
-  //    ② 全项目还有别的代码直接用 `class="model-modal-overlay"` 手搓遮罩
-  //       （老代码路径、以及测试），它们没走 modelModalShell 也应当被同样的规则约束。
-  //    这里只登记"这个 overlay 存在"，真正的拦截逻辑全局只有一份。
+  // ── 焦点陷阱 ──
+  // 实现在文档级（见文件末尾 installModalFocusTrap），不给每个 overlay 各挂一份：
+  //    ① 弹窗可以叠，只有最上层该拦，集中在一处判断最上层更简单；
+  //    ② 全项目还有别的代码直接用 `class="model-modal-overlay"` 手搓遮罩，
+  //       它们没走 modelModalShell 也应当被同样的规则约束。
+  // 这里只登记"这个 overlay 存在"，真正的拦截逻辑全局只有一份。
   registerFocusTrap(overlay);
 
-  // 打开后把焦点移进弹窗（优先第一个**可编辑**输入框，否则关闭按钮）
-  // ⚠️ 选择器必须排除 readonly / disabled：人设弹窗（openGlobalPersonaModal /
-  //    openPerChatPersonaModal）body 里第一个可聚焦元素是 readonly 的
-  //    「选择人设」框（#gp-pick / #pcp-pick），焦点落在只读框上时 Ctrl+V
-  //    粘贴被 Chromium 静默吞掉 —— 群友反馈"打开人设设置直接 Ctrl+V 粘不
-  //    进去"的最高频路径（2026-10-18）。
+  // 打开后把焦点移进弹窗（优先第一个可编辑输入框，否则关闭按钮）
+  // ⚠️ 选择器必须排除 readonly / disabled：人设弹窗 body 里第一个可聚焦元素是
+  //    readonly 的「选择人设」框（#gp-pick / #pcp-pick），焦点落在只读框上时
+  //    Ctrl+V 粘贴被 Chromium 静默吞掉。
   setTimeout(() => {
     if (!overlay.isConnected) return;
     if (focusFirstEditableIn(overlay)) return;   // 优先第一个可编辑控件（排除只读/禁用）
@@ -445,10 +421,9 @@ function modelModalShell({ head, body, foot = '', danger = false, closeOnBackdro
       || overlay.querySelector('.model-modal-close');
     try { first?.focus({ preventScroll: true }); } catch { /* ignore */ }
   }, 0);
-  // 2026-10-23：统一给弹窗表单补 label→控件的关联。
-  // 此前大量模板写成 <label>名称</label><input id="…"> 而没有 for ——
-  // 点标签不聚焦输入框、读屏软件也读不出关联。按「同一 .field 内的第一个控件」
-  // 自动补（已有 for 的不动），一处覆盖全部弹窗，不必逐个模板手改。
+  // 统一给弹窗表单补 label→控件的关联：大量模板写成 <label>名称</label><input id="…">
+  // 而没有 for，点标签不聚焦输入框、读屏软件也读不出关联。
+  // 按「同一 .field 内的第一个控件」自动补（已有 for 的不动），一处覆盖全部弹窗。
   try {
     overlay.querySelectorAll('.field').forEach((f) => {
       const lb = f.querySelector(':scope > label');
@@ -464,29 +439,24 @@ function modelModalShell({ head, body, foot = '', danger = false, closeOnBackdro
 /**
  * 调用明细弹窗：点「调用次数」卡片打开，列出各类工具分别被调用了多少次。
  *
- * 这东西对省钱没什么实际帮助 —— 但一张纯数字的成本表太无聊了，
+ * 这东西对省钱没什么实际帮助，但一张纯数字的成本表太无聊了，
  * 而"机器人这周发了 133 条消息、戳了 6 次、翻了 3 次聊天记录"这类数字
  * 恰恰是最能反映它"活成什么样"的。所以做出来，纯粹因为好看又好玩。
  */
 // 弹窗之间跳转的挂起标记。
 //
-// 背景（2026-09-20 用户报障「填完模型地址后无法拉取模型列表」）：
-//   旧流程有一个死循环 —— 「添加提供商」强制要求至少填一个模型 id，
-//   而「拉取模型列表」按钮只在**已存在的提供商**的右列里。
-//   于是新用户没有 Model id 就建不了提供商，也就不可能点到拉取按钮。
-//   这里连同下面 openProviderAddModal 的改动一起打破它。
+// 背景：旧流程有一个死循环。「添加提供商」强制要求至少填一个模型 id，
+// 而「拉取模型列表」按钮只在已存在的提供商的右列里，新用户没有 Model id
+// 就建不了提供商，也就不可能点到拉取按钮。这里连同 openProviderAddModal 一起打破它。
 let pendingOpenModelManage = false;
 
 /**
  * 关闭当前弹窗后打开「模型管理」。
  *
- * 不能直接在当前弹窗里再开一个：两个遮罩会**同层重叠**（.model-modal-overlay
+ * 不能直接在当前弹窗里再开一个：两个遮罩会同层重叠（.model-modal-overlay
  * 的层号全项目只有一处，见 style.css 0.5 段的 --z-model-modal-overlay），
- * 新旧两个 DOM 摞在一起，中间那段既点得到旧的关闭按钮、又点得到新的内容，
- * 视觉上也是一团糊。统一"先关后开"。
- * ⚠️ 原文此处写的是"样式表给它 +20 的 z-index 覆盖链，两个叠着开会出现
- *    新的在下面" —— 核实过：样式表与 JS 里都没有这条覆盖链，层号始终相同。
- *    真实理由是上面的同层重叠，不必据此推断层叠关系。
+ * 新旧两个 DOM 摞在一起，中间那段既点得到旧的关闭按钮、又点得到新的内容。
+ * 统一"先关后开"。
  */
 function scheduleOpenModelManage() {
   pendingOpenModelManage = true;
@@ -577,7 +547,7 @@ function openToolBreakdown() {
  * ⚠️ 必须能指定**填回目标**（`target`）：
  *   默认目标是设置页统一编辑器（`#cfg-*`），但那个编辑器只在「统一人设」模式下在场；
  *   从人设/分会话人设弹窗里点「选择人设」时，得填进弹窗自己的 `#gp-roletext` / `#pcp-roletext`。
- *   以前写死 `$('#cfg-roletext')` —— 元素不在场时 `null.value` 直接抛错（或静默无效），
+ *   以前写死 `$('#cfg-roletext')`，元素不在场时 `null.value` 直接抛错（或静默无效），
  *   分群模式下「添加人设」填不进去就是这么来的。
  *
  * @param {{roleSel?:string, rulesSel?:string, pickSel?:string, hintSel?:string}} target
@@ -605,10 +575,9 @@ function openPersonaPicker(target = {}) {
   const listEl = overlay.querySelector('#persona-list');
 
   /**
-   * 渲染人设列表（2026-10-18 改）。
-   * 群友反馈：原先要"先选中 → 回编辑弹窗 → 点「删除当前自定义人设」"，而选中
-   * 就会关掉本弹窗，等于删个人设要绕一大圈。现在每行右侧直接给「删除」。
-   * 只对自定义人设（custom_*）显示 —— 内置的不给删，与后端约束一致。
+   * 渲染人设列表。
+   * 每行右侧直接给「删除」：原先要先选中（会关掉本弹窗）再回编辑弹窗点删除，
+   * 删个人设要绕一大圈。只对自定义人设（custom_*）显示，与后端约束一致。
    * 用事件委托绑定：删除后原地重绘列表，不需要重新挂监听。
    */
   const renderList = () => {
@@ -650,9 +619,9 @@ function openPersonaPicker(target = {}) {
           roleEl.dispatchEvent(new Event('input', { bubbles: true }));
         }
         await loadSettings();   // 刷新全局模板列表（本弹窗读的就是 state.personaTemplates）
-        // ⚠️ 2026-10-18：loadSettings() 里 state.personaTemplates 的更新在
-        //    Promise.all().then 慢路径（未 await）——只等它会出现"后端删了、
-        //    列表里还在"（群友实测）。删除后必须显式拉一次模板列表再重绘。
+        // ⚠️ loadSettings() 里 state.personaTemplates 的更新在 Promise.all().then
+        //    慢路径（未 await），只等它会出现"后端删了、列表里还在"。
+        //    删除后必须显式拉一次模板列表再重绘。
         try {
           const t = await api('/api/persona-templates');
           const map = {};
@@ -679,10 +648,9 @@ function openPersonaPicker(target = {}) {
       const tpl = state.personaTemplates[id];
       if (tpl) {
         if (roleEl) roleEl.value = tpl.text;
-        // ⚠️ 2026-10-16 修：内置人设没有 customRules 字段，旧写法
-        // `rulesEl.value = tpl.customRules || ''` 会在用户每选一次内置人设时，
-        // 把编辑器里已经写好的「管理员附加规则」静默抹成空串 —— 选完直接保存
-        // 即永久丢失。改为只在模板**自带**附加规则时才覆盖，没有就不动用户的值。
+        // ⚠️ 内置人设没有 customRules 字段。写成 `rulesEl.value = tpl.customRules || ''`
+        //    会在用户每选一次内置人设时把编辑器里已写好的「管理员附加规则」抹成空串，
+        //    选完直接保存即永久丢失。只在模板自带附加规则时才覆盖。
         const rulesEl = document.querySelector(T.rulesSel);
         if (rulesEl && String(tpl.customRules ?? '').trim()) rulesEl.value = tpl.customRules;
         const pickEl = document.querySelector(T.pickSel);
@@ -696,16 +664,14 @@ function openPersonaPicker(target = {}) {
         if (roleEl) roleEl.dispatchEvent(new Event('input', { bubbles: true }));
       }
       closeModelModal(overlay);
-      // ⚠️ 2026-10-18：closeModelModal 会把焦点还给打开本弹窗前的元素 —— 用户是
-      //    点 readonly 的「选择人设」框进来的，焦点回到只读框上，之后弹窗里所有
-      //    Ctrl+V 都被 Chromium 静默吞掉（群友反馈"人设界面有时粘不进去"的路径
-      //    之一）。显式把焦点交还调用方指定的可编辑目标（人设文本框）。
+      // ⚠️ closeModelModal 会把焦点还给打开本弹窗前的元素，也就是 readonly 的
+      //    「选择人设」框，之后弹窗里所有 Ctrl+V 都被 Chromium 静默吞掉。
+      //    显式把焦点交还调用方指定的可编辑目标（人设文本框）。
       const focusEl = T.focusSel && document.querySelector(T.focusSel);
       if (focusEl) { try { focusEl.focus({ preventScroll: true }); } catch { /* ignore */ } }
-      // ⚠️ 这里**不能**调 syncPersonaButtons()：它是 07-settings-events.js 里
-      //    bindSettingsEvents() 的**局部函数**，本文件够不到 —— 以前直接调用会抛
-      //    ReferenceError（弹窗已经关了所以只表现为 console 报错）。页面重渲染时
-      //    bindSettingsEvents 自己会同步一次按钮状态，这里不需要补。
+      // ⚠️ 这里不能调 syncPersonaButtons()：它是 07-settings-events.js 里
+      //    bindSettingsEvents() 的局部函数，本文件够不到，调用会抛 ReferenceError。
+      //    页面重渲染时 bindSettingsEvents 自己会同步一次按钮状态。
     }
   });
   renderList();
@@ -713,7 +679,7 @@ function openPersonaPicker(target = {}) {
 }
 
 /** 添加人设：弹窗填写人设名称、角色设定、额外规矩。
- *  支持把 .txt/.md 文件直接拖进「角色设定」框 —— 自动读文件填入（名称为空时用文件名）。
+ *  支持把 .txt/.md 文件直接拖进「角色设定」框，自动读文件填入（名称为空时用文件名）。
  *  @param target 同 openPersonaPicker：加完要填回哪个编辑器（默认设置页统一编辑器）。 */
 function openPersonaCreateModal(target = {}) {
   const T = {
@@ -723,13 +689,13 @@ function openPersonaCreateModal(target = {}) {
     hintSel: '#persona-pick-hint',
     ...target
   };
-  // 添加成功后的回调。调用方（「已安装的人设」页）靠它刷新自己的列表 ——
+  // 添加成功后的回调。调用方（「已安装的人设」页）靠它刷新自己的列表，
   // 那个页面没有"角色设定"编辑器可填，只能靠回调知道"加完了"。
   // 不传则保持原行为（只填回编辑器），设置页那几处调用不受影响。
   const onDone = typeof target.onDone === 'function' ? target.onDone : null;
-  // ── 编辑模式（2026-10-22 新增）──
+  // ── 编辑模式 ──
   // 传 editId 就是"改这一条"：预填三个框、按钮变「保存修改」、提交时带上 id。
-  // 只对自定义人设开放（custom_N）—— 内置人设的正文写死在 src/personas.js 里。
+  // 只对自定义人设开放（custom_N），内置人设的正文写死在 src/personas.js 里。
   const editId = String(target.editId || '').trim();
   const editTpl = editId ? ((state.personaTemplates || {})[editId] || null) : null;
   const isEdit = !!editTpl;
@@ -739,7 +705,7 @@ function openPersonaCreateModal(target = {}) {
   // 提示语优先写进调用方指定的提示位（弹窗里自带一个），页面上才退回全局提示位
   const setHint = (msg, tone) => {
     // 先写弹窗内的提示行：从「已安装 → 人设」页打开时 hintSel 指向空气，
-    // 旧实现下校验失败（名称/正文为空）用户看不到任何反馈 —— 点了「确认添加」
+    // 旧实现下校验失败（名称/正文为空）用户看不到任何反馈，点了「确认添加」
     // 毫无反应，只能反复点。
     const inner = overlay.querySelector('#persona-form-hint');
     if (inner) {
@@ -749,7 +715,7 @@ function openPersonaCreateModal(target = {}) {
     const h = document.querySelector(T.hintSel);
     if (h) h.textContent = msg;
   };
-  // 顶部现场说明：人设是什么、保存后到底生不生效 —— 按调用方路径给准确文案。
+  // 顶部现场说明：人设是什么、保存后到底生不生效，按调用方路径给准确文案。
   //   onDone 存在 = 从「已安装 → 人设」页打开（不回填设置页、不自动生效）；
   //   否则 = 从设置页打开（会填进「角色设定」并自动保存）。
   const guideLine = onDone
@@ -797,7 +763,7 @@ function openPersonaCreateModal(target = {}) {
     try {
       const content = await file.text();
       textEl.value = content;
-      // 程序化赋值不触发事件——这里不需要自动保存（弹窗还没确认），但名称留空时顺手用文件名
+      // 程序化赋值不触发事件，这里不需要自动保存（弹窗还没确认），但名称留空时顺手用文件名
       if (!nameEl.value.trim()) nameEl.value = file.name.replace(/\.(txt|md|markdown)$/i, '');
       textEl.dispatchEvent(new Event('input', { bubbles: true }));
       setHint(`已读取「${file.name}」（${content.length} 字），确认添加后生效。`);
@@ -816,11 +782,10 @@ function openPersonaCreateModal(target = {}) {
     textEl.classList.remove('persona-drop-hot');
     readDropFile(e.dataTransfer?.files?.[0]);
   });
-  // ⚠️ 2026-10-18：打开就把焦点放到「角色设定」框 —— 用户进这个弹窗的主操作
-  //    就是粘贴一大段人设文本（.txt 拖读也是为它设计的）。modelModalShell 的
-  //    自动聚焦会落到第一个可编辑元素「人设名称」上，整段 Ctrl+V 会灌进名称框
-  //    —— 群友反馈的"没法正常粘贴进去"也包含这一路径。本 setTimeout 后注册，
-  //    覆盖 shell 的自动聚焦。
+  // ⚠️ 打开就把焦点放到「角色设定」框：用户进这个弹窗的主操作就是粘贴一大段
+  //    人设文本（.txt 拖读也是为它设计的）。modelModalShell 的自动聚焦会落到
+  //    第一个可编辑元素「人设名称」上，整段 Ctrl+V 会灌进名称框。
+  //    本 setTimeout 后注册，覆盖 shell 的自动聚焦。
   setTimeout(() => { try { textEl.focus({ preventScroll: true }); } catch { /* ignore */ } }, 0);
   overlay.querySelector('#persona-add-apply').addEventListener('click', async () => {
     const name = overlay.querySelector('#new-persona-name').value.trim();
@@ -834,7 +799,7 @@ function openPersonaCreateModal(target = {}) {
         body: JSON.stringify(isEdit ? { id: editId, name, text, customRules } : { name, text, customRules })
       });
       closeModelModal(overlay);
-      // 编辑的正好是**当前生效**的人设时，把新正文同步进 config.persona ——
+      // 编辑的正好是**当前生效**的人设时，把新正文同步进 config.persona，
       // 后端只更新模板，config.persona.roleText 存的还是旧正文副本，不同步的话：
       //   ① 列表按正文比对会显示它「未使用」（其实在用）；
       //   ② 对话里实际发出去的还是旧正文，用户以为改了却没生效。
@@ -846,7 +811,7 @@ function openPersonaCreateModal(target = {}) {
           if (customRules) patch.persona.customRules = customRules;
           await api('/api/config', { method: 'POST', body: JSON.stringify(patch) });
         } catch (e2) {
-          // 弹窗已关，setHint 写不进弹窗内那行 —— 用全局轻提示兜底
+          // 弹窗已关，setHint 写不进弹窗内那行，用全局轻提示兜底
           if (typeof personaToast === 'function') {
             personaToast(`人设已保存，但同步到当前配置失败：${e2.message}`, 'err');
           }
@@ -859,12 +824,11 @@ function openPersonaCreateModal(target = {}) {
       const rulesEl = isEdit ? null : document.querySelector(T.rulesSel);
       const pickEl = isEdit ? null : document.querySelector(T.pickSel);
       if (roleEl) roleEl.value = text;
-      // ⚠️ 2026-10-16：与 openPersonaPicker 同款 —— 新建人设没填附加规则时
-      // （customRules 为空）**不要**覆盖编辑器里已写好的规则，否则"添加人设"
-      // 会静默抹掉用户的「管理员附加规则」。只在新建时确实填了才覆盖。
+      // 与 openPersonaPicker 同款：新建人设没填附加规则时（customRules 为空）
+      // 不要覆盖编辑器里已写好的规则，否则"添加人设"会静默抹掉「管理员附加规则」。
       if (rulesEl && customRules) rulesEl.value = customRules;
       if (pickEl) pickEl.value = name;
-      // 同 openPersonaPicker：程序化赋值不触发 input 事件，自动保存不会启动 ——
+      // 同 openPersonaPicker：程序化赋值不触发 input 事件，自动保存不会启动，
       // 主动派发一次，否则"添加完人设切走页签"就丢（保存从未发起）。
       // 只对在设置表单里的元素派发（弹窗自己走 POST，派发无意义）。
       if (roleEl && document.getElementById('settings-form')?.contains(roleEl)) {
@@ -885,8 +849,8 @@ function openPersonaCreateModal(target = {}) {
 }
 
 /**
- * 「模型配置」模态框（2026-09-18 改版）：收纳原页面的
- * 模型目录 / Base URL / API Key / 图片视频专用模型 / 图片视频开关 / 视频理解方式。
+ * 「模型配置」模态框：模型目录 / Base URL / API Key / 图片视频专用模型 /
+ * 图片视频开关 / 视频理解方式。
  * 保存按钮 = 把这些字段 PATCH 到 /api/config（掩码 Key 不回传，与主页面同语义）。
  */
 function openModelConfigModal() {
@@ -960,7 +924,7 @@ function openModelConfigModal() {
   overlay.querySelector('#mc-model-pick').addEventListener('click', async () => {
     const providers = state.providers || [];
     // 空目录时给一条**可走的路**：就近关掉本弹窗并打开「模型管理」。
-    // 原先只说"请先用「模型管理」添加提供商" —— 而这里没有任何按钮能过去，
+    // 原先只说"请先用「模型管理」添加提供商"，而这里没有任何按钮能过去，
     // 用户只能自己猜「模型管理」在哪个菜单里（实测就卡在这一步）。
     if (!providers.length) {
       if (await qaConfirm('模型目录还是空的。\n\n现在去「模型管理」添加提供商吗？\n（填 Base URL + API Key 后即可拉取模型列表）')) {
@@ -1009,10 +973,10 @@ function openModelConfigModal() {
   hidden.id = 'mc-picked';
   overlay.querySelector('.model-modal-body').appendChild(hidden);
 
-  // 「⟳ 拉取模型」：从当前提供商的端点自动拉取可用模型列表（R37 用户需求）。
+  // 「⟳ 拉取模型」：从当前提供商的端点自动拉取可用模型列表。
   // 复用模型管理的整套链路：POST /api/providers/fetch-models 拉列表 →
   // openModelAddModal 勾选搜索 → 并入提供商目录。之后点「模型目录」即可选到新模型。
-  // ⚠️ Key 口径与模型管理一致：用后端**已保存**的 Key —— 弹窗里新输入、还没保存的不参与。
+  // ⚠️ Key 口径与模型管理一致：用后端已保存的 Key，弹窗里新输入、还没保存的不参与。
   overlay.querySelector('#mc-fetch-models').addEventListener('click', async () => {
     const btn = overlay.querySelector('#mc-fetch-models');
     const provider = (state.providers || []).find((p) => p.id === state.config?.api?.provider)
@@ -1101,25 +1065,24 @@ function openModelConfigModal() {
         const pid = c.api?.provider;
         const r = pid ? await api(`/api/providers/key?providerId=${encodeURIComponent(pid)}`) : await api('/api/api-key');
         input.type = 'text';
-        // 2026-10-23 修复：没存过 Key 时不要把「（无）」写进 value。
-        //   「（无）」是给用户看的提示，不是值 —— 写进 value 之后，
-        //   「显示 → 保存」这条路径会把它当成新 Key 提交给 /api/providers/set-key，
-        //   真实的空状态被写成字面量「（无）」，之后所有请求 401，界面还提示"已保存"。
-        //   改用 placeholder：看得见、但不会被读成用户输入。
+        // 没存过 Key 时不要把「（无）」写进 value：它是给用户看的提示，不是值。
+        // 写进 value 后「显示 → 保存」会把它当成新 Key 提交，
+        // 真实的空状态被写成字面量「（无）」，之后所有请求 401。
+        // 用 placeholder：看得见、但不会被读成用户输入。
         input.value = String(r.apiKey || '');
         input.placeholder = r.apiKey ? '' : '（无）';
         btn.textContent = '隐藏';
       } catch (e) { qaAlert(`读取密钥失败：${e.message}`); }
     } else {
       input.type = 'password';
-      // 2026-10-23 修复：不再无条件写 '******'。用户输入新 Key 后点「隐藏」时，
-      // 旧代码把新值覆盖成掩码，而保存把 '******' 当"不修改" → 新 Key 静默丢失。
+      // 不要无条件写 '******'：用户输入新 Key 后点「隐藏」时，把新值覆盖成掩码，
+      // 而保存把 '******' 当"不修改"，新 Key 就静默丢失了。
       // 只切 type 即可（原值本就显示为圆点）；空串与新输入都保持原样。
       btn.textContent = '显示';
     }
   });
   overlay.querySelector('#mc-apikey-clear').addEventListener('click', async () => {
-    // ⚠️（2026-10-10 r86 修 P2）清除凭据 → danger:true
+    // 清除凭据 → danger:true
     if (!await qaConfirm({
       danger: true,
       confirmText: '清除 Key',
@@ -1135,9 +1098,9 @@ function openModelConfigModal() {
       const input = overlay.querySelector('#mc-apikey');
       input.value = '';
       input.placeholder = '输入新 Key 可替换';
-      // ⚠️ 2026-10-20（与模型管理右列同一坑）：loadSettings() 里的 providers 在慢路径、
-      //    没有被 await —— 不清这一次的话 state.providers 还认为 hasKey=true，
-      //    紧接着打开的「模型管理 / 模型配置」会显示"已保存密钥"的旧状态。
+      // ⚠️ loadSettings() 里的 providers 在慢路径、没有被 await。不清这一次的话
+      //    state.providers 还认为 hasKey=true，紧接着打开的「模型管理 / 模型配置」
+      //    会显示"已保存密钥"的旧状态。
       await refreshProvidersState();
       await loadSettings();
     } catch (e) { qaAlert(`清除失败：${e.message}`); }
@@ -1152,9 +1115,9 @@ function openModelConfigModal() {
     if (out) out.textContent = '';
     try {
       const picked = overlay.querySelector('#mc-picked').value;
-      // 2026-10-20：弹窗里选中的模型可能来自**另一家**提供商（比如主提供商是 openai，
-      //   这里挑了个 anthropic 的模型）。不把它的协议一起带上，服务端就会拿主提供商的
-      //   协议去请求，端点/鉴权头全错 → 明明配置没问题也报 4xx。
+      // 弹窗里选中的模型可能来自另一家提供商（比如主提供商是 openai，这里挑了个
+      // anthropic 的模型）。不把它的协议一起带上，服务端就会拿主提供商的协议去请求，
+      // 端点/鉴权头全错，明明配置没问题也报 4xx。
       const [pickedPid, pickedModel] = picked ? String(picked).split('|||') : ['', ''];
       const pickedProv = (state.providers || []).find((x) => x.id === pickedPid);
       const model = picked ? pickedModel : (c.api?.model || '');
@@ -1203,21 +1166,18 @@ function openModelConfigModal() {
     if (dEl.dataset.model !== undefined || dEl.value === '') patch.videoModel = dEl.dataset.model || '';
     // Key：只在用户输入了非掩码明文时才回传（掩码/留空 = 保持）
     //
-    // ⚠️ 2026-10-21 修：**替换 Key 不生效**。真实生效的 Key 是
-    //    `dshProviderKeys[providerId]`（见 llm.js resolveApiKey：提供商 Key > 顶层
-    //    api.apiKey）。而这里原先一律写 `patch.apiKey` → 落进顶层 `api.apiKey`
-    //    → 运行时根本不读它。症状就是：输入新 Key → 保存 → 点「显示」还是旧 Key
-    //    （「显示」走 /api/providers/key 读的是提供商那一份），「测试连通性」也
-    //    还是用旧 Key。清除按钮早就走了 providers/set-key，只有保存这条漏了 ——
-    //    两条路径必须对称。
+    // ⚠️ 真实生效的 Key 是 `dshProviderKeys[providerId]`（见 llm.js resolveApiKey：
+    //    提供商 Key > 顶层 api.apiKey）。只写 `patch.apiKey` 会落进顶层 api.apiKey，
+    //    运行时根本不读它：输入新 Key → 保存 → 点「显示」还是旧 Key。
+    //    保存与清除两条路径都必须走 providers/set-key。
     const raw = (overlay.querySelector('#mc-apikey').value || '').trim();
-    // 2026-10-23：除掩码外，再把旧版残留的占位符「（无）」一起挡掉 ——
-    //   即使某处（旧缓存 / 粘贴）把它塞进了 value，也不会被当成真 Key 落盘。
+    // 除掩码外，再把旧版残留的占位符「（无）」一起挡掉：
+    // 即使旧缓存 / 粘贴把它塞进了 value，也不会被当成真 Key 落盘。
     const newKey = (raw && raw !== '******' && raw !== '（无）') ? raw : '';
     // 目标提供商：本次新选的模型目录优先（可能换了家），否则用当前生效的那个
     const keyPid = picked ? String(picked).split('|||')[0] : (c.api?.provider || '');
     if (newKey && !keyPid) patch.apiKey = newKey;
-    // 网络代理（2026-10-19）：与 baseUrl 同级回传，空串 = 清除代理恢复直连
+    // 网络代理：与 baseUrl 同级回传，空串 = 清除代理恢复直连
     patch.proxy = (overlay.querySelector('#mc-proxy')?.value || '').trim();
     try {
       await api('/api/config', { method: 'POST', body: JSON.stringify({ api: patch }) });
@@ -1242,12 +1202,10 @@ function openModelConfigModal() {
 /**
  * 主动刷新 state.providers。
  *
- * ⚠️ 2026-10-18 修「添加完提供商但模型管理左栏还是空的」：
- *    loadSettings() 的 providers 更新在内部的 Promise.all().then 里（慢路径，
- *    没有 await）—— `await loadSettings()` 返回时 state.providers 仍是旧值。
- *    于是紧随其后的 onDone()（renderLeft/renderRight）读到空数组，界面显示
- *    "还没有提供商"；自动选主模型也因目录为空而跳过。
- *    添加/拉取模型之后必须显式拉一次，不能赌 loadSettings 的时序。
+ * ⚠️ loadSettings() 的 providers 更新在内部的 Promise.all().then 里（慢路径，
+ * 没有 await），`await loadSettings()` 返回时 state.providers 仍是旧值。
+ * 紧随其后的 onDone() 会读到空数组、显示"还没有提供商"，自动选主模型也会跳过。
+ * 添加/拉取模型之后必须显式拉一次，不能赌 loadSettings 的时序。
  */
 async function refreshProvidersState() {
   try {
@@ -1259,14 +1217,13 @@ async function refreshProvidersState() {
 /**
  * 还没有主模型、但提供商目录里已经有模型时，把"选模型"这一步收掉。
  *
- * 背景（2026-10-18 用户反馈）：在「模型管理」里配置完提供商后，还要自己去
- * 「模型配置」点「模型目录（点击选择）」选一次模型才算能用 —— 萌新根本不知道
- * 还有这一步，配置永远停在半路（OOBE 引导也因此一直不变绿）。
+ * 背景：在「模型管理」里配置完提供商后，还要自己去「模型配置」点「模型目录」
+ * 选一次模型才算能用，萌新根本不知道还有这一步，配置永远停在半路。
  *
  * 规则：
  *   · 已有主模型 → 不动（加备用提供商不打扰）；
- *   · 目录里只有 1 个模型 → **直接选它**（零操作，这是新手最常见的路径）；
- *   · 多个模型 → 弹「选择模型」让用户自己挑（必须让人知道选了哪个）。
+ *   · 目录里只有 1 个模型 → 直接选它（新手最常见的路径）；
+ *   · 多个模型 → 弹「选择模型」让用户自己挑。
  *
  * @returns {Promise<boolean>} true = 已自动选定 / 已弹出选择器
  */
@@ -1342,15 +1299,15 @@ function openModelPicker() {
         // 这里随主模型一起切换：专用模型属于同一提供商 → 跟随主模型 id；
         // 属于别的提供商（用户特意挑的跨渠道视觉模型）→ 清空回退主模型。
         // 用户在设置里明确填写的专用模型仍然优先，只有"跟随主模型"的
-        // 旧值才被替换 —— 判定依据：旧专用模型属于当前主提供商（跟随态）。
+        // 旧值才被替换，判定依据：旧专用模型属于当前主提供商（跟随态）。
         const cfg = state.config || {};
         const oldProvider = cfg.api?.provider;
         const oldVision = String(cfg.api?.visionModel || '').trim();
         const oldVideo = String(cfg.api?.videoModel || '').trim();
-        // 2026-10-23 修复：原判据 spec === oldPid 是"模型 id 与提供商 id 比相等"，
-        // 正常情况恒为 false —— 于是换提供商后专用模型永不更新/清空，后续图片/视频
-        // 识别会以"新端点 + 旧模型 id"发出（必然 404）。正确判据：该模型是否属于
-        // 旧提供商的模型目录。
+        // ⚠️ 判据必须是"该模型是否属于旧提供商的模型目录"，不是 spec === oldPid
+        //    （模型 id 与提供商 id 比相等，正常情况恒为 false）。
+        //    判错的话换提供商后专用模型永不更新/清空，图片/视频识别会以
+        //    "新端点 + 旧模型 id"发出，必然 404。
         const followsMain = (spec, oldPid) => {
           if (!spec || !oldPid) return false;
           const op = (state.providers || []).find((x) => x.id === oldPid);
@@ -1370,8 +1327,8 @@ function openModelPicker() {
           });
           closeModelModal(overlay);
           try { await loadSettings(); } catch { /* 刷新失败不遮断焦点归还，也别误报"选择失败"（POST 已成功） */ }
-          // loadSettings 重渲染整个表单，焦点会掉回 body（之后 Ctrl+V 全废）——
-          // 显式还给主模型选择框之后第一个可编辑控件（2026-10-18）。
+          // loadSettings 重渲染整个表单，焦点会掉回 body（之后 Ctrl+V 全废），
+          // 显式还给主模型选择框之后第一个可编辑控件。
           focusFirstEditableAfter($('#cfg-model-pick'));
         } catch (e) {
           setHintText('#provider-hint', `选择失败：${e.message}`);
@@ -1387,10 +1344,9 @@ function openModelPicker() {
 
 /**
  * 添加自定义搜索服务：与「模型配置」同款的"入口按钮 → 专门弹窗"形态
- * （2026-09-21 用户要求：原来的 <details> 折叠条看着不像能点）。
- * 字段 id 沿用页面时代的 new-sp-* / add-search-provider-btn / add-search-provider-hint
- * —— 07-settings-events.js 里的旧页面绑定已随表单一并搬走（弹窗内容是点击后才
- * 创建的，页面绑定根本抓不到，必须在这里自带）。字段语义与校验一字未改。
+ * （原来的 <details> 折叠条看着不像能点）。
+ * 字段 id 沿用页面时代的 new-sp-* / add-search-provider-btn / add-search-provider-hint。
+ * 弹窗内容是点击后才创建的，页面绑定抓不到，所以绑定必须在这里自带。
  */
 function openAddSearchProviderModal() {
   const overlay = modelModalShell({
@@ -1496,7 +1452,7 @@ function openMemoryModelPicker() {
           // 必须把"是否跟随聊天模型"的当前勾选状态一并提交。
           // 否则：用户取消勾选（→ 只改了 DOM，state.config 仍是 true）后直接点模型，
           // 这次提交不带 useChatModel，随后 loadSettings() 又按 state.config(true)
-          // 重新渲染 —— 复选框被打回"已勾选"，迫使必须先保存一次才能选模型。
+          // 重新渲染，复选框被打回"已勾选"，迫使必须先保存一次才能选模型。
           const useChatBox = $('#cfg-mem-usechat');
           const useChatModel = useChatBox ? !!useChatBox.checked
             : (state.config?.memory?.useChatModel !== false);
@@ -1506,7 +1462,7 @@ function openMemoryModelPicker() {
           });
           closeModelModal(overlay);
           try { await loadSettings(); } catch { /* 同上：刷新失败不误报 */ }
-          // 同 openModelPicker：重渲染后焦点显式归还（2026-10-18）。
+          // 同 openModelPicker：重渲染后焦点显式归还。
           focusFirstEditableAfter($('#cfg-mem-model-pick'));
         } catch (e) {
           setHintText('#mem-model-hint', `选择失败：${e.message}`);
@@ -1523,12 +1479,12 @@ function openMemoryModelPicker() {
 /**
  * 选择图片/视频专用模型：复用模型目录选择器。
  * 与主模型不同点：
- *   · 不换 provider —— 专用模型只记模型 id（llm.js 检测到对应模态时替换主模型 id，
- *     端点仍用主模型的）；跨提供商挑模型也允许（很多网关同一 baseUrl 下全量模型）。
+ *   · 不换 provider：专用模型只记模型 id（llm.js 检测到对应模态时替换主模型 id，
+ *     端点仍用主模型的）。跨提供商挑模型也允许（很多网关同一 baseUrl 下全量模型）。
  *   · 选中后直接写 DOM 隐藏字段（cfg-vision-model / cfg-video-model），
- *     随后的自动保存（saveConfig 'api' 分支读这些字段）把它带走 —— 与主模型
+ *     随后的自动保存（saveConfig 'api' 分支读这些字段）把它带走。与主模型
  *     选择器"立即 POST"不同，这里走统一表单流，避免两条保存路径打架。
- *   · 顶部多一个「跟随主模型（清空）」选项，对应"留空用主模型"的旧语义。
+ *   · 顶部多一个「跟随主模型（清空）」选项，对应"留空用主模型"的语义。
  */
 function openSpecialModelPicker(which) {
   const isVision = which === 'vision';
@@ -1569,8 +1525,8 @@ function openSpecialModelPicker(which) {
     // 触发表单监听：自动保存按 'api' 分支读取隐藏字段
     input?.dispatchEvent(new Event('input', { bubbles: true }));
     closeModelModal(overlay);
-    // 2026-10-23：关闭后把焦点还给触发按钮。此前焦点掉到 body，键盘用户
-    // 选完模型要重新 Tab 一路找回来（对照 openMemoryModelPicker 的同类处理）。
+    // 关闭后把焦点还给触发按钮：焦点掉到 body 的话，键盘用户选完模型
+    // 要重新 Tab 一路找回来（对照 openMemoryModelPicker 的同类处理）。
     focusFirstEditableAfter($('#' + pickId));
   }
   function renderRight() {
@@ -1737,12 +1693,11 @@ function openModelAddModal(baseUrl, apiKey, remoteModels, knownProviderId) {
       // 同 openProviderAddModal：先显式刷新 providers，再渲染/自动选模型
       await refreshProvidersState();
       closeModelModal(overlay);
-      // 2026-09-19（M9 清理）：旧 #provider-action-hint 元素已随改版消失；写不存在的
-      // 元素会在 catch 里二次抛错（未处理 rejection）。改写存活的 #provider-hint。
+      // 必须写存活的 #provider-hint：写不存在的元素会在 catch 里二次抛错。
       setHintText('#provider-hint', `已加入 ${newModels.length} 个模型。`);
       await loadSettings();
-      // 2026-10-18：补拉模型之后同样把"选主模型"这步收掉（单模型自动选定 /
-      // 多模型弹选择器）—— "先建提供商、后拉模型"是新手最常见的路径。
+      // 补拉模型之后同样把"选主模型"这步收掉（单模型自动选定 / 多模型弹选择器），
+      // "先建提供商、后拉模型"是新手最常见的路径。
       await autoPickMainModelIfNeeded();
     } catch (e) {
       setHintText('#provider-hint', `加入失败：${e.message}`);
@@ -1753,7 +1708,7 @@ function openModelAddModal(baseUrl, apiKey, remoteModels, knownProviderId) {
 
 /** 删除模型：左提供商 / 右模型（带删除按钮），暗红色调。 */
 /**
- * 「模型管理」模态框（2026-09-18 改版）：左右两列。
+ * 「模型管理」模态框：左右两列。
  * 左列 = 提供商列表 + 添加提供商 / 删除提供商按钮；
  * 右列 = 选中提供商的 baseURL、API Key（掩码）、模型列表（ID + 显示名）、
  *        拉取模型列表 / 删除模型按钮。
@@ -1805,7 +1760,7 @@ function openModelManageModal() {
       const p = (state.providers || []).find((x) => x.id === activePid);
       if (!p) { qaAlert('请先在列表里选中一个提供商。'); return; }
       const modelCount = (p.models || []).length;
-      // ⚠️（2026-10-10 r86 修 P2）破坏性 → danger:true
+      // 破坏性 → danger:true
       if (!await qaConfirm({
         danger: true,
         confirmText: '删除提供商',
@@ -1815,7 +1770,7 @@ function openModelManageModal() {
         await api('/api/providers', { method: 'DELETE', body: JSON.stringify({ providerId: p.id }) });
         // 删的是当前主提供商 → 后端会清空选中模型，刷新设置页提示重新选
         activePid = cfgProvider === p.id ? '' : activePid;
-        // ⚠️ 同上：必须先拉 providers，否则左列还列着刚删掉的那一项。
+        // 同上：必须先拉 providers，否则左列还列着刚删掉的那一项。
         await refreshProvidersState();
         await loadSettings();
         renderLeft();
@@ -1883,7 +1838,7 @@ function openModelManageModal() {
     // Key 清除
     right.querySelector('#mg-apikey-clear').addEventListener('click', async () => {
       if (!p.hasKey) return;
-      // ⚠️（2026-10-10 r86 修 P2）清除凭据 → danger:true
+      // 清除凭据 → danger:true
       if (!await qaConfirm({
         danger: true,
         confirmText: '清除 Key',
@@ -1891,8 +1846,8 @@ function openModelManageModal() {
       })) return;
       try {
         await api('/api/providers/set-key', { method: 'POST', body: JSON.stringify({ providerId: p.id, apiKey: '' }) });
-        // ⚠️ 同协议保存那个坑：loadSettings() 不等 providers，不先拉一次就会拿旧
-        //    hasKey 重画右列（"清除了但还显示 ******"）。
+        // 同协议保存那个坑：loadSettings() 不等 providers，不先拉一次就会拿旧
+        // hasKey 重画右列（"清除了但还显示 ******"）。
         await refreshProvidersState();
         await loadSettings();
         renderLeft();
@@ -1902,27 +1857,16 @@ function openModelManageModal() {
       }
     });
     /* ── 保存协议修改 ────────────────────────────────────────────────
-       ⚠️ 2026-10-20 修「选了协议、点了保存，又变回原来的」（多人反馈）：
-          **保存一直是成功的** —— 用隔离数据目录直接把 5 种协议逐个存过一遍，
-          配置里 apiProtocol 确实写进去了（verify-protocol-save.mjs 22/22）。
-          问题出在旧代码保存后这一句 `await loadSettings(); renderRight();`：
-          `loadSettings()` 把 providers 塞在**慢路径** Promise.all 里，压根不等
-          （见 05-memory-settings.js 的函数头注释：config 单独先行，其余接口慢到无所谓），
-          所以它 resolve 时 `state.providers` 还是旧的，`renderRight()` 于是把下拉框
-          画回旧协议 —— 用户看到的就是"选了、保存了、又变回去了"，自然判定没保存上。
-          「添加提供商」那条路 2026-10-18 已经踩过同一个坑并加了 refreshProvidersState
-          （见那段注释），这里当时漏了。
-
-          现在的做法：
-            · 保存前先记下想要的值；保存后**显式**拉一次 providers（不等慢路径）；
-            · 正常情况下界面本来就是用户选中的那个值，**不再重画右列**
-              （重画是旧 bug 的触发点，能省则省）；
-            · 只有后端回读跟我们想要的不一致（归一化回落等罕见情况）才重画，
-              让界面与事实对齐；
-            · 给一句「已保存 ✓」的即时反馈 —— 旧代码保存成功是**完全静默**的，
-              这也是"感觉没保存"的一半原因。
-          · 另外：改下拉即保存（change）+ 保留「保存」按钮（同一个提交函数，
-            幂等）。用户选完直接关窗口也不会丢，不必猜"还要再点一次按钮吗"。 */
+       ⚠️ 保存后不要直接 renderRight()：loadSettings() 把 providers 塞在慢路径
+       Promise.all 里、压根不等（见 05-memory-settings.js 的函数头注释），它 resolve
+       时 state.providers 还是旧的，renderRight() 会把下拉框画回旧协议，用户看到
+       的就是"选了、保存了、又变回去了"。
+       做法：
+         · 保存前先记下想要的值；保存后显式拉一次 providers（不等慢路径）；
+         · 正常情况下界面本来就是用户选中的那个值，不再重画右列；
+         · 只有后端回读跟想要的不一致（归一化回落等罕见情况）才重画；
+         · 给一句「已保存 ✓」的即时反馈，保存成功不能是静默的。
+       · 改下拉即保存（change）+ 保留「保存」按钮（同一个提交函数，幂等）。 */
     const protocolSaveBtn = right.querySelector('#mg-protocol-save');
     const protocolSel = right.querySelector('#mg-protocol');
     let protocolBusy = false;
@@ -2007,7 +1951,7 @@ function openModelManageModal() {
       const picked = right.querySelector('input[name="mg-model"]:checked');
       if (!picked) { qaAlert('请先在列表里选中一个要删除的模型。'); return; }
       const model = picked.value;
-      // ⚠️（2026-10-10 r86 修 P2）删除模型 → danger:true
+      // 删除模型 → danger:true
       if (!await qaConfirm({
         danger: true,
         confirmText: '删除模型',
@@ -2018,8 +1962,8 @@ function openModelManageModal() {
           method: 'DELETE',
           body: JSON.stringify({ providerId: p.id, modelId: model })
         });
-        // ⚠️ 同协议保存：loadSettings() 不等 providers，不先拉一次的话右列还列着
-        //    刚删掉的那个模型，用户再点一次删除反而报"模型不存在"。
+        // 同协议保存：loadSettings() 不等 providers，不先拉一次的话右列还列着
+        // 刚删掉的那个模型，用户再点一次删除反而报"模型不存在"。
         await refreshProvidersState();
         await loadSettings();
         renderLeft();
@@ -2032,7 +1976,7 @@ function openModelManageModal() {
 
   renderLeft();
   renderRight();
-  // 2026-10-18：静默刷新一次 providers —— 用户可能在别处刚添加过、state 还没跟上
+  // 静默刷新一次 providers：用户可能在别处刚添加过、state 还没跟上
   //（loadSettings 的慢路径不保证时序），否则会出现"明明有提供商，打开却显示还没有"。
   // 刷新到位后原地重绘；弹窗已关则跳过。
   refreshProvidersState().then(() => {
@@ -2042,18 +1986,18 @@ function openModelManageModal() {
   }).catch(() => { /* 内部已兜底；这里只保证链上异常不会变成 unhandledRejection */ });
   overlay.querySelector('#mg-close').addEventListener('click', () => {
     closeModelModal(overlay);
-    // 关闭时兜底：目录里已有模型但还没选主模型（比如旧版本添加完没接着选）→
-    // 自动选定 / 弹选择器，别让用户停在这个半成品状态（2026-10-18）。
+    // 关闭时兜底：目录里已有模型但还没选主模型（比如旧版本添加完没接着选），
+    // 自动选定 / 弹选择器，别让用户停在这个半成品状态。
     autoPickMainModelIfNeeded();
   });
 }
 
 /**
- * 新手引导「测试并保存」（2026-10-23 萌新化 P1）。
+ * 新手引导「测试并保存」。
  *
- * 背景：未配置模型时，旧路径要把「模型与密钥 →（空目录 confirm）→ 管理服务商 →
- * 添加提供商 → 拉取 → 勾选 → 添加 →（有时还要再选一次主模型）」走一遍，5 个入口
- * 概念、3 个弹窗。这个函数把整条路压成**两个输入框 + 一次点击**：
+ * 未配置模型时，旧路径要把「模型与密钥 →（空目录 confirm）→ 管理服务商 →
+ * 添加提供商 → 拉取 → 勾选 → 添加 →（有时还要再选一次主模型）」走一遍，
+ * 5 个入口概念、3 个弹窗。这个函数把整条路压成两个输入框 + 一次点击：
  *
  *   ① fetch-models（带明文 Key，不需要提供商先存在）
  *   ② POST /api/providers 建/更新提供商（勾选全部拉到的模型）
@@ -2061,7 +2005,7 @@ function openModelManageModal() {
  *   ④ test-chat 试一次连通，结果如实显示
  *
  * 失败不赌气：拉不到列表时保留输入、给出人话原因，并高亮「我有多家服务商 /
- * 手动添加」按钮——openProviderAddModal 支持手填模型 id，覆盖不支持
+ * 手动添加」按钮，openProviderAddModal 支持手填模型 id，覆盖不支持
  * /models 列表的端点。
  */
 async function runFirstTimeGuide() {
@@ -2156,8 +2100,8 @@ function openProviderAddModal(onDone) {
            <button class="btn btn-primary" id="pa-confirm">添加</button>`
   });
   let rows = [{ id: '', name: '' }];
-  // R39：「拉取模型」搬进本弹窗 —— 新用户填完 Base URL + Key 就能原地拉列表勾选，
-  // 不必"先建提供商 → 去模型管理 → 再拉取"绕一圈（R37 的按钮只覆盖了已存在的提供商）。
+  // 「拉取模型」就在本弹窗里：新用户填完 Base URL + Key 就能原地拉列表勾选，
+  // 不必"先建提供商 → 去模型管理 → 再拉取"绕一圈。
   let fetched = []; // [{ id, name, checked }]
   const fetchedBox = overlay.querySelector('#pa-fetched-box');
   function renderFetched() {
@@ -2253,7 +2197,7 @@ function openProviderAddModal(onDone) {
     // ⚠️ 这里曾经强制要求至少填一个模型 id，与上面标签写的「可先留空」自相矛盾，
     //    更致命的是它构成了死循环：「拉取模型列表」按钮只在**已存在的提供商**里，
     //    于是新用户没有模型 id 就建不了提供商 → 永远点不到拉取按钮。
-    //    后端 upsertProvider 的 models 默认就是 []，允许空目录没有任何问题 ——
+    //    后端 upsertProvider 的 models 默认就是 []，允许空目录没有任何问题，
     //    改为放行，并在添加成功后直接把用户送到「拉取模型列表」。
     try {
       await api('/api/providers', { method: 'POST', body: JSON.stringify({ baseUrl, apiKey, models, apiProtocol }) });
@@ -2264,15 +2208,15 @@ function openProviderAddModal(onDone) {
       // ⚠️ 必须**先等 loadSettings 完成**再回调 onDone：onDone 是模型管理的
       //    renderLeft/renderRight，它们读的是 state.providers。旧写法把
       //    loadSettings() 放在 onDone() 之后（且都没 await），回调渲染时
-      //    state.providers 还是空数组 —— 表现为"添加成功了，但左列看不到它、
+      //    state.providers 还是空数组，表现为"添加成功了，但左列看不到它、
       //    右列也没有「拉取模型列表」按钮"，用户以为没添加成功。
       await loadSettings();
       if (onDone) onDone();
       // 一个模型都没带（既没勾拉取的、也没手填）才送去「模型管理」补拉；
       // 现在拉取入口就在本弹窗里，多数添加会直接带着勾选的模型落地。
       if (!models.length) { scheduleOpenModelManage(); return; }
-      // 2026-10-18：把"还要再选一次主模型"这一步收掉 —— 单个模型直接选定，
-      // 多个模型弹选择器（见 autoPickMainModelIfNeeded 的注释）。
+      // 把"还要再选一次主模型"这一步收掉：单个模型直接选定，多个模型弹选择器
+      // （见 autoPickMainModelIfNeeded 的注释）。
       await autoPickMainModelIfNeeded();
     } catch (e) {
       qaAlert(`添加失败：${e.message}`);
@@ -2283,16 +2227,11 @@ function openProviderAddModal(onDone) {
 // ── 白名单可视化选择器 ──
 async function openWhitelistPicker(kind) {
   const isGroups = kind === 'groups';
-  // ⚠️ 2026-10-21（修用户报的 `Cannot set properties of null (setting 'textContent')`
-  //    @ 本文件的点击回调，栈顶是 HTMLButtonElement 的点击回调）：
-  //    结果条 #pick-result 与目标输入框 #cfg-allowgroups / #cfg-allowprivate 都
-  //    **只存在于白名单分区的 HTML 里**（renderSettings 只重建
-  //    state.settingsSection 那一段）。弹窗开着的时候，只要发生一次整页重建
-  //    （切分区 / 自动保存返回后的补渲染 / loadSettings 回来重绘），这两个节点
-  //    就从 DOM 里消失了。旧代码在点「确定」时才用 $('#pick-result') 现查现写，
-  //    查到 null 直接抛 TypeError；异常又被 error-boot 的全局兜底接走，于是
-  //    用户看到的就是「点了确定毫无反应，群里也没加上」，控制台同一条报错反复刷。
-  //    现在：① 状态提示一律走 setHintText（查不到就跳过，绝不抛）；
+  // ⚠️ 结果条 #pick-result 与目标输入框 #cfg-allowgroups / #cfg-allowprivate 都
+  //    只存在于白名单分区的 HTML 里（renderSettings 只重建 state.settingsSection
+  //    那一段）。弹窗开着时只要发生一次整页重建（切分区 / 自动保存返回后的补渲染 /
+  //    loadSettings 回来重绘），这两个节点就从 DOM 里消失了。
+  //    所以：① 状态提示一律走 setHintText（查不到就跳过，绝不抛）；
   //         ② 目标输入框在点击那一刻重新判活，写不进去就明确告诉用户，不静默吞。
   const allowSel = isGroups ? '#cfg-allowgroups' : '#cfg-allowprivate';
   const setResult = (text) => setHintText('#pick-result', text);
@@ -2335,9 +2274,8 @@ async function openWhitelistPicker(kind) {
       </div>
     </div>`;
   document.body.appendChild(overlay);
-  // 2026-10-23 修复：手搓遮罩也要纳入焦点陷阱 —— 自动登记只认 .model-modal-overlay，
-  // 这个弹窗用的是 .modal-overlay，此前 Tab 能跑出弹窗到背后的设置页。
-  // 同时补 Esc 关闭（此前键盘用户打开后只能鼠标点「取消」）。
+  // 手搓遮罩也要纳入焦点陷阱：自动登记只认 .model-modal-overlay，
+  // 这个弹窗用的是 .modal-overlay，不登记的话 Tab 能跑出弹窗到背后的设置页。
   registerFocusTrap(overlay);
   const closePicker = () => {
     document.removeEventListener('keydown', onPickerEsc, true);
@@ -2352,9 +2290,9 @@ async function openWhitelistPicker(kind) {
   $('#pick-cancel', overlay).addEventListener('click', () => closePicker());
   $('#pick-apply', overlay).addEventListener('click', async () => {
     const picked = $$('input[type=checkbox]:checked', overlay).map((el) => el.value);
-    // 2026-10-23 修复：全不选 + 确定 = 把白名单清空。配合「白名单留空时允许所有会话」
-    // 默认关闭的语义（isChatAllowed：allow 空且不开 allowAllWhenEmpty → 一律不放行），
-    // 这会让机器人对所有会话停止响应 —— 此前没有任何确认，结果提示还是中性的"已选 0 个"。
+    // 全不选 + 确定 = 把白名单清空。配合「白名单留空时允许所有会话」默认关闭的语义
+    // （isChatAllowed：allow 空且不开 allowAllWhenEmpty → 一律不放行），
+    // 这会让机器人对所有会话停止响应，所以必须确认。
     if (!picked.length && selected.size > 0) {
       const ok = await qaConfirm({
         danger: true,
@@ -2373,21 +2311,18 @@ async function openWhitelistPicker(kind) {
       return;
     }
     target.value = picked.join(',');
-    // ⚠️ 2026-10-18：程序化赋值**不会**触发 input 事件 —— 表单自动保存靠
-    // #settings-form 的 input 委托（07-settings-events.js 的 input 委托）启动，不派发的话
-    // 用户点完「确定」其实什么都没保存。旧文案还让人去找一个根本不存在的
-    // "保存设置"按钮（设置页是 600ms 防抖自动保存，早就没有保存按钮了）。
-    // 这里主动派发一次 + 文案改成"已自动保存"，与真实行为一致。
+    // ⚠️ 程序化赋值不会触发 input 事件，而表单自动保存靠 #settings-form 的 input
+    //    委托启动，不派发的话用户点完「确定」其实什么都没保存。
     target.dispatchEvent(new Event('input', { bubbles: true }));
     setResult(`已选 ${picked.length} 个${isGroups ? '群' : '好友'}（已自动保存）`);
     closePicker();
   });
 }
 
-// 拆分逗号/空白分隔的列表，并统一剥掉 `group:` / `private:` 前缀落成**裸号**
-// （与后端权威格式一致 —— src/store.js allowed() 直接 includes(String(id))）。
-// 这里必须归一化：openWhitelistPicker 用 g.id（裸号）比对勾选态，而输入框里的
-// 存量脏值可能是 group:xxx；不剥前缀就会「勾不上已加白名单的群，点确定把老项丢掉」。
+// 拆分逗号/空白分隔的列表，并统一剥掉 `group:` / `private:` 前缀落成裸号
+// （与后端权威格式一致，src/store.js allowed() 直接 includes(String(id))）。
+// 必须归一化：openWhitelistPicker 用 g.id（裸号）比对勾选态，而输入框里的存量
+// 脏值可能是 group:xxx；不剥前缀就会「勾不上已加白名单的群，点确定把老项丢掉」。
 function parseList(s) {
   return String(s || '').split(/[,，\s]+/).map((x) => x.trim()).filter(Boolean).map(bareAllowId);
 }
@@ -2406,10 +2341,9 @@ async function saveConfig({ quiet = false } = {}) {
   };
   /**
    * 读数值输入框。
-   * ⚠️（2026-10-10 r86 修）**不要**写成 `Number(val(...)) || fallback` ——
-   *    `||` 会把合法的 0 当成"空值"而回落到 fallback。概率这一项 UI 上
-   *    min="0"、明确允许 0（表示"从不主动发起话题"），用户填 0 却被静默
-   *    存成 0.25 —— 界面显示一个值、后端存另一个值，且没有任何提示。
+   * ⚠️ 不要写成 `Number(val(...)) || fallback`：`||` 会把合法的 0 当成"空值"
+   *    回落到 fallback。概率这一项明确允许 0（表示"从不主动发起话题"），
+   *    填 0 会被静默存成 0.25，界面显示一个值、后端存另一个值。
    *    正确做法：先判"框是否存在 + 是否可解析为有限数"，再判范围。
    * @param {string} sel 选择器
    * @param {number} fallback 框不存在或值非法时的回落值
@@ -2426,8 +2360,7 @@ async function saveConfig({ quiet = false } = {}) {
       let v = n;
       if (typeof range.min === 'number') v = Math.max(range.min, v);
       if (typeof range.max === 'number') v = Math.min(range.max, v);
-      // 2026-10-23：钳位结果写回输入框。此前界面显示用户原值、后端存钳位值，
-      // 长期不一致且无提示（"我明明填了 0，怎么存的是 2000" 就来自这里）。
+      // 钳位结果写回输入框：界面显示用户原值、后端存钳位值会长期不一致且无提示。
       if (v !== n) node.value = String(v);
       return v;
     }
@@ -2437,9 +2370,9 @@ async function saveConfig({ quiet = false } = {}) {
 
   const patch = {};
 
-  // ⚠️ 分区已合并（菜单 9 项 → 5 项）：收集条件必须同时认「宿主 id」和「被并掉的
-  //    旧 id」，否则合并页里另一半表单不会被保存（静默丢配置）。
-  //    val()/chk() 都是 null 安全的，多跑一个分支不会误写 —— 元素不在 DOM 就返回 fallback。
+  // ⚠️ 分区已合并：收集条件必须同时认「宿主 id」和「被并掉的旧 id」，
+  //    否则合并页里另一半表单不会被保存（静默丢配置）。
+  //    val()/chk() 都是 null 安全的，多跑一个分支不会误写。
   if (sec === 'persona' || sec === 'memory') {
     patch.memory = {
       ...(c.memory || {}),
@@ -2447,7 +2380,7 @@ async function saveConfig({ quiet = false } = {}) {
       useChatModel: chk('#cfg-mem-usechat', c.memory?.useChatModel !== false),
       provider: val('#cfg-mem-provider', c.memory?.provider || '').trim(),
       model: val('#cfg-mem-model', c.memory?.model || '').trim(),
-      // 2026-10-23 修复：UI 声明了 min=1800000，保存却完全不钳位（录 1 就存 1 毫秒）。
+      // UI 声明了 min=1800000，保存必须钳位，否则录 1 就存 1 毫秒。
       consolidateMinIntervalMs: num('#cfg-mem-interval', c.memory?.consolidateMinIntervalMs ?? 21600000, { min: 600000 }) || 21600000
     };
   }
@@ -2455,9 +2388,9 @@ async function saveConfig({ quiet = false } = {}) {
   if (sec === 'api' || sec === 'search') {
     patch.api = {
       ...(c.api || {}),
-      // 思考强度/温度/最大工具轮数已移入「信息发送配置」模态框（openSendConfigModal，
-      // 保存时直接 POST api patch）。此处不再收集这三个字段 —— deepMerge 不写
-      // 就保留服务端旧值，模态框保存过的值不会被这里覆盖。
+      // 思考强度/温度/最大工具轮数在「信息发送配置」模态框（openSendConfigModal，
+      // 保存时直接 POST api patch）。此处不收集这三个字段：deepMerge 不写就保留
+      // 服务端旧值，模态框保存过的值不会被这里覆盖。
       visionModel: val('#cfg-vision-model', c.api.visionModel || '').trim(),
       videoModel: val('#cfg-video-model', c.api.videoModel || '').trim(),
       videoMode: (() => {
@@ -2472,7 +2405,7 @@ async function saveConfig({ quiet = false } = {}) {
       priceOutputPerM: Number(val('#cfg-price-out', c.api.priceOutputPerM ?? 0)) || 0,
       priceCachedPerM: Number(val('#cfg-price-cached', c.api.priceCachedPerM ?? 0)) || 0,
       // 模型身份三件套：正常路径由模型目录选择器直接 POST（openModelPicker），
-      // 这里把隐藏字段 / 只读框的当前值一并带上 —— 保证"选完模型又在
+      // 这里把隐藏字段 / 只读框的当前值一并带上，保证"选完模型又在
       // 本区块改了单价"的合并保存不会把 model/provider/baseUrl 丢掉。
       // （deepMerge 下不写就保留服务端旧值，写了就与隐藏字段一致，两个方向都安全。）
       model: val('#cfg-model', c.api.model || '').trim(),
@@ -2481,7 +2414,7 @@ async function saveConfig({ quiet = false } = {}) {
       // 备选模型列表：从 DOM 实时读取（fallbackRows 是 bindSettingsEvents 的局部变量，
       // 顶层 saveConfig 访问不到，所以这里直接查 DOM），过滤掉空行。
       // 提供商列已删：model 输入框显示"提供商名 · 模型id"，但存的是纯 id +
-      // 提供商由 fallbackRows 内部维护 —— 显示格式不能进配置。
+      // 提供商由 fallbackRows 内部维护，显示格式不能进配置。
       // 改为从显示值反解太脆（模型 id 本身可含 ·），所以这里读 data-* 属性
       // （renderFallbackRows 渲染时把真值放在 data-model / data-provider 上）。
       fallbackModels: $$('#fallback-model-rows .fb-model-pick').map((el) => ({
@@ -2490,7 +2423,7 @@ async function saveConfig({ quiet = false } = {}) {
       })).filter((r) => r.model)
     };
     // 把当前模型的单价存进 modelPrices[模型]（只影响这一个模型，不动内置官方表）。
-    // 若开关是打开的，则不应写入 —— 那时输入框是禁用的，读到的值就是官方价，
+    // 若开关是打开的，则不应写入，那时输入框是禁用的，读到的值就是官方价，
     // 写进去会凭空产生一条自定义价。
     //
     // ⚠️ 模型名与开关状态都必须读**界面实时值**（c.api 是上次保存的旧值）：
@@ -2504,8 +2437,8 @@ async function saveConfig({ quiet = false } = {}) {
         const i = Number(val('#cfg-price-in', 0)) || 0;
         const o = Number(val('#cfg-price-out', 0)) || 0;
         const caRaw = String(val('#cfg-price-cached', '')).trim();
-        // 2026-10-23 修复：区分"空框"（未填）与合法的 0（缓存命中免费）。
-        // 旧写法 `|| 0` + `cached: ca || i` 会把 0 回退成输入价，成本核算偏高。
+        // 必须区分"空框"（未填）与合法的 0（缓存命中免费）。
+        // `|| 0` + `cached: ca || i` 会把 0 回退成输入价，成本核算偏高。
         const ca = caRaw === '' ? null : (Number(caRaw) || 0);
         if (i || o || ca) {
           nextMap[curModel] = { in: i, out: o, cached: ca ?? i };
@@ -2516,10 +2449,8 @@ async function saveConfig({ quiet = false } = {}) {
         patch.api.modelPrices = { __replace__: nextMap };
       }
     }
-    // 当前 API Key：2026-09-18 改版后 Key 输入框在「模型配置」弹窗里自带保存逻辑
-    // （mc-apikey → providers/set-key），表单里旧 #cfg-apikey 已不存在 —— 这段
-    // 兜底读取随之删除；顶层的 patch.api.apiKey 分支只服务于"非目录提供商"的
-    // 旧配置，那种情况现在也走弹窗。
+    // 当前 API Key：Key 输入框在「模型配置」弹窗里自带保存逻辑
+    // （mc-apikey → providers/set-key），表单里没有 #cfg-apikey。
   }
 
   if (sec === 'api' || sec === 'search') {
@@ -2557,7 +2488,7 @@ async function saveConfig({ quiet = false } = {}) {
         ...(enteredMetasoKey && enteredMetasoKey !== '******' ? { apiKey: enteredMetasoKey } : {})
       },
       // 自定义搜索服务：列表由「添加/删除」按钮维护（POST /api/search-providers），
-      // 但**当前选中那家的 Key 编辑框**在这里随表单提交 —— 用户改 Key 的主路径
+      // 但**当前选中那家的 Key 编辑框**在这里随表单提交，用户改 Key 的主路径
       // 就是这个框。按 id 定位条目原地更新；掩码/留空 = 不动，明文 = 覆盖。
       providers: (c.webSearch?.providers || []).map((p) => {
         const sel = val('#cfg-searchprovider', '');
@@ -2571,17 +2502,11 @@ async function saveConfig({ quiet = false } = {}) {
   }
 
   if (sec === 'persona' || sec === 'memory') {
-    // ⚠️ 2026-10-16 修「切换人设不成功」（用户大量反馈的根因）：
-    // 人设编辑器已收进弹窗（#gp-* / #pcp-*），页面上 #cfg-botname /
-    // #cfg-roletext 等输入框**已全部移除**（06-settings-render.js 摘要卡改版）。
-    // 旧写法 `val('#cfg-roletext', c.persona.roleText)` 在元素不在场时回落到
-    // state.config 的**旧值**整段回传 —— 而 state.config 在弹窗/市场保存后的
-    // 一段时间内是陈旧的（见 loadSettings 拆快慢、弹窗保存直接回写 config 的
-    // 修复）。这段窗口内的任何一次保存（切页签 flush / 关窗 beforeunload /
-    // 切分区 flush / 600ms 防抖到点）都会把旧 persona 深合并回服务端，
-    // 把刚切换的人设静默还原 —— 表现为"保存成功了一切页签又变回旧人设"。
-    // 修法：**元素不在场就不写该键**，deepMerge 自然保留服务端现值，
-    // 从根上消除回滚面。页面若将来重新铺开这些输入框，逻辑自动恢复收集。
+    // ⚠️ 人设编辑器在弹窗里（#gp-* / #pcp-*），页面上的 #cfg-botname /
+    //    #cfg-roletext 等输入框已全部移除。元素不在场时用 state.config 的旧值
+    //    整段回传，会在 state.config 尚未跟上弹窗保存结果的那段时间里把刚切换的
+    //    人设静默还原（表现为"保存成功了一切页签又变回旧人设"）。
+    //    所以元素不在场就不写该键，deepMerge 自然保留服务端现值。
     const personaPatch = {};
     const botNameEl = $('#cfg-botname');
     if (botNameEl) personaPatch.botName = botNameEl.value.trim() || '小鲸鱼';
@@ -2598,12 +2523,10 @@ async function saveConfig({ quiet = false } = {}) {
     if (Object.keys(personaPatch).length) patch.persona = personaPatch;
     // 统一人设开关：编辑器随开关二选一在场，读不到的保持旧值。
     patch.personaUnified = chk('#cfg-persona-unified', c.personaUnified !== false);
-    // personaByChat 不在这里收集：独立人设模态框已改为**直接 POST 落盘**（openPerChatPersonaModal
-    // 的 saveToMap），不再走"隐藏 JSON → 表单保存链"——那条链的 change 事件根本到不了 form
-    // 监听器，而且 loadSettings 重建 DOM 会把没保存的值吹掉。这里如果再把（可能过期的）
-    // 隐藏 JSON 值 POST 一遍，会把 modal 刚存的条目用旧值覆盖回去。
-    // ⚠️ 统一开关"关闭"时后端语义：personaByChat 里的条目仍然生效（personaForChat
-    //    逐会话合并），开关只控制 UI 形态。运行行为由配置数据决定，不由开关决定。
+    // personaByChat 不在这里收集：独立人设模态框直接 POST 落盘（openPerChatPersonaModal
+    // 的 saveToMap）。再 POST 一遍（可能过期的）隐藏 JSON 会把 modal 刚存的条目用旧值覆盖。
+    // ⚠️ 统一开关"关闭"时 personaByChat 里的条目仍然生效（personaForChat 逐会话合并），
+    //    开关只控制 UI 形态。
   }
 
   if (sec === 'allow' || sec === 'chat') {
@@ -2611,22 +2534,19 @@ async function saveConfig({ quiet = false } = {}) {
       groups: parseList(val('#cfg-allowgroups', (c.allow?.groups || []).join(','))),
       private: parseList(val('#cfg-allowprivate', (c.allow?.private || []).join(',')))
     };
-    // 2026-10-23 修复（原 P0）：这里原本无条件写 patch.deny = { groups: [], private: [] }。
-    // deepMerge 对数组是整体替换，于是「聊天」分区**任何一次**保存都会把用户手改的
-    // deny（会话级黑名单，isChatAllowed 里一票否决）静默清空；而全项目没有任何
-    // deny 编辑入口，用户只能改 config.json，改完即丢。
-    // 现在不写这个键 —— deepMerge 不写就保留服务端现值。将来补了 deny 编辑 UI
-    // 再在这里按 section 收集（写数组时记得它是整体替换）。
-    // 原先这里硬编码 false：只要点过保存就把该开关永久重置，
-    // 而 UI 里根本没有输入控件 —— 只能手改 JSON，改完一保存就丢。改为读取复选框。
+    // ⚠️ 不要写 patch.deny：deepMerge 对数组是整体替换，无条件写
+    //    { groups: [], private: [] } 会让「聊天」分区任何一次保存都清空用户的
+    //    会话级黑名单，而全项目没有 deny 编辑入口，改完即丢。
+    //    将来补了 deny 编辑 UI 再在这里按 section 收集。
+    // allowAllWhenEmpty 必须读复选框：硬编码值会在每次保存时重置用户的开关。
     const allowAllBox = $('#cfg-allowallwhenempty');
     patch.allowAllWhenEmpty = allowAllBox ? !!allowAllBox.checked : (c.allowAllWhenEmpty === true);
   }
 
   if (sec === 'allow' || sec === 'chat') {
-    // 2026-09-18 改版：运行节奏/发送保护/档位/峰谷/禁言/温度/思考强度 全部收进
-    // 「信息发送配置」与「活跃设置」两个模态框（openSendConfigModal / openActiveConfigModal），
-    // 模态框各自保存时直接 POST。本区块剩下的表单控件：主动话题。（表情包设置已移到 plugins/sticker 插件卡的设置弹窗。）
+    // 运行节奏/发送保护/档位/峰谷/禁言/温度/思考强度在「信息发送配置」与「活跃设置」
+    // 两个模态框里（openSendConfigModal / openActiveConfigModal），各自保存时直接 POST。
+    // 本区块剩下的表单控件只有主动话题（表情包设置在 plugins/sticker 插件卡的设置弹窗）。
     patch.proactive = {
       ...(c.proactive || {}),
       enabled: chk('#cfg-proactive', !!c.proactive?.enabled),
@@ -2639,7 +2559,7 @@ async function saveConfig({ quiet = false } = {}) {
   }
 
   // 'app'（界面与应用）与 'desktop'/'onebot'（兼容别名）共享同一批字段读取；
-  // val()/chk() 均为 null 安全——当前页不存在的输入框回退到 c 里的原值，不会误写。
+  // val()/chk() 均为 null 安全，当前页不存在的输入框回退到 c 里的原值，不会误写。
   if (sec === 'desktop' || sec === 'onebot' || sec === 'app') {
     patch.server = {
       ...c.server,
@@ -2652,8 +2572,8 @@ async function saveConfig({ quiet = false } = {}) {
       theme: getThemePref(),
       showVision: chk('#cfg-showvision', c.ui?.showVision !== false),
       refreshMs: Number(val('#cfg-refreshms', c.ui?.refreshMs ?? 15000)) || 15000,
-      // 外观个性化（R40）：颜色只接受合法 hex（手填一半如 "#5b8" 时不写，避免整条
-      // CSS 声明失效）；背景图不在页面上（由原生对话框选好后即时落盘），这里只原样保留。
+      // 外观个性化：颜色只接受合法 hex（手填一半如 "#5b8" 时不写，避免整条 CSS
+      // 声明失效）；背景图由原生对话框选好后即时落盘，这里只原样保留。
       accent: isHexColor(val('#cfg-accent-hex', c.ui?.accent ?? '')) ? val('#cfg-accent-hex', '').trim() : '',
       bgColor: isHexColor(val('#cfg-bgcolor-hex', c.ui?.bgColor ?? '')) ? val('#cfg-bgcolor-hex', '').trim() : '',
       frameAlpha: clampInt(val('#cfg-framealpha', c.ui?.frameAlpha ?? 100), 30, 100, 100),
@@ -2662,10 +2582,9 @@ async function saveConfig({ quiet = false } = {}) {
       bgDim: clampInt(val('#cfg-bgdim', c.ui?.bgDim ?? 0), 0, 85, 0),
       winOpacity: clampInt(val('#cfg-winopacity', c.ui?.winOpacity ?? 100), 30, 100, 100)
     };
-    // 2026-10-23：删掉无意义的 memberNotes 整份回传（无改动也每次带上，纯噪音）。
-    // deepMerge 下不写这个键 = 保留服务端现值；memberNotes 有自己的编辑入口
-    // （记忆页的备注），不该由界面设置的表单保存捎带。
-    // ── 桌面悬浮小窗（2026-10-20）──
+    // 不写 memberNotes：它有自己的编辑入口（记忆页的备注），不该由界面设置的表单
+    // 保存捎带。deepMerge 下不写这个键 = 保留服务端现值。
+    // ── 桌面悬浮小窗 ──
     // 只收集设置项；位置/尺寸在主进程侧落 window-state.json，不经过这里。
     // enabled 关着时其余项照常收集（下次打开即生效），UI 上整组只是置灰。
     const widgetSize = val('#cfg-widget-size', c.widget?.size || 'm');
@@ -2684,13 +2603,11 @@ async function saveConfig({ quiet = false } = {}) {
 
   if (sec === 'desktop' || sec === 'onebot' || sec === 'app') {
     // ⚠️ 令牌是脱敏回传的（值是 ******，真实值只在后端）：
-    //    留空 / ****** = 保持原值不变；只有输入了新明文才更新。
-    //    曾经直接把输入框的值（脱敏后为空）写进 patch，
-    //    结果"保存一次别的设置，OneBot 令牌就被清空"。
+    //    留空 / ****** = 保持原值；只有输入了新明文才更新。
+    //    直接把输入框的值写进 patch 的话，"保存一次别的设置，令牌就被清空"。
     const enteredWsToken = val('#cfg-obtoken', '').trim();
     const enteredHttpToken = val('#cfg-obhttptoken', '').trim();
-    // 2026-10-23：protocol 块（原 snowluma）。dir / autoLaunch 随内置协议端删除，
-    // 这里只剩端点与令牌 —— 协议端由用户自己装、自己启动。
+    // protocol 只剩端点与令牌：协议端由用户自己装、自己启动。
     patch.protocol = {
       wsUrl: val('#cfg-wsurl', c.protocol?.wsUrl || '').trim(),
       httpUrl: val('#cfg-httpurl', c.protocol?.httpUrl || '').trim(),
@@ -2702,9 +2619,9 @@ async function saveConfig({ quiet = false } = {}) {
   if (sec === 'tools') {
     // 工具配置直接从 state.config.tools 读取（事件绑定已实时更新）
     const t = state.config.tools || { enabled: true, overrides: {}, categories: {} };
-    // 2026-10-23 修复：overrides / categories 是映射型字段，deepMerge 对对象是递归合键，
-    // 传 {} 删不掉旧键 —— 这就是「全部启用」「恢复默认」点了不生效、刷新后个别工具
-    // 又变回关闭的原因。内存里这两份映射始终是全量，用 __replace__ 整体替换才正确。
+    // ⚠️ overrides / categories 是映射型字段，deepMerge 对对象是递归合键，传 {}
+    //    删不掉旧键（「全部启用」「恢复默认」点了不生效、刷新后又变回关闭）。
+    //    内存里这两份映射始终是全量，用 __replace__ 整体替换。
     patch.tools = {
       ...t,
       overrides: { __replace__: t.overrides || {} },
@@ -2713,7 +2630,7 @@ async function saveConfig({ quiet = false } = {}) {
   }
 
   if (sec === 'media') {
-    // ffmpeg 设置（2026-11-03）。只收集这三项；「下载/删除/测试」是即时动作，
+    // ffmpeg 设置：只收集这三项；「下载/删除/测试」是即时动作，
     // 各自直接 POST 专用端点，不经过表单保存链。
     //
     // ⚠️ Token 是脱敏回传的（值是 ******，真实值只在后端）：
@@ -2739,30 +2656,29 @@ async function saveConfig({ quiet = false } = {}) {
   // ── POST 之前的最后防线：去掉"空 patch"造成的无谓请求 ──
   // 变动监听挂在整个 #settings-form 上，点击 readonly 输入框、拖动滑条
   // 等不产生真实改动的操作也会触发一次保存。空 patch（没有任何顶层键）
-  // 直接跳过 —— 它不会破坏数据，但每次都会让后端全量落盘 + 广播 status。
+  // 直接跳过，它不会破坏数据，但每次都会让后端全量落盘 + 广播 status。
   if (Object.keys(patch).length === 0) {
     return { ok: true, config: state.config };
   }
 
-  // keepalive：页面卸载（关窗/刷新）后请求仍能完成 —— beforeunload 的
-  // 兜底 flush 依赖这一点，普通 fetch 会随页面一起被浏览器中止。
-  // ⚠️ 但 keepalive 有 64KB body 上限，超限时 fetch 直接抛 "Failed to fetch"
-  // （连请求都不发）。设置 patch 多数很小，但关键词表/模型列表/工具 overrides
-  // 可能超 —— 按体积自适应：大 body 退回普通 fetch（卸载兜底本来也只是尽力而为）。
+  // keepalive：页面卸载（关窗/刷新）后请求仍能完成，beforeunload 的兜底 flush
+  // 依赖这一点，普通 fetch 会随页面一起被中止。
+  // ⚠️ keepalive 有 64KB body 上限，超限时 fetch 直接抛 "Failed to fetch"。
+  //    关键词表/模型列表/工具 overrides 可能超，所以按体积自适应，大 body 退回普通 fetch。
   const bodyStr = JSON.stringify(patch);
   const useKeepalive = bodyStr.length < 60_000;
-  // 2026-10-23 修复：补请求级超时。此前未传 timeoutMs，api() 就不会装
-  // AbortSignal.timeout；/api/config 是同步写盘端点，一旦磁盘 IO 或 socket 卡住，
-  // doSave 的 saving 标志永不复位，后续保存只会重排队丢弃，且界面无任何错误提示
-  // —— 表现为"改了没反应、重启又变回去"。超时后走失败分支（提示 + 3s 重试）。
+  // 必须带请求级超时：/api/config 是同步写盘端点，磁盘 IO 或 socket 卡住时
+  // 没有 AbortSignal.timeout，doSave 的 saving 标志永不复位，后续保存只会重排队丢弃，
+  // 界面无任何错误提示（表现为"改了没反应、重启又变回去"）。
+  // 超时后走失败分支（提示 + 3s 重试）。
   const data = await api('/api/config', {
     method: 'POST', body: bodyStr, timeoutMs: 20000,
     ...(useKeepalive ? { keepalive: true } : {})
   });
   state.config = data.config;
-  // 2026-10-23：连接分区的地址 / 令牌改完要**立刻生效** —— OneBotClient 构造时
-  // 快照了端点，只落配置不重连等于"改了没用"。这里补一次 apply（与「连接」页的
-  // 「保存并重连」同一条后端接口）；失败不影响保存本身，连接页的状态会如实反映。
+  // 连接分区的地址 / 令牌改完要立刻生效：OneBotClient 构造时快照了端点，
+  // 只落配置不重连等于"改了没用"。这里补一次 apply（与「连接」页的「保存并重连」
+  // 同一条后端接口）；失败不影响保存本身，连接页的状态会如实反映。
   if (sec === 'onebot' && patch.protocol) {
     try {
       const wsTok = val('#cfg-obtoken', '').trim();
@@ -2782,7 +2698,7 @@ async function saveConfig({ quiet = false } = {}) {
   return data;
 }
 
-/* 装载焦点陷阱（2026-10-10 r86 修 P2）：本脚本以 defer 加载，执行时 body 已解析完，
-   直接装即可。装好后由 MutationObserver 自动登记后续所有 .model-modal-overlay，
+/* 装载焦点陷阱：本脚本以 defer 加载，执行时 body 已解析完，直接装即可。
+   装好后由 MutationObserver 自动登记后续所有 .model-modal-overlay，
    无需每个创建方显式登记。 */
 try { installModalFocusTrap(); } catch { /* 环境不支持则退化为无陷阱 */ }

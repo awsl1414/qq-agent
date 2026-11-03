@@ -1,21 +1,21 @@
-// 〔人机验证桥接〕—— 2026-10-17 新增
+// 〔人机验证桥接〕
 //
-// 背景：kondius.cn 给所有社区上传端点（金句 /holyshits、意见 /comment、
-// 插件/技能 /market/publish）加了**阿里云验证码 2.0**（V3 弹出式滑块）。
-// 服务端校验请求体里的 captchaVerifyParam，缺失/无效一律 403「请先完成人机验证」。
+// kondius.cn 给所有社区上传端点（金句 /holyshits、意见 /comment、
+// 插件/技能 /market/publish）加了阿里云验证码 2.0（V3 弹出式滑块），
+// 服务端校验请求体里的 captchaVerifyParam，缺失或无效一律 403「请先完成人机验证」。
 // 官网网页版在提交前弹滑块拿到 param 再上传；桌面端此前没接这套流程，
-// 导致金句/意见/插件/技能上传全挂（用户集中反馈的就是这个）。
+// 导致金句/意见/插件/技能上传全挂。
 //
-// 做法：与官网 holyshits 页完全同款 —— 同一 SceneId、同一 SDK（官网反代托管）、
+// 做法与官网 holyshits 页一致：同一 SceneId、同一 SDK（官网反代托管）、
 // 同一「aliyun 域名请求改写到 kondius.cn 反代」的钩子。差异只有两点：
-//   ① 改写目标用**绝对地址**（桌面端 origin 是 127.0.0.1，相对路径会打到本地服务）；
+//   ① 改写目标用绝对地址（桌面端 origin 是 127.0.0.1，相对路径会打到本地服务）；
 //   ② 挂载点 DOM 由本模块自己注入（官网是写死在 HTML 里的）。
 //
 // 用法（上传侧统一走 Promise 封装）：
 //   hint.textContent = '请完成人机验证…';
 //   const captchaVerifyParam = await window.__qqaCaptcha.verify();  // 弹滑块
 //   …body: JSON.stringify({ ..., captchaVerifyParam })
-// 用户取消/验证失败时 verify() 抛 Error（message 已是人话），调用方按普通上传失败处理。
+// 用户取消或验证失败时 verify() 抛 Error（message 已是人话），调用方按普通上传失败处理。
 (function () {
   'use strict';
   if (window.__qqaCaptcha) return;
@@ -23,11 +23,11 @@
   window.AliyunCaptchaConfig = { region: 'cn', prefix: '163stu' };
 
   // ── aliyun 域名请求改写：SDK 对 *.aliyuncs.com / *.alicdn.com 的请求
-  //    一律改走 kondius.cn 的 nginx 反代（/qq-agent/captcha-api/<域名>/<路径>），
-  //    与官网行为等价。只改写这两个域，业务请求（/api/*、kondius.cn）不受影响。
-  //    豁免：o.alicdn.com/captcha-frontend/（官方 CDN 上的验证码前端脚本）不改写 ——
-  //    script 标签无 CORS 问题，直连 CDN 比 kettle 反代少一跳； kondius 线路抖动时
-  //    它还能当 SDK 主档的备用源（见下方 SDK_SOURCES）。
+  //    改走 kondius.cn 的 nginx 反代（/qq-agent/captcha-api/<域名>/<路径>），
+  //    与官网行为等价。业务请求（/api/*、kondius.cn）不受影响。
+  //    豁免 o.alicdn.com/captcha-frontend/（官方 CDN 上的验证码前端脚本）：
+  //    script 标签无 CORS 问题，直连比反代少一跳；kondius 线路抖动时
+  //    它还能当 SDK 主档的备用源（见 SDK_SOURCES）。
   const PROXY_BASE = 'https://kondius.cn/qq-agent/captcha-api/';
   const RE_ALI = /^(https:\/\/([a-zA-Z0-9.-]+\.(?:aliyuncs|alicdn)\.com))(\/.*)?$/;
   const RE_ALI_DIRECT = /^https:\/\/o\.alicdn\.com\/captcha-frontend\//;
@@ -64,7 +64,7 @@
       } catch { /* ignore */ }
       return el;
     };
-  } catch { /* 钩子装不上就直连 aliyun —— CSP 放行了 kondius.cn，直连能否成功看运行环境 */ }
+  } catch { /* 钩子装不上就直连 aliyun，CSP 放行了 kondius.cn，直连能否成功看运行环境 */ }
 
   // ── 挂载点：官网把 #captcha-element / #captcha-trigger 写死在 HTML 里，
   //    桌面端按需注入（initAliyunCaptcha 要求这两个元素在 init 时已存在）。
@@ -84,11 +84,11 @@
   }
 
   // ── SDK 生命周期：就绪信号是 getInstance 回调（脚本 onload 只代表下载完，
-  //    init 内部还要异步初始化，提前 show() 会静默无操作 —— 官网注释原话）。
-  //    SDK 来源（2026-10-17 加备用）：主档 kondius 反代托管，备用阿里云官方 CDN
-  //    o.alicdn.com（与主档**同一份文件**，224977 字节逐字节一致）。桌面端强制
-  //    直连（setProxy direct，防系统代理劫持 127.0.0.1），CDN 线路瞬时抖动会让
-  //    主档拉不下来 —— 群友实测就挂在这。逐源尝试 + 缓存穿透重试。
+  //    init 内部还要异步初始化，提前 show() 会静默无操作）。
+  //    SDK 来源：主档 kondius 反代托管，备用阿里云官方 CDN o.alicdn.com
+  //    （与主档是同一份文件，逐字节一致）。桌面端强制直连（setProxy direct，
+  //    防系统代理劫持 127.0.0.1），CDN 线路瞬时抖动会让主档拉不下来，
+  //    所以逐源尝试 + 缓存穿透重试。
   const SDK_SOURCES = [
     'https://kondius.cn/qq-agent/captcha-sdk/AliyunCaptcha.js',
     'https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js'
@@ -99,9 +99,9 @@
     const cb = onPass; onPass = null;
     if (cb) cb(p);
   }
-  // ── 销毁实例（2026-10-17 二次上传卡死修复）──
-  // captchaVerifyParam 是**一次性**的：实例成功一次后内部状态停在"验证通过"，
-  // 再 show() 只会重放残影、永远不再触发 success —— 用户看到"验证通过！"
+  // ── 销毁实例 ──
+  // captchaVerifyParam 是一次性的：实例成功一次后内部状态停在"验证通过"，
+  // 再 show() 只会重放残影、永远不再触发 success，用户看到"验证通过！"
   // 却传不出去。官网网页版靠上传成功后 location.reload() 整页刷新绕过；
   // 桌面端不能刷页面，所以每次成功（或初始化失败）后彻底销毁，下次全新 init。
   function teardown() {
@@ -172,7 +172,7 @@
         button: '#captcha-trigger',
         zIndex: 2147483000,
         // 成功即销毁（见 teardown 注释）：param 已交付上传流程，本实例使命结束。
-        // 顺序不能反——先 dispatch 把 param 交出去，再拆 DOM，调用方拿到的 param 不受影响。
+        // 顺序不能反，先 dispatch 把 param 交出去，再拆 DOM，调用方拿到的 param 不受影响。
         success: (captchaVerifyParam) => { dispatch(captchaVerifyParam); teardown(); },
         fail: () => { /* 用户滑块失败：SDK 自己会重置滑块，不动队列 */ },
         getInstance: (i) => {

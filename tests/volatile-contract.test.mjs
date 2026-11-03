@@ -1,13 +1,13 @@
 /**
- * 易变段（volatile）三段契约测试 —— 2026-10-23
+ * 易变段（volatile）三段契约测试
  *
- * 背景：把【表情包策略】从系统提示挪进【当前状态说明】需要三个环节同时成立，
- * 任何一环断掉都**没有任何报错**，只能靠 [body-lcp] 事后发现缓存又掉档：
+ * 把【表情包策略】从系统提示挪进【当前状态说明】需要三个环节同时成立，
+ * 任何一环断掉都没有任何报错，只能靠 [body-lcp] 事后发现缓存又掉档：
  *
- *   ① 插件声明        plugins/sticker/index.js 的 promptSections 返回 volatile:true
- *   ② 收集期透传      src/skills/manager.js 的动态分支是逐字段重建对象，
- *                     不显式带上 volatile 就会被静默丢弃（本次真踩到的坑）
- *   ③ 渲染期识别      src/prompt.js 的 isVolatileSection + deferVolatile 分支
+ *   ① 插件声明   plugins/sticker/index.js 的 promptSections 返回 volatile:true
+ *   ② 收集期透传 src/skills/manager.js 的动态分支是逐字段重建对象，
+ *                不显式带上 volatile 就会被静默丢弃
+ *   ③ 渲染期识别 src/prompt.js 的 isVolatileSection + deferVolatile 分支
  *
  * ①② 用静态断言守着（都是几行的对象字面量，改动风险低但要防手滑），
  * ③ 真跑一次 buildSystemPrompt 做行为断言。

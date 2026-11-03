@@ -7,19 +7,17 @@ import { sliderToTier } from './tier-slider.js';   // 零依赖模块，避免�
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(__dirname, '..');
-// 测试/便携场景可重定向数据目录
-// ── 多实例 PROFILE ─────────────────────────────────────────────────────
-// QQ_AGENT_PROFILE=2 时数据目录变成 data-2/、端口整体 +100，
-// 这样同一台机器可以跑两个机器人实例（两个 QQ 号）而不互相踩。
+// 测试/便携场景可重定向数据目录。
+// 多实例 PROFILE：QQ_AGENT_PROFILE=2 时数据目录变成 data-2/、端口整体 +100，
+// 同一台机器可以跑两个机器人实例（两个 QQ 号）而不互相踩。
 // 优先级：QQ_AGENT_DATA_DIR（显式覆盖）> PROFILE 推导 > 默认 data/
 //
-// ⚠️ 必须在这里就生效（而不是在 UI 或 app.js 里改）：
-//   DATA_DIR 是整个进程的根路径，配置、会话、记忆、表情库全挂在它下面。
-//   晚一步设置就会有一部分文件写到主实例的目录里，造成两个实例数据互相污染。
+// 必须在这里就生效（而不是在 UI 或 app.js 里改）：DATA_DIR 是整个进程的根路径，
+// 配置、会话、记忆、表情库全挂在它下面。晚一步设置就会有一部分文件写到主实例的
+// 目录里，造成两个实例数据互相污染。
 import { profileSuffix, portOffset } from './profile.js';
 
-// 2026-09-19 起 https：http 版 301 跳转且明文传输可被 MITM 篡改成本展示。
-// 证书与内容已实测可达（同一路径，nginx 直接 200）。
+// 用 https：http 版 301 跳转且明文传输可被 MITM 篡改成本展示。
 export const FIXED_PRICE_REMOTE_URL = 'https://kondius.cn/qq-agent/model-prices.json';
 export const DATA_DIR = process.env.QQ_AGENT_DATA_DIR || path.join(ROOT, `data${profileSuffix()}`);
 export const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
@@ -31,10 +29,10 @@ export const DEFAULT_CONFIG = {
     // 留空能让「就绪度体检」正确提示"还没填 Base URL"。
     baseUrl: '',                             // 例如 https://api.deepseek.com/v1 或自建网关
     apiKey: '',
-    // 网络代理（可选，2026-10-19 群友需求）：接入国外大模型 API 时填写，
-    // 如 http://127.0.0.1:7890。只作用于 LLM 链路（对话/模型列表/连通性探测），
-    // 仅支持 http:// 代理（undici ProxyAgent 边界，socks5 明确提示不支持）。
-    // 留空 = 直连。网页阅读（safe-fetch）与 OneBot 协议端不受此项影响。
+    // 网络代理（可选）：接入国外大模型 API 时填写，如 http://127.0.0.1:7890。
+    // 只作用于 LLM 链路（对话/模型列表/连通性探测），仅支持 http:// 代理
+    // （undici ProxyAgent 边界，socks5 明确提示不支持）。留空 = 直连。
+    // 网页阅读（safe-fetch）与 OneBot 协议端不受此项影响。
     proxy: '',
     model: '',                              // UI 里选择/填写
     provider: '',                           // 当前模型所属提供商（多提供商目录的选中项）
@@ -44,13 +42,12 @@ export const DEFAULT_CONFIG = {
     fallbackModels: [],
     // 按输入类型分开选择模型（可选）：留空则都用上方主模型 api.model。
     // 图片/视频输入需要模型支持对应模态；文字输入用纯文本模型即可（可省成本）。
-    // ⚠️ 这两个字段现在是**真的会被使用**的：llm.js 检测到请求里带图片/视频部分时，
-    //    会用对应字段的模型替换主模型（仅主调用路径；记忆整理/备选模型降级不受影响）。
-    //    此前它们只是存下来给 UI 看，没有任何代码读取 —— 填了不起作用。
+    // llm.js 检测到请求里带图片/视频部分时会用对应字段的模型替换主模型
+    // （仅主调用路径；记忆整理/备选模型降级不受影响）。
     visionModel: '',            // 图片输入专用模型（留空 = 用主模型）
     videoModel: '',             // 视频输入专用模型（留空 = 用主模型）
-    // 视频走哪条路。两条路**互斥**，不会同时喂 ——
-    // 同时喂等于同一内容重复计费，而且多数网关会因格式冲突直接 400。
+    // 视频走哪条路。两条路互斥，不会同时喂：同时喂等于同一内容重复计费，
+    // 而且多数网关会因格式冲突直接 400。
     //   auto   配了 videoModel 就认为你有全模态模型 → 原生读视频；否则抽帧；
     //          抽帧 Skill 不可用（没装 ffmpeg）就只给元信息
     //   native 强制原生视频输入（把视频地址作为 video 部分发给模型）
@@ -63,21 +60,21 @@ export const DEFAULT_CONFIG = {
     //                        mp4，按 video 部件发给模型（llm.js 自动切 videoModel）
     //   勾了 vision 没勾 video → GIF 按图片原样发（部分视觉模型能直接读动图）
     //   没勾 vision → 看图工具整个不存在，GIF 自然也看不到
-    // 默认关闭：猜错"模型支持视频"的代价是请求 400，比不启用更糟（同 videoModel 的口径）。
+    // 默认关闭：猜错"模型支持视频"的代价是请求 400，比不启用更糟。
     video: false,
     temperature: 0.8,
     maxRounds: 12,                          // 单次运行的最多工具轮数
     timeoutMs: 180000,
     // 思考强度（设置页-模型 API 区的口径；实际落成各厂商参数由 thinking-adapters 插件负责）：
-    //   thinkingMode   off/auto/on —— off=能思考的模型也明确关闭，on=按渠道发开启参数
-    //   thinkingEffort low/medium/high —— 推理强度，仅 OpenAI o 系 / OpenRouter 生效
-    //   thinkingBudget token 数 —— 思考预算，仅 Claude 兼容 / 部分网关生效，0=不指定
+    //   thinkingMode   off/auto/on：off=能思考的模型也明确关闭，on=按渠道发开启参数
+    //   thinkingEffort low/medium/high：推理强度，仅 OpenAI o 系 / OpenRouter 生效
+    //   thinkingBudget token 数：思考预算，仅 Claude 兼容 / 部分网关生效，0=不指定
     // 目的：防"雷霆大思考"（几千 token 的 reasoning 拖慢且烧钱）或该思考的完全不思考。
     thinkingMode: 'auto',
     thinkingEffort: '',
     thinkingBudget: 0,
     // 成本核算（仅本地估算展示，不参与任何请求）
-    priceInputPerM: 0,      // 输入单价（元 / 百万 token）—— 兜底默认值
+    priceInputPerM: 0,      // 输入单价（元 / 百万 token），兜底默认值
     priceOutputPerM: 0,     // 输出单价
     priceCachedPerM: 0,     // 输入且命中缓存的单价；留 0 时按 priceInputPerM 计
     useOfficialPrice: true, // true = 优先用内置官方价格表（按模型 id 匹配）
@@ -85,7 +82,7 @@ export const DEFAULT_CONFIG = {
     // UI 不再展示或写入它，避免用户/页面改到错误地址。
     priceRemoteUrl: FIXED_PRICE_REMOTE_URL,
     // 按模型单独设定的价格：{ [模型 id]: { in, out, cached } }
-    // 优先级最高 —— 一旦这里有记录，就不再用内置官方表，也不受全局默认单价影响。
+    // 优先级最高：一旦这里有记录，就不再用内置官方表，也不受全局默认单价影响。
     // 改动只存在这里，不会回写内置价格表（src/model-prices.js）。
     modelPrices: {}
   },
@@ -148,48 +145,44 @@ export const DEFAULT_CONFIG = {
       timeoutMs: 20000
     }
   },
-  // ── 插件信任名单（2026-10-07 安全加固）──
-  // 插件是以 import() 直接进主进程执行的，与主进程共享同一个 process。
-  // permissions 白名单只拦得住 fetch —— fs / child_process 是插件自己 import 的，
-  // 权限层碰不到。所以「装一个插件」=「把本机权限交给它」。
+  // ── 插件信任名单 ──
+  // 插件以 import() 直接进主进程执行，与主进程共享同一个 process。permissions
+  // 白名单只拦得住 fetch，fs / child_process 是插件自己 import 的，权限层碰不到。
+  // 所以「装一个插件」=「把本机权限交给它」。
   //
   // 随应用分发的内置插件由 plugin-loader.js 按 builtin-modules.json 的指纹基线放行；
-  // **第三方插件**若 import 高危模块（fs/child_process/net/vm…）或触碰凭据文件，
-  // 默认拒绝加载，需要在这里显式登记它的**目录名**才能装
+  // 第三方插件若 import 高危模块（fs/child_process/net/vm…）或触碰凭据文件，
+  // 默认拒绝加载，需要在这里显式登记它的目录名才能装
   // （控制台卡片上的「信任并重试」/「一键信任全部」就是往这里写）。
-  // 这不是沙箱（那需要 worker_threads / 子进程隔离），而是把信任边界**显式化**。
+  // 这层不做沙箱（那需要 worker_threads / 子进程隔离），只把信任边界显式化。
   //
-  // ⚠️ 2026-10-15 R129：这个键原先被放在 `store`（消息存档/响应档位）段里，
-  //    而 plugin-loader.js 读的是 `getConfig().trustedPlugins`（顶层），
-  //    routes.js 的「信任并重试」也写顶层 —— 放错的那份默认值从来没被读过，
-  //    只有注释会把后来的人指到错的位置。已挪到顶层与读写点对齐。
+  // 这个键必须在顶层：plugin-loader.js 读 getConfig().trustedPlugins，
+  // routes.js 的「信任并重试」也写顶层。放错位置的那份默认值从来没被读过。
   trustedPlugins: [],
   // 安全例外（默认全部关闭）
   security: {
     allowPrivateImageHosts: false,          // true 时图片下载允许内网地址（仅本地测试/自建图床）
-    // ── 外链白名单（2026-10-15 R129）──
-    // 主进程把页面里的链接交给系统浏览器前，要走 electron/external-link.js 的四道判据：
+    // 外链白名单。主进程把页面里的链接交给系统浏览器前，要走
+    // electron/external-link.js 的四道判据：
     //   ① 协议只允许 http/https（`file:` / `ms-msdt:` 这类交给 shell 是"执行"不是"打开"）；
     //   ② 拒绝带 userinfo 的 URL（`https://trusted@evil.com` 是经典钓鱼形态）；
     //   ③ 拒绝 127.0.0.1 / localhost（本机地址不该丢给系统浏览器）；
     //   ④ 主机必须在白名单里（精确匹配或它的子域）。
-    // 前三条没有开关（它们挡的是执行/钓鱼，不是"访问了不喜欢的网站"）；第四条的内置名单
+    // 前三条没有开关（挡的是执行/钓鱼，不是"访问了不喜欢的网站"）；第四条的内置名单
     // 见 external-link.js 的 DEFAULT_ALLOW_HOSTS（官网 / GitHub / 各供应商后台）。
     //
-    // 这里填**额外**允许的主机，例如自建文档站、公司内网门户。
-    // 写成 `example.com` 会同时放行 `a.example.com`（子域规则），不需要写通配符。
-    // ⚠️ 不加 `*.` 之类前缀，写裸域名即可；匹配用的是 `h === base || h.endsWith('.' + base)`，
-    //    所以 `evil-example.com` 不会命中（用 includes 就会，那是个洞）。
+    // 这里填额外允许的主机，例如自建文档站、公司内网门户。写成 `example.com`
+    // 会同时放行 `a.example.com`（子域规则），不需要写通配符。
+    // 不加 `*.` 之类前缀，写裸域名即可；匹配用的是 `h === base || h.endsWith('.' + base)`，
+    // 所以 `evil-example.com` 不会命中（用 includes 就会，那是个洞）。
     externalHosts: [],
     // ── 发网图（send_image）──
-    // 机器人主动往群里发网上找的图。
-    // 2026-10-23：按用户要求**默认开启**（原为 false、要求显式打开）。
-    // 安全闸门仍在，只是不再要求用户先去勾总开关：
-    //   · requirePreview（默认 true）—— 模型必须先预览确认才真发；
-    //   · maxPerRun / maxBytesMB —— 限量与体积上限；
+    // 机器人主动往群里发网上找的图。按用户要求默认开启，安全闸门仍在：
+    //   · requirePreview（默认 true）：模型必须先预览确认才真发；
+    //   · maxPerRun / maxBytesMB：限量与体积上限；
     //   · 下载走 safe-fetch（SSRF 防护 + 浏览锁定）。
-    // ⚠️ 已有用户的 config.json 里若已显式存过 enabled:false，deepMerge 会保留他们的
-    //    选择（不会被这条默认值覆盖）—— 这是刻意的：默认值只管"从没设过"的人。
+    // 已有用户的 config.json 里若显式存过 enabled:false，deepMerge 会保留他们的
+    // 选择，默认值只管"从没设过"的人。
     imageSend: {
       enabled: true,
       // 是否强制"先看一眼再发"。开启时模型必须先 send_image(url, preview=true)
@@ -214,11 +207,10 @@ export const DEFAULT_CONFIG = {
     }
   },
   // ── 协议端（OneBot v11）────────────────────────────────────────────────
-  // 2026-10-23：协议端不再随包分发、也不再由本软件启动/托管 —— SnowLuma 的
-  // EULA 5.4 禁止其专有原生组件并入第三方安装包或经自动化脚本部署。现模型：
-  // 用户自行安装 SnowLuma 或 NapCat（任选其一），自己运行，然后把 QQ Agent
-  // 指向它的 OneBot v11 端点即可。两者默认端口一致（WS 3001 / HTTP 3000），
-  // 默认值即开即用；换了端口或加了令牌再改这里（设置 → 连接 QQ）。
+  // 协议端不随包分发、也不由本软件启动/托管：SnowLuma 的 EULA 5.4 禁止其专有
+  // 原生组件并入第三方安装包或经自动化脚本部署。用户自行安装 SnowLuma 或 NapCat
+  // 并运行，然后把 QQ Agent 指向它的 OneBot v11 端点。两者默认端口一致
+  // （WS 3001 / HTTP 3000），默认值即开即用；换了端口或加了令牌再改这里。
   protocol: {
     // 第二实例默认连自己的 OneBot 端口（3001/3000 + 偏移），
     // 否则两个实例会同时连到同一个协议端，消息被处理两遍。
@@ -231,12 +223,12 @@ export const DEFAULT_CONFIG = {
   persona: {
     botName: '小鲸鱼',
     selfNickname: '',                       // 在群里的展示名（留空用 QQ 昵称）
-    roleText: PERSONAS.xiaojingyu.text,     // 默认人设：DeepSeek 小鲸鱼 QQ 群友版（2026-10-18 降攻击性重写版）
-    participation: 'medium',                // low | medium | high —— 参与度参考
+    roleText: PERSONAS.xiaojingyu.text,     // 默认人设：DeepSeek 小鲸鱼 QQ 群友版
+    participation: 'medium',                // low | medium | high，参与度参考
     customRules: '',                        // 追加自定义规则（可选）
-    // 系统提示词覆盖（可选）：非空时**整体替换** buildSystemPrompt 的默认行为准则。
-    // ⚠️ 高级功能：默认提示词包含安全规则/工具协议/反AI味等关键约束，
-    //    覆盖后这些全部失效，需自行在覆盖文本里写明。留空 = 用内置默认提示词。
+    // 系统提示词覆盖（可选）：非空时整体替换 buildSystemPrompt 的默认行为准则。
+    // 高级功能：默认提示词包含安全规则/工具协议/反AI味等关键约束，覆盖后这些
+    // 全部失效，需自行在覆盖文本里写明。留空 = 用内置默认提示词。
     // 可用占位符：{botName} {roleText} {participation}
     systemPromptOverride: ''
   },
@@ -244,7 +236,7 @@ export const DEFAULT_CONFIG = {
   customPersonas: [],
   // 按会话独立人设：{ [群号/QQ号]: { roleText, participation, customRules, systemPromptOverride } }
   // key 是白名单会话的 id（群号或私聊 QQ 号），值是该会话覆盖全局 persona 的字段；
-  // 只覆盖写在这里的字段，其余（botName/selfNickname 等账号身份）永远用全局值 ——
+  // 只覆盖写在这里的字段，其余（botName/selfNickname 等账号身份）永远用全局值：
   // 名字换了会和 @ 判定、存档里"我"的称呼对不上。
   personaByChat: {},
   // 统一人设（人设页开关）：true = 所有用一套全局人设；false = 人设页展示分会话
@@ -261,7 +253,7 @@ export const DEFAULT_CONFIG = {
   maxConcurrentRuns: 2,     // 全局同时进行的 agent 运行数
   // 会话级自动重试：整轮运行失败且一条消息都没发出时，自动从头再来几次。
   // 0 = 关闭自动重试（失败会话仍可在会话页手动点「重试」）。
-  // ⚠️ 已发出过消息的会话绝不自动重试 —— 重试会导致群里看到两遍同样的话。
+  // 已发出过消息的会话绝不自动重试：重试会导致群里看到两遍同样的话。
   sessionRetryAttempts: 2,
   // 发送保护
   send: {
@@ -287,59 +279,51 @@ export const DEFAULT_CONFIG = {
   // 活跃模式（chatActive）：1/2/3 档被召唤触发响应后，模型若认为话题值得持续参与，
   // 会在 finish 时带回话题总结 → 该群进入"活跃期"：忽略档位判定必响应，
   // 提示词注入话题锚点，模型每次自判"是否仍在话题上"，偏离则 finish("话题结束") 退出。
-  // 让"开始活跃"容易、"停下"由模型自主判断 —— 恰好是档位系统的反向补充。
+  // 让"开始活跃"容易、"停下"由模型自主判断，恰好是档位系统的反向补充。
   chatActive: {
     enabled: false,
     ttlMinutes: 30   // 活跃期最长持续时间（分钟）：到期自动退出，兜住"模型忘了结束"
   },
-  // ── 前缀缓存保活（2026-09-20）────────────────────────────────────────────
-  // 背景（实测数据）：一个会话的第一次调用只能命中约 36% 的 prompt ——
-  // 「工具 schema + 系统提示」这段前缀虽然跨会话字节一致，但服务商的缓存
-  // 需要**先有请求写过它**才会命中；而用户的实际会话多是"一次唤醒就结束"，
-  // 于是每个新会话都在付这段前缀的全价。
+  // ── 前缀缓存保活 ──────────────────────────────────────────────────────
+  // 一个会话的第一次调用只能命中约 36% 的 prompt：「工具 schema + 系统提示」这段
+  // 前缀虽然跨会话字节一致，但服务商的缓存需要先有请求写过它才会命中；而用户的
+  // 实际会话多是"一次唤醒就结束"，于是每个新会话都在付这段前缀的全价。
   //
-  // 做法：后台按固定间隔发一次"只含固定前缀 + 极短用户消息"的请求，
-  // 把这段前缀保持在服务商缓存里。之后任何新会话的第一次调用都能命中它。
+  // 做法：后台按固定间隔发一次"只含固定前缀 + 极短用户消息"的请求，把这段前缀
+  // 保持在服务商缓存里，之后任何新会话的第一次调用都能命中它。
   // 成本：一次保活约 2700 token 输入，命中后按缓存价计费（约为普通输入价的 1/10）。
   //
-  // ⚠️ 默认关闭：它会在后台**主动联网**。用户应当明确知情后才开启。
-  //    间隔的合适取值取决于服务商的缓存存活时间（TTL），需自行实测调整：
-  //    逐档放大间隔，观察新会话第一次调用的 cached 是否仍然很高。
+  // 默认开启。它会主动联网，用户应明确知情；间隔的合适取值取决于服务商的缓存
+  // TTL，需自行实测调整：逐档放大间隔，观察新会话第一次调用的 cached 是否仍然很高。
   cacheWarm: {
-    // 2026-10-15：改为默认开启（用户要求）。⚠️ 它会主动联网发轻量请求保活缓存；
     // 间隔 10 分钟对服务商缓存 TTL 是安全的（app.js 注释有实测方法）。
     enabled: true,
     intervalMin: 10,
     // 调用前预热：真实 LLM 调用之前，先发一次同前缀的轻量请求把缓存写好。
     //
-    // ⚠️ 默认关闭（2026-09-20 更正）。此前这里写着"把首轮命中率从 91.8% 提到
-    //    97.1%"，那个结论是**只统计真实调用的未命中**得出的，把预热自己那一发
-    //    藏起来了。预热必须逐字节复用真实 body（否则两者各占一个缓存档位），
-    //    而"复用真实 body"就意味着它把真实调用**本来就要付的那笔全价 prefill
-    //    提前自己付了一遍**。成对实测（同一会话内预热+真实一起算）：
-    //        预热：预热未命中 2496 + 真实未命中 192 = 2688，成本 3005
-    //        不预热：                    真实未命中 2481 = 2481，成本 2617
-    //    → 预热净亏约 389×1e-6 元/次。它买到的是"命中率这个数字"。
-    //    预热只有在前缀会被**多次**真实调用复用时才可能回本，而本项目的会话是
-    //    一次一事（每个新会话的 user 消息都不同），所以它稳定为负。
+    // 默认关闭。预热必须逐字节复用真实 body（否则两者各占一个缓存档位），而
+    // "复用真实 body"就意味着它把真实调用本来就要付的那笔全价 prefill 提前自己
+    // 付了一遍。成对实测（同一会话内预热+真实一起算）：
+    //    预热：预热未命中 2496 + 真实未命中 192 = 2688，成本 3005
+    //    不预热：                    真实未命中 2481 = 2481，成本 2617
+    // → 预热净亏约 389×1e-6 元/次，买到的是"命中率这个数字"。预热只有在前缀会被
+    // 多次真实调用复用时才可能回本，而本项目的会话是一次一事（每个新会话的 user
+    // 消息都不同），所以它稳定为负。
     //
-    //    真正把命中率提上去的是【过去状态】窗口起点锚定（见 prompt.js 的
-    //    ANCHOR_MAX_CHUNK）：首轮未命中 2500 → 796，命中率 73% → 91.6%，
-    //    而且是**同时**降低总成本，不像预热是拿成本换指标。
-    //    后台定期保活（intervalMin）不受影响：它只发"固定前缀 + 极短用户消息"，
-    //    命中的是已经缓存的那段，成本近乎为零，保留。
+    // 真正把命中率提上去的是【过去状态】窗口起点锚定（见 prompt.js 的
+    // ANCHOR_MAX_CHUNK）：首轮未命中 2500 → 796，命中率 73% → 91.6%，而且同时
+    // 降低总成本。后台定期保活（intervalMin）不受影响：它只发"固定前缀 + 极短
+    // 用户消息"，命中的是已经缓存的那段，成本近乎为零，保留。
     preCall: false,
-    // 调用前预热的防重间隔（秒，热生效）。默认 45。
-    // 开 preCall 后，这个值控制"多久之内同一形状不重复预热"：调小（5-10s）
-    // ≈ 接近每条消息都预热，真实调用能冲到 97-100%，但请求数翻倍 ——
-    // 上游限流（429）时适得其反，cache-warm 的限流冷却会自动暂停预热兜底。
-    // 注意 2026-09-20 的成对实测结论：一次性会话下 preCall 是净负成本
-    // （它买到的是"命中率数字"），默认关闭，按需开。
+    // 调用前预热的防重间隔（秒，热生效）。开 preCall 后控制"多久之内同一形状
+    // 不重复预热"：调小（5-10s）接近每条消息都预热，真实调用能冲到 97-100%，
+    // 但请求数翻倍，上游限流（429）时适得其反；cache-warm 的限流冷却会自动暂停
+    // 预热兜底。注意一次性会话下 preCall 是净负成本，默认关闭，按需开。
     preCallGapSec: 45,
-    // 同形状预热去重窗口（秒，热生效）。默认 20，设 0 关闭。
-    // 启动/保活 tick/early-warm/形状变化 四条路径各自判重、互相看不见，
-    // 实测重启后 8 秒内对同一个 shape（18773 tok）连发 5 次预热 ——
-    // 每次 1.5~6 秒，白占上游并发位（该模型并发上限 16，当天有 41 次真实调用被 429）。
+    // 同形状预热去重窗口（秒，热生效）。设 0 关闭。
+    // 启动/保活 tick/early-warm/形状变化四条路径各自判重、互相看不见，曾出现
+    // 重启后 8 秒内对同一个 shape（18773 tok）连发 5 次预热，每次 1.5~6 秒，
+    // 白占上游并发位（该模型并发上限 16，当天有 41 次真实调用被 429）。
     // warmOnce 在这一层做统一收口：同形状 N 秒内只暖一次。
     warmDedupSec: 20,
     // 静默时段（小时）：该区间内不发保活请求。空数组 = 全天保活。
@@ -347,15 +331,13 @@ export const DEFAULT_CONFIG = {
   },
   // 存储
   store: {
-    // 单群 JSON 最大保留条数。**0 = 不限制**。
-    // 用户明确要求取消上限（原为 2000）。配套措施：
-    //   - 前端存档页已分页（首屏 500 条、滚动追加 200 条），不会因数据多而卡
-    //   - store 的 #trim 在 maxPerChat<=0 时直接跳过
-    // 注意：单群文件会随时间增长，磁盘占用请自行留意。
+    // 单群 JSON 最大保留条数。0 = 不限制。
+    // 前端存档页已分页（首屏 500 条、滚动追加 200 条），store 的 #trim 在
+    // maxPerChat<=0 时直接跳过。单群文件会随时间增长，磁盘占用请自行留意。
     maxMessagesPerChat: 0,
     // ── 上下文读取档位（决定本次唤醒读多少条历史）──
-    // 档位是"累积生效"的：选 4 档时 1/2/3 档也都生效，按 4→3→2→1 顺序检查，
-    // 第一个命中的决定读取条数。这个设置替代了原来的 pastStateLimit 固定值。
+    // 档位累积生效：选 4 档时 1/2/3 档也都生效，按 4→3→2→1 顺序检查，
+    // 第一个命中的决定读取条数。
     contextTier: 4,             // 1=仅艾特 2=+关键词 3=+随机 4=全读
     atCount: 20,                // 档1：机器人被艾特时读 w 条
     keywordCount: 15,           // 档2：命中关键词时读 x 条
@@ -366,13 +348,13 @@ export const DEFAULT_CONFIG = {
     // ── 响应档位的作用范围 ──
     unifiedTier: true,          // true = 上方滑条对所有会话生效；false = 可按群单独设置
     groupSliderPos: {},         // { [群号]: 0~100 } 仅 unifiedTier=false 时生效；未设置的群/私聊跟随全局滑条
-    // 分群峰谷（2026-09-18 四象限改版）：unifiedTier=false 且 peakSchedule.enabled 时，
-    // 每个群可以有自己的峰谷档位 { [群号]: { peak: 0~100, valley: 0~100 } }。
-    // 时段（start/end）全局共享 —— 每群分开拖两个点的档位值即可。
-    groupPeakPos: {},           // { [群号]: { peak: 0~100, valley: 0~100 } }，未设置的群跟随全局峰谷双点
-    // R78-11：默认 120（不再 0 = 不限制）。会话记录永不清理是确定的无界磁盘增长；
-    // 120 个已结束会话对普通用户绰绰有余，且 settings 里可改回 0 恢复不限制。
-    keepSessionFiles: 120,      // 保留最近多少个会话记录文件；**0 = 不限制**
+    // 分群峰谷：unifiedTier=false 且 peakSchedule.enabled 时，每个群可以有自己的
+    // 峰谷档位 { [群号]: { peak: 0~100, valley: 0~100 } }。时段（start/end）全局
+    // 共享，每群分开拖两个点的档位值即可。
+    groupPeakPos: {},           // 未设置的群跟随全局峰谷双点
+    // 会话记录永不清理是确定的无界磁盘增长，默认保留 120 个已结束会话；
+    // settings 里可改回 0 恢复不限制。
+    keepSessionFiles: 120,      // 保留最近多少个会话记录文件；0 = 不限制
     // ── 峰谷切换（按时段自动调整响应档位）──
     // 允许用户设定"高峰/低谷"两个时段及各自生效的响应档位（滑条位置 0~100）。
     // 例如：白天上班时间（高峰）设为 1 档仅艾特省 token，晚上（低谷）设为 4 档全响应。
@@ -386,17 +368,17 @@ export const DEFAULT_CONFIG = {
     }
   },
   // 屏蔽名单：{ [群号]: [QQ号, ...] }
-  // 被屏蔽群员的消息在入口处直接丢弃——不存档、不触发会话、不作为提示词背景。
+  // 被屏蔽群员的消息在入口处直接丢弃：不存档、不触发会话、不作为提示词背景。
   // 机器人自己的消息不受影响。仅群聊有意义（私聊要屏蔽请直接用白名单/黑名单）。
   blocklist: {},
   // 全局屏蔽名单（"上云"）：[QQ号, ...]
-  // 与 blocklist 的区别：blocklist 是按群单独屏蔽；globalBlocklist 对**所有群**生效——
+  // 与 blocklist 的区别：blocklist 按群单独屏蔽；globalBlocklist 对所有群生效，
   // 一旦某人被加进来，他在任何群里的消息都会被丢弃（含私聊）。
   // 用于"这个人在所有群里都不该再被机器人看到"的场景（如骚扰者、广告号）。
   globalBlocklist: [],
   // 本机豁免名单：无管理密钥时"本机解除全局屏蔽"的持久化记录。
   // 云端名单仍含这些 id（移除需要密钥），但本机用 getGlobalBlocklist() 时扣除它们。
-  // 独立字段 —— 5 分钟一次的云端同步会整体覆盖 globalBlocklist，但不会碰这里。
+  // 独立字段：5 分钟一次的云端同步会整体覆盖 globalBlocklist，但不会碰这里。
   communityExemptions: [],
   // 指令禁言：群内任何人 @机器人 并发送指定指令后，机器人暂时把响应档位固定为 1 档（仅艾特）。
   // 用于群里太吵时让机器人"闭嘴"，只回应被直接点名。
@@ -411,12 +393,9 @@ export const DEFAULT_CONFIG = {
   memory: {
     consolidateEnabled: true,
     consolidateMinIntervalMs: 21600000,  // 默认 6 小时
-    // 触发阈值（2026-10-21 补声明）：这 4 个键 orchestrator 早就在读
-    // （`cfg.memory?.xxx || 类常量`），但 DEFAULT_CONFIG 里一直没写 —— 于是设置页按默认
-    // 配置渲染时看不到它们，config.js 里也搜不到，想知道"还有哪些旋钮"只能翻 orchestrator。
-    // 值必须与 orchestrator 的类常量保持一致，否则"默认值"与"兜底值"会打架：
-    //   MEMORY_THRESHOLDS.memberImpression=4 / maxPerMember 兜底=5 /
-    //   DISCOVER_MIN_MESSAGES=20 / DISCOVER_MAX_MEMBERS=3
+    // 触发阈值：orchestrator 读这些键时带类常量兜底（`cfg.memory?.xxx || 常量`），
+    // 值必须与 orchestrator 的 MEMORY_THRESHOLDS / DISCOVER_MIN_MESSAGES /
+    // DISCOVER_MAX_MEMBERS 保持一致，否则"默认值"与"兜底值"会打架。
     consolidateMinImpressions: 4,         // 全群印象总数超过它才触发整理
     maxImpressionsPerMember: 5,           // 单个成员印象条数超过它也会触发（照顾人少的群）
     discoverMinMessages: 20,              // "发现新人"：发言至少这么多条才纳入分析
@@ -427,9 +406,9 @@ export const DEFAULT_CONFIG = {
   },
   // 工具与技能（skill 化开关）
   //
-  // ⚠️ 边界（避免"两个开关打架"）：
-  //   tools.*  = **工具**层的开关：全局 / 分类 / 单个工具
-  //   skills.* = **能力**层的开关：每个 Skill 一个命名空间
+  // 边界（避免"两个开关打架"）：
+  //   tools.*  = 工具层的开关：全局 / 分类 / 单个工具
+  //   skills.* = 能力层的开关：每个 Skill 一个命名空间
   // 最终"能不能用"由 tool-registry.getToolAvailability() 统一计算，
   // 顺序是：tools.enabled → skill 生效 → requires 能力 → 分类 → 单工具 → 运行期依赖。
   // 模块不允许再写自己的 isXxxEnabled 影子开关。
@@ -455,18 +434,18 @@ export const DEFAULT_CONFIG = {
   // 形状：{ [skillId]: { enabled: boolean, ...该 Skill 自己的设置 } }
   // 这里只存用户改过的值；默认值来自各 Skill 的 skill.json → settings。
   skills: {},
-  // 扩展热重载：把自定义的插件/skill 目录放进 plugins/ 或 skills/ 后**自动生效**，无需重启。
-  // 默认开 —— 这正是"放进去就能用"的体验来源。
-  // ⚠️ 安全含义：等价于"任意落地的 JS 会被执行"。共享机器 / 只跑固定版本时建议关掉。
+  // 扩展热重载：把自定义的插件/skill 目录放进 plugins/ 或 skills/ 后自动生效，无需重启。
+  // 默认开，这正是"放进去就能用"的体验来源。
+  // 安全含义：等价于"任意落地的 JS 会被执行"。共享机器 / 只跑固定版本时建议关掉。
   extensions: {
     hotReload: true
   },
   // ── 系统自检页的「对话排查」专用模型 ────────────────────────────────────
   // 默认跟随全局 api（enabled=false 时 chatCompletion 不传 overrides，走 effectiveApi）。
-  // 单独一份的价值：诊断用小模型省钱、或诊断走另一个端点避开限流，
-  // 而群聊/记忆整理不受影响。
-  // ⚠️ apiKey 存这里会走 sanitizeConfig 的密钥模式自动脱敏（读回来是 hasApiKey 布尔），
-  //    前端要显示明文得走带来源校验的端点 —— 与搜索 Key / OneBot 令牌同一套。
+  // 单独一份的价值：诊断用小模型省钱、或诊断走另一个端点避开限流，而群聊/记忆
+  // 整理不受影响。
+  // apiKey 存这里会走 sanitizeConfig 的密钥模式自动脱敏（读回来是 hasApiKey 布尔），
+  // 前端要显示明文得走带来源校验的端点，与搜索 Key / OneBot 令牌同一套。
   doctorApi: {
     enabled: false,     // true 时 /api/doctor/ask 走下面这套；false 时跟随全局
     baseUrl: '',
@@ -494,48 +473,45 @@ export const DEFAULT_CONFIG = {
     // 需要外部浏览器读密钥时，配 server.token 并带 x-console-token，而不是打开这个开关。
     allowBrowserKeyRead: false
   },
-  // ── 桌面悬浮小窗（2026-10-20）──────────────────────────────────────────
-  // 设置 → 界面与应用 → 桌面端 打开后，桌面上出现一张无边框小卡片，显示
-  // 今日用量 / 缓存命中率 / 机器人连接状态。数据零新增：页面每 refreshMs
-  // 轮询一次 /api/status（与主界面顶栏同一个接口），不新增任何后端接口。
-  // 默认档（2026-10-24 按用户口径确定）：小窗默认**开**、真透明 + 50% 背景 ——
-  //    卡片浮在桌面上、能直接看见桌面，四角由页面自己画（真圆角）。
-  // ⚠️ transparent 曾经默认 false：主窗口那边因"启动时无条件 setOpacity(1)"把透明
-  //    分层窗口打死（R46，根因已于 2026-10-23 查清并修复，见 electron/main.js
-  //    createWindow 的注释）。悬浮窗自身不调 setOpacity，没有那条冲突；但透明窗口
-  //    在 Windows 上仍有边缘情况（老显卡驱动、远程桌面会话）→ 所以它在设置里
-  //    仍标着「实验」，出问题的用户关掉此项 + 把 opacity 调回 100 即可回到
-  //    不透明深色卡（两条都在同一屏，各一行）。
-  // ⚠️ 位置/尺寸**不存这里**：与主窗口一致落在 data/window-state.json 的
-  //    widget 字段，避免每次拖动都整份重写配置（配置里可有密钥）。
+  // ── 桌面悬浮小窗 ──────────────────────────────────────────────────────
+  // 设置 → 界面与应用 → 桌面端打开后，桌面上出现一张无边框小卡片，显示今日用量 /
+  // 缓存命中率 / 机器人连接状态。数据零新增：页面每 refreshMs 轮询一次
+  // /api/status（与主界面顶栏同一个接口），不新增任何后端接口。
+  // 小窗默认开、真透明 + 50% 背景，卡片浮在桌面上能直接看见桌面，四角由页面自己画。
+  // transparent 曾默认 false：主窗口因"启动时无条件 setOpacity(1)"把透明分层窗口
+  // 打死，根因已修复（见 electron/main.js createWindow 的注释）。悬浮窗自身不调
+  // setOpacity，没有那条冲突；但透明窗口在 Windows 上仍有边缘情况（老显卡驱动、
+  // 远程桌面会话），所以设置里仍标着「实验」，出问题时关掉此项并把 opacity 调回
+  // 100 即可回到不透明深色卡。
+  // 位置/尺寸不存这里：与主窗口一致落在 data/window-state.json 的 widget 字段，
+  // 避免每次拖动都整份重写配置（配置里可有密钥）。
   widget: {
     enabled: true,            // 总开关（默认开：开箱即见小窗）
     alwaysOnTop: true,        // 总是置顶
     clickThrough: false,      // 鼠标穿透（点了不抢焦点；开启后右键菜单也用不了，
-                              //   需要关闭时走托盘菜单或设置页 —— 三条恢复路径）
+                              //   需要关闭时走托盘菜单或设置页，三条恢复路径）
     transparent: true,        // 真透明（默认开；实验档，见上）
-    // 贴边自动收起（QQ 式）：拖到屏幕边缘 6px 内 → 收起只剩一条 6px 细缝，
+    // 贴边自动收起（QQ 式）：拖到屏幕边缘 6px 内收起只剩一条 6px 细缝，
     // 鼠标移近即展开；直接拖走细缝也会弹回。展开态坐标落 window-state.json，
-    // 重启后仍是收起态。默认开（2026-10-24 用户确认：这一项默认是开的）。
+    // 重启后仍是收起态。
     edgeHide: true,
     // 背景不透明度（百分数 30~100，默认 50 = 半透明卡片）。
-    // transparent 关掉时 → <100 走 Windows 11 mica 毛玻璃背板（DWM 合成），
-    // 而不是拿 transparent:true 去换半透明（R46 那条链路，见 main.js createWindow 注释）。
-    // ⚠️ mica 背板建窗时决定：调过 100 这条线会重建小窗（位置保留）；
-    //    100 以下来回拖只是改卡片 CSS 透明度，页面轮询 /api/config 即时生效。
+    // transparent 关掉时，<100 走 Windows 11 mica 毛玻璃背板（DWM 合成），
+    // 而不是拿 transparent:true 去换半透明。
+    // mica 背板建窗时决定：调过 100 这条线会重建小窗（位置保留）；
+    // 100 以下来回拖只是改卡片 CSS 透明度，页面轮询 /api/config 即时生效。
     opacity: 50,
     size: 'm',                // 尺寸预设：s | m | l（像素表在 main.js WIDGET_SIZES）
     refreshMs: 2500           // 轮询间隔（主进程夹到 1000~60000）
   },
-  // ── 媒体工具（ffmpeg，2026-11-03）────────────────────────────────────
-  // ffmpeg 不再随安装包分发（79MB，安装包因此从 186.3MB 降到约 107MB），
-  // 改为「设置 → 媒体工具」按需下载到 data/runtime/ffmpeg/bin/。
-  // 它只服务四项：大图压缩 / GIF 转视频 / 视频抽帧 / 动态壁纸导入。
-  // 没下载时这四项各自降级（不压缩、按图发、只给元信息、报错引导），
+  // ── 媒体工具（ffmpeg）────────────────────────────────────────────────
+  // ffmpeg 不随安装包分发（79MB），改为「设置 → 媒体工具」按需下载到
+  // data/runtime/ffmpeg/bin/。它只服务四项：大图压缩 / GIF 转视频 / 视频抽帧 /
+  // 动态壁纸导入。没下载时这四项各自降级（不压缩、按图发、只给元信息、报错引导），
   // 不影响启动与纯文字聊天。
   //
-  // 路径解析统一在 src/ffmpeg-resolve.js：手填 > QQ_AGENT_FFMPEG >
-  // 下载的 > 旧随包 > PATH/注册表/WinGet。
+  // 路径解析统一在 src/ffmpeg-resolve.js：手填 > QQ_AGENT_FFMPEG > 下载的 >
+  // 旧随包 > PATH/注册表/WinGet。
   media: {
     ffmpegPath: '',              // 手动指定的 ffmpeg 路径（留空 = 自动探测）
     // 优先使用哪一组：''（自动，按 manual > managed > system）
@@ -544,19 +520,18 @@ export const DEFAULT_CONFIG = {
     // 取值必须与 ffmpeg-resolve.js 的 FFMPEG_SOURCES 一致。
     ffmpegSource: '',
     // 下载源：yylx（git.yylx.win，默认）| gh-proxy | direct（GitHub 官方）| custom
-    // 前两个都是国内镜像加速，不需要代理；某个站挂了换个源即可。
-    // 国内直连 GitHub Release 经常几十 KB/s 甚至超时，所以默认走加速。
-    // ⚠️ 有可用代理时会自动改走官方直连 —— 见 ffmpeg-setup.js 的 resolveDownloadRoute。
-    //    默认值必须与 ffmpeg-setup.js 的 DEFAULT_MIRROR 一致。
+    // 前两个都是国内镜像加速，不需要代理；某个站挂了换个源即可。国内直连 GitHub
+    // Release 经常几十 KB/s 甚至超时，所以默认走加速。有可用代理时会自动改走
+    // 官方直连，见 ffmpeg-setup.js 的 resolveDownloadRoute。
+    // 默认值必须与 ffmpeg-setup.js 的 DEFAULT_MIRROR 一致。
     downloadMirror: 'yylx',
     customMirror: '',            // 形如 https://git.yylx.win/（仅在 downloadMirror='custom' 时生效）
-    // ⚠️ 字段名必须是 githubAccessToken，不能叫 githubToken：
-    //    app.js 的 SECRET_KEY_PATTERN 里有 accesstoken 但没有裸 token 分支，
-    //    叫 githubToken 会**明文回传**给浏览器（GET /api/config 不脱敏）。
-    //    叫 accessToken 正好命中脱敏链，与 protocol.accessToken 同口径。
-    //    用途：代理节点是共享出口 IP 时，GitHub 按 IP 限流 60 次/小时；
-    //    带 Token 后按 Token 计额度（5000 次/小时）。只发给 GitHub 自己的主机，
-    //    绝不发给镜像站 —— 见 ffmpeg-setup.js 的 githubAuthHeaders。
+    // 字段名必须是 githubAccessToken，不能叫 githubToken：app.js 的
+    // SECRET_KEY_PATTERN 里有 accesstoken 但没有裸 token 分支，叫 githubToken
+    // 会明文回传给浏览器（GET /api/config 不脱敏）。
+    // 用途：代理节点是共享出口 IP 时，GitHub 按 IP 限流 60 次/小时；带 Token 后
+    // 按 Token 计额度（5000 次/小时）。只发给 GitHub 自己的主机，绝不发给镜像站，
+    // 见 ffmpeg-setup.js 的 githubAuthHeaders。
     githubAccessToken: ''
   },
   ui: {
@@ -565,7 +540,6 @@ export const DEFAULT_CONFIG = {
     theme: 'dark',
     showVision: true,         // 模型目录显示图片输入能力徽标
     refreshMs: 15000,         // 界面轮询间隔
-    // ── 外观个性化（2026-09-21 R40）──
     // 全部"空值 = 跟随主题"：留空时前端不覆盖对应 CSS 变量，
     // 换主题/换设备也不会因为写死颜色而变得不搭。
     accent: '',               // 强调色 hex（如 #5b8cff），空 = 用主题自带的 accent
@@ -576,21 +550,19 @@ export const DEFAULT_CONFIG = {
     bgDim: 0,                 // 背景图暗化 %（压暗图片让文字更好读）
     winOpacity: 100           // 整窗不透明度 %（仅 Electron 桌面端，走 setOpacity）
   },
-  // ── 启动引导（OOBE，2026-10-18）────────────────────────────────────
-  // seen=false（或缺这个字段）= 下次启动自动弹「使用引导」。群友多次反馈
-  // 新手不知道从哪下手（"oobe也确实应该有引导"），而 r84 的旧方案是
-  // "没配好就强行跳设置页"，被"每次点开都在设置界面"的反馈否决 ——
-  // 所以现在是**可随时关掉的全屏引导**，关掉照常进会话页，不拦截、不跳转。
+  // ── 启动引导（OOBE）──────────────────────────────────────────────────
+  // seen=false（或缺这个字段）= 下次启动自动弹「使用引导」。群友多次反馈新手
+  // 不知道从哪下手，而"没配好就强行跳设置页"的旧方案被"每次点开都在设置界面"
+  // 的反馈否决，所以现在是可随时关掉的全屏引导：关掉照常进会话页，不拦截、不跳转。
   // version：引导内容大改版时 +1，老用户升级后会重新看到一版（见
   // ui/app/18-onboarding.js 的 ONBOARDING_VERSION）。
   onboarding: {
     seen: false,
     version: 0
   },
-  // ── 在线更新检查（2026-11-03）──────────────────────────────────────
-  // 本仓库是从上游项目 fork 出来独立维护的，更新源原本硬编码指向上游服务器，
-  // 那个源推的是上游的安装包，与本仓库的构建不对应 —— 所以改为
-  // **默认关闭 + 源地址可配**：
+  // ── 在线更新检查 ─────────────────────────────────────────────────────
+  // 本仓库从上游项目 fork 出来独立维护，上游更新源推的安装包与本仓库的构建不
+  // 对应，所以改为默认关闭 + 源地址可配：
   //   enabled=false 时 /api/update-check 直接返回 disabled，不发任何网络请求；
   //   要恢复时在这里填自己发布的 version.json 地址（格式 { version, url, notes }）。
   // 关掉不影响 /api/version（界面显示当前版本仍走它）。
@@ -598,10 +570,10 @@ export const DEFAULT_CONFIG = {
     enabled: false,
     feedUrl: ''
   },
-  // ── 匿名用量遥测（2026-11-03）──────────────────────────────────────
+  // ── 匿名用量遥测 ─────────────────────────────────────────────────────
   // 原实现每 6 小时把 installId + 版本号 + 调用计数 POST 到上游项目的服务器，
-  // 且**没有任何开关**。本仓库 fork 后独立维护，这些数据继续发给上游既无意义
-  // 也不合适，所以改为默认关闭 + 上报地址可配：
+  // 且没有任何开关。本仓库 fork 后独立维护，这些数据继续发给上游既无意义也不
+  // 合适，所以改为默认关闭 + 上报地址可配：
   //   enabled=false 时 startTelemetryLoop 不装任何定时器，进程零网络请求；
   //   要自己收数据时填 reportUrl（接收端按 installId 覆盖式 upsert）。
   // 本机的 telemetry-totals.json 仍照常累计（sessions.js 写），它只是本地计数，
@@ -618,15 +590,15 @@ export function deepMerge(base, override) {
   if (typeof base !== 'object' || base === null || Array.isArray(base)) return structuredClone(override);
   const out = Array.isArray(base) ? [...base] : { ...base };
   for (const [key, value] of Object.entries(override)) {
-    // ⚠️（2026-10-14 修 L3）这三个键必须跳过。override 来自 WebUI 提交的 JSON
-    //   （或第三方扩展），JSON.parse 会把 "__proto__" 建成**普通自有属性**并出现在
-    //   Object.entries 里；而下面 `out[key] = ...` 在普通对象上走的是原型 setter ——
-    //   结果是：数据没写进去、合并结果的原型却被替换（后续 `out.api` 之类的读取
-    //   会顺着原型链拿到"看不见"的值，配置看着没变却生效了，最难查的那类）。
-    //   constructor / prototype 同理。合并语义上没有一个是合法的配置键名。
+    // 这三个键必须跳过。override 来自 WebUI 提交的 JSON（或第三方扩展），
+    // JSON.parse 会把 "__proto__" 建成普通自有属性并出现在 Object.entries 里；
+    // 而下面 `out[key] = ...` 在普通对象上走的是原型 setter，结果是数据没写进去、
+    // 合并结果的原型却被替换（后续 `out.api` 之类的读取会顺着原型链拿到"看不见"
+    // 的值，配置看着没变却生效了，最难查的那类）。constructor / prototype 同理，
+    // 合并语义上没有一个是合法的配置键名。
     if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
     // 整体替换约定：{ __replace__: X } → 该键直接用 X，不做递归合并。
-    // 用于映射型字段（如 api.modelPrices）需要"删掉旧键"的场景 ——
+    // 用于映射型字段（如 api.modelPrices）需要"删掉旧键"的场景，
     // 普通深合并传 {} 是删不掉已有键的。
     if (value && typeof value === 'object' && !Array.isArray(value) && '__replace__' in value) {
       out[key] = structuredClone(value.__replace__);
@@ -647,12 +619,10 @@ export function loadConfig() {
     if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
     const parsed = JSON.parse(text);
     const cfg = deepMerge(DEFAULT_CONFIG, migrateLegacySkills(migrateSnowlumaToProtocol(parsed)));
-    // ── 内置人设改版迁移（2026-10-18）────────────────────────────────
-    // 群友反馈旧版默认人设"怼人太厉害"，PERSONAS.xiaojingyu 已整体重写
-    //（攻击性大降、长度减半）。老配置里存的是旧版全文，这里静默换成新版。
-    // ⚠️ **精确匹配旧文本才替换**：用户基于旧卡自己改过/微调过的不动 ——
-    //    个性化修改优先于内置改版，不能因为升级就把人设覆盖掉。
-    // 不在此处写盘：内存里迁移即可，用户下次保存任何配置时会自然固化；
+    // 内置人设改版迁移：群友反馈旧版默认人设"怼人太厉害"，PERSONAS.xiaojingyu
+    // 已整体重写（攻击性大降、长度减半），老配置里存的旧版全文在这里静默换成新版。
+    // 必须精确匹配旧文本才替换：用户基于旧卡自己改过/微调过的不动，个性化修改
+    // 优先于内置改版。不在此处写盘，内存里迁移即可，用户下次保存配置时会自然固化；
     // 每次启动重跑是幂等的，没有副作用。
     try {
       if (cfg?.persona && typeof cfg.persona.roleText === 'string'
@@ -662,12 +632,10 @@ export function loadConfig() {
     } catch { /* 迁移失败不阻塞启动 */ }
     return cfg;
   } catch (error) {
-    // ⚠️ 配置文件坏了（手改错/磁盘故障）不能静默回落默认值：
-    //   曾经直接返回 DEFAULT，随后任何 updateConfig（比如 5 分钟一次的
-    //   云端屏蔽名单同步）都会以默认配置为底整体写回 config.json ——
-    //   用户的 Key/白名单/人设被静默抹成出厂值。
-    //   现在先把坏文件改名备份（原始数据可手工抢救），再回落默认，
-    //   并打 error 日志提醒用户。
+    // 配置文件坏了（手改错/磁盘故障）不能静默回落默认值：曾经直接返回 DEFAULT，
+    // 随后任何 updateConfig（比如 5 分钟一次的云端屏蔽名单同步）都会以默认配置为底
+    // 整体写回 config.json，用户的 Key/白名单/人设被静默抹成出厂值。
+    // 现在先把坏文件改名备份（原始数据可手工抢救），再回落默认，并打 error 日志。
     try {
       if (fs.existsSync(CONFIG_FILE)) {
         const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -686,21 +654,19 @@ export function loadConfig() {
 /**
  * 旧配置迁移：把历史上散落在各处的"能力开关"收拢进 config.skills。
  *
- * 为什么必须做：社区版/旧版把同一件事的开关放在 api.thinking、tools.knowledgeEnabled
- * 之类的字段里，而新架构只认 config.skills[id].enabled。若不迁移，
- * 用户升级后会出现"UI 显示已开启、实际 Skill 判定为关闭"——正是要消灭的冲突。
+ * 必须做：旧版把同一件事的开关放在 api.thinking、tools.knowledgeEnabled 之类的
+ * 字段里，而新架构只认 config.skills[id].enabled。不迁移的话，用户升级后会出现
+ * "UI 显示已开启、实际 Skill 判定为关闭"。
  *
- * 规则（表驱动，新增迁移只需加一行）：
- *   旧字段路径 → Skill id，可选值映射函数
- * 迁移是幂等的：只有在 skills[id] 尚未存在时才写入，不会覆盖用户新配置。
+ * 规则表驱动，新增迁移只需加一行：旧字段路径 → Skill id，可选值映射函数。
+ * 迁移幂等：只有在 skills[id] 尚未存在时才写入，不覆盖用户新配置。
  */
 const LEGACY_SKILL_MIGRATIONS = [
-  // ⚠️ skill 名字必须与 skills/ 下的**目录名**完全一致。
-  //    这里曾经写成 'thinking' / 'video-understanding' / 'sticker-annotation'，
-  //    而真实技能叫 'thinking-adapters' / 'video-frames' / 'sticker-annotate' ——
-  //    后果是旧配置被迁进了一个**没有任何技能读取**的命名空间：
-  //    用户升级后开关看着"迁过来了"，实际按新架构判定仍是关的，
-  //    正是这段注释开头说要消灭的那种不一致。test/skill-test.mjs 现在会校验目标技能存在。
+  // skill 名字必须与 skills/ 下的目录名完全一致。曾经写成 'thinking' /
+  // 'video-understanding' / 'sticker-annotation'，而真实技能叫 'thinking-adapters' /
+  // 'video-frames' / 'sticker-annotate'，后果是旧配置被迁进了一个没有任何技能读取
+  // 的命名空间：用户升级后开关看着"迁过来了"，实际仍是关的。
+  // test/skill-test.mjs 现在会校验目标技能存在。
   // 社区版的思考开关：api.thinking: boolean → skills['thinking-adapters'].enabled
   { from: ['api', 'thinking'], skill: 'thinking-adapters', map: (v) => ({ enabled: v !== false, mode: 'auto' }) },
   // 旧知识库开关（知识库技能尚未移植，先留位；目标不存在时迁移会跳过并记日志）
@@ -742,13 +708,13 @@ export function migrateLegacySkills(parsed) {
 }
 
 /**
- * 旧配置迁移：`config.snowluma` → `config.protocol`（2026-10-23）。
+ * 旧配置迁移：`config.snowluma` → `config.protocol`。
  *
- * 背景：协议端从"随包分发 + 本软件托管"改为"用户自选安装"（SnowLuma EULA 5.4）。
+ * 协议端从"随包分发 + 本软件托管"改为"用户自选安装"（SnowLuma EULA 5.4）。
  * 旧配置块里只有四个字段与"连到哪里"有关，其余（dir / autoLaunch / autoInject /
  * botQQ / webuiPassword…）都是进程管理字段，随协议端托管一起废弃。
  *
- * 迁移是幂等的：只在 protocol 对应字段缺失时搬运，不覆盖用户已保存的新值；
+ * 幂等：只在 protocol 对应字段缺失时搬运，不覆盖用户已保存的新值；
  * 搬完即删除 snowluma 块，避免旧字段被继续读取。
  */
 export function migrateSnowlumaToProtocol(parsed) {
@@ -777,10 +743,10 @@ export function getConfig() {
 }
 
 /**
- * 剔除**派生标记**：GET /api/config 的脱敏层会生成 hasXxx / dshProviderKeyPresence
- * 这类"只表示存在性"的字段。前端把它们当成配置的一部分回传时，
- * deepMerge 会把它们真的写进 config.json —— 于是配置文件里混进了派生数据，
- * 且会随密钥增删变得与实际不一致（清了 Key 但 hasKey 仍是 true）。
+ * 剔除派生标记：GET /api/config 的脱敏层会生成 hasXxx / dshProviderKeyPresence
+ * 这类"只表示存在性"的字段。前端把它们当成配置的一部分回传时，deepMerge 会把
+ * 它们真的写进 config.json，于是配置文件里混进了派生数据，且会随密钥增删变得与
+ * 实际不一致（清了 Key 但 hasKey 仍是 true）。
  */
 function stripDerivedFlags(node) {
   if (!node || typeof node !== 'object') return node;
@@ -799,9 +765,9 @@ function stripDerivedFlags(node) {
 }
 
 /**
- * 数组型密钥容器的脱敏回传保留：patch 里按 id 匹配的条目若**缺少**密钥字段，
- * 从现配置同 id 条目回填 —— 前端脱敏视图回传时密钥天然不在场，不回填就会
- * 在"数组整体替换"的合并语义下静默清空。显式传空串（''）= 真清除，不回填。
+ * 数组型密钥容器的脱敏回传保留：patch 里按 id 匹配的条目若缺少密钥字段，
+ * 从现配置同 id 条目回填。前端脱敏视图回传时密钥天然不在场，不回填就会在
+ * "数组整体替换"的合并语义下静默清空。显式传空串（''）= 真清除，不回填。
  * 目前只有 webSearch.providers 一处数组密钥容器；新增容器时往数组里加路径即可。
  */
 function preserveSanitizedSecrets(current, patch) {
@@ -825,34 +791,30 @@ function preserveSanitizedSecrets(current, patch) {
 /**
  * 更新并持久化配置（浅合并到当前值；patch 里传对象字段则整体替换该字段）。
  *
- * ⚠️（2026-10-17 修 M4）也接受**函数式入口**：`updateConfig(cfg => patch)`，
- *   回调收到当前配置、返回 patch —— 读-改-写在这一个同步块里完成。
+ * 也接受函数式入口：`updateConfig(cfg => patch)`，回调收到当前配置、返回 patch，
+ * 读-改-写在这一个同步块里完成。
  *
- *   为什么需要它：形如
- *     const active = { ...getConfig().commandMute.active }; active[群号] = until;
- *     updateConfig({ commandMute: { active: { __replace__: active } } });
- *   的写法，"读"与"写"之间只要插进任何一个 await（跨 await 的窗口可达数百毫秒），
- *   两次并发调用就会各自基于**同一份旧快照**构造，后写者覆盖前写者 —— 其中一个
- *   修改静默失效（群 A 的禁言指令看起来发了，其实被群 B 那次覆盖掉了）。
- *
- *   实测结论（2026-10-17 逐点核对 36 个 updateConfig 调用点）：当前所有调用点的
- *   读与写之间**都没有 await**，单线程下天然原子，报告里的那条竞态目前不可达。
- *   但"不可达"依赖的是每个调用点当下的写法，不是接口的约束 —— 加这个入口是把
- *   它变成**接口保证**：拿到 cfg 的那一刻就是原子的读-改-写。
+ * 需要它的原因：形如
+ *   const active = { ...getConfig().commandMute.active }; active[群号] = until;
+ *   updateConfig({ commandMute: { active: { __replace__: active } } });
+ * 的写法，"读"与"写"之间只要插进任何一个 await（跨 await 的窗口可达数百毫秒），
+ * 两次并发调用就会各自基于同一份旧快照构造，后写者覆盖前写者，其中一个修改
+ * 静默失效（群 A 的禁言指令看起来发了，其实被群 B 那次覆盖掉了）。
+ * 函数式入口把这个保证变成接口约束：拿到 cfg 的那一刻就是原子的读-改-写。
  */
 
 /**
- * 配置世代号（2026-10-19）：每次**可能改变工具可用性**的配置写入 +1。
+ * 配置世代号：每次可能改变工具可用性的配置写入 +1。
  *
- * 消费方是工具集粘滞窗（tool-registry.js 的 stabilizeToolset）：它按会话桶
- * 缓冲"工具集合变化"90 秒，把插件热装卸的前缀缓存击穿折叠成一次。但用户
- * 在 UI 里主动开/关插件是**意图明确的操作**，不该被缓冲 —— 否则"刚启用的
- * 插件 90 秒内调不到"就是新的"插件无法调用"故障。
+ * 消费方是工具集粘滞窗（tool-registry.js 的 stabilizeToolset）：它按会话桶缓冲
+ * "工具集合变化"90 秒，把插件热装卸的前缀缓存击穿折叠成一次。但用户在 UI 里
+ * 主动开/关插件是意图明确的操作，不该被缓冲，否则"刚启用的插件 90 秒内调不到"
+ * 就是新的"插件无法调用"故障。
  *
- * 于是分流：配置世代变化（用户操作/安装/信任/任何 updateConfig）→ 粘滞窗
- * 立即重置按新集合走；没有配置写入的可用性漂移（fs.watch 重扫余波、探测
- * 结果翻转）→ 仍然粘滞吸收。世代号只单调递增、不落盘（重启后从 0 开始，
- * 而粘滞窗状态本身也在内存里，两者生命周期一致）。
+ * 于是分流：配置世代变化（用户操作/安装/信任/任何 updateConfig）立即重置粘滞窗、
+ * 按新集合走；没有配置写入的可用性漂移（fs.watch 重扫余波、探测结果翻转）仍然
+ * 粘滞吸收。世代号只单调递增、不落盘（重启后从 0 开始，而粘滞窗状态本身也在
+ * 内存里，两者生命周期一致）。
  */
 let configVersion = 0;
 
@@ -865,22 +827,21 @@ export function updateConfig(patchOrFn) {
   // 函数式入口：先取当前配置喂给回调，再走下面同一条合并路径
   const rawPatch = typeof patchOrFn === 'function' ? patchOrFn(getConfig()) : patchOrFn;
   const cleanPatch = stripDerivedFlags(structuredClone(rawPatch ?? {}));
-  // ── 脱敏回传的密钥保留（2026-09-19 修"搜索 Key 离开页签就消失"）──
-  // 前端拿到的配置是脱敏的（apiKey 被删、hasApiKey 被加）；它把整个配置/区块
-  // 回传保存时，密钥字段天然缺失。对**对象型**密钥容器 deepMerge 会保留基底值
-  // （webSearch.deepseek.apiKey 没出现在 patch → 沿用现值），但**数组型**容器
-  // （webSearch.providers[].apiKey）整体替换 —— 前端回传的数组里没有 apiKey，
-  // 一次普通的设置保存就把所有自定义搜索服务的 Key 静默清空（表现为掩码消失、
-  // 测试报 invalid API key）。这里在合并前把"patch 条目缺密钥字段"的数组按 id
+  // 脱敏回传的密钥保留（修"搜索 Key 离开页签就消失"）：前端拿到的配置是脱敏的
+  // （apiKey 被删、hasApiKey 被加），它把整个配置/区块回传保存时，密钥字段天然
+  // 缺失。对象型密钥容器 deepMerge 会保留基底值（webSearch.deepseek.apiKey 没出现
+  // 在 patch 里 → 沿用现值），但数组型容器（webSearch.providers[].apiKey）是整体
+  // 替换，前端回传的数组里没有 apiKey，一次普通的设置保存就把所有自定义搜索服务
+  // 的 Key 静默清空（表现为掩码消失、测试报 invalid API key）。所以合并前按 id
   // 回填现值；想真清除必须显式传 apiKey: ''（专用清除按钮就是显式空串路径）。
   preserveSanitizedSecrets(getConfig(), cleanPatch);
   currentConfig = deepMerge(getConfig(), cleanPatch);
   // 磁盘上可能已经存过历史遗留的派生标记，一并清掉
   stripDerivedFlags(currentConfig);
 
-  // ── 响应档位：以滑条位置为唯一真相，派生 tier 与随机概率 ──
-  // 前端只负责上报滑条位置（contextSliderPos），档位和概率一律由这里换算。
-  // 这样即使前端算错、或者有人直接调接口只传位置，配置也不会自相矛盾。
+  // 响应档位：以滑条位置为唯一真相，派生 tier 与随机概率。前端只负责上报滑条
+  // 位置（contextSliderPos），档位和概率一律由这里换算，这样即使前端算错、或者
+  // 有人直接调接口只传位置，配置也不会自相矛盾。
   const posRaw = currentConfig?.store?.contextSliderPos;
   if (posRaw !== undefined && posRaw !== null) {
     const { tier, randomPercent } = sliderToTier(posRaw);
@@ -889,8 +850,8 @@ export function updateConfig(patchOrFn) {
   }
 
   fs.mkdirSync(DATA_DIR, { recursive: true });
-  // r92（R78-6）：临时名带 pid —— 固定名 .tmp 在双开/两核心同数据目录时，
-  // A 写一半被 B rename 走，落一个半新半旧的 config。
+  // 临时名带 pid：固定名 .tmp 在双开/两核心同数据目录时，A 写一半被 B rename 走，
+  // 会落一个半新半旧的 config。
   const tmp = `${CONFIG_FILE}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(currentConfig, null, 2), 'utf8');
   fs.renameSync(tmp, CONFIG_FILE);
@@ -898,7 +859,7 @@ export function updateConfig(patchOrFn) {
   return currentConfig;
 }
 
-/** 内存态改动（不落盘）——用于运行期覆盖（如自测注入 mock）。 */
+/** 内存态改动（不落盘），用于运行期覆盖（如自测注入 mock）。 */
 export function setRuntimeConfig(cfg) {
   currentConfig = cfg;
   configVersion += 1;   // 整份配置被替换，同样可能改变工具可用性
@@ -908,7 +869,7 @@ export function setRuntimeConfig(cfg) {
  * 取某个会话实际生效的人设：全局 persona 被 personaByChat[id] 的同名字段覆盖。
  *
  * 只允许覆盖 roleText / participation / customRules / systemPromptOverride 四个
- * "说话风格"字段；botName / selfNickname 是账号身份，任何会话都不得单独改 ——
+ * "说话风格"字段；botName / selfNickname 是账号身份，任何会话都不得单独改：
  * 换了会与 @ 判定（isAtMe 用昵称/名字匹配）、存档里"我"的称呼全部对不上。
  * 覆盖值一律做字符串 trim（空串视为"未设置"，回落全局值）。
  */
@@ -918,8 +879,7 @@ export function personaForChat(chatKey) {
   if (!id) return base;
   const perChat = getConfig().personaByChat || {};
   // 兼容两种键格式：UI 的隐藏 JSON 以 chatKey（group:123）为键保存，
-  // 而这里按 id 段（123）查 —— 只认一种格式时保存成功但永不生效
-  // （2026-09-17 用户实测踩中：独立人设存了却一直跟随全局）。
+  // 而这里按 id 段（123）查。只认一种格式时保存成功但永不生效。
   const raw = perChat[String(id)] ?? perChat[String(chatKey)];
   if (!raw || typeof raw !== 'object') return base;
   const pick = (v) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
@@ -957,16 +917,16 @@ export function storeConfigForChat(chatKey) {
   const peakOn = store.peakSchedule?.enabled === true;
   const inPeakNow = peakOn && peakWindowActive(store.peakSchedule);
 
-  // ── 四象限（2026-09-18 改版）──
+  // 四象限：
   //   统一 + 峰谷关：全局滑条（contextSliderPos）
   //   统一 + 峰谷开：全局峰谷双点按时段取高峰/低谷
   //   分群 + 峰谷关：群无单独设置 → 全局滑条；有 → groupSliderPos[群]
   //   分群 + 峰谷开：群无单独峰谷 → 全局双点按时段取；有 → groupPeakPos[群] 按时段取
   // 私聊永远跟随"全局"口径（峰谷开时同样受时段影响）。
-  // 峰谷兜底（2026-10-16 修）：peak/valley 任一点缺失时，clampSliderPos 会对
-  // undefined 返回 100（最贵的 4 档），配置残缺反而触发最高成本 —— 这是反直觉的
-  // 失败模式。改为：缺失点先回退到全局滑条（用户明确设过的取值），全局滑条也缺失
-  // 时再回退到 0（最保守的 1 档）。原则："配置残缺宁可少回，不可爆成本"。
+  // 峰谷兜底：peak/valley 任一点缺失时，clampSliderPos 会对 undefined 返回 100
+  // （最贵的 4 档），配置残缺反而触发最高成本，这是反直觉的失败模式。改为：缺失点
+  // 先回退到全局滑条（用户明确设过的取值），全局滑条也缺失时再回退到 0（最保守的
+  // 1 档）。原则是"配置残缺宁可少回，不可爆成本"。
   const fallbackPos = Number.isFinite(Number(store.contextSliderPos))
     ? clampSliderPos(store.contextSliderPos)
     : 0;
@@ -1022,15 +982,14 @@ export function commandMuteTier(chatKey, at = Date.now()) {
 }
 
 /**
- * 会话准入（白名单/黑名单）—— 全库唯一的判定实现。
+ * 会话准入（白名单/黑名单），全库唯一的判定实现。
  *
- * ⚠️ 2026-10-16 修「群聊移除白名单后机器人仍在该群发言」：判定此前只存在于
- * app.js 的 allowed()（消息**入口**用），**发送侧没有任何闸** —— 群被移出白名单前
- * 设下的提醒/闹钟，到点照样往那个群发消息；会话运行中途被移出时回复也照发。
- * 现在入口（app.js）与发送咽喉（sender.js 五个发送方法）统一走本函数，
- * 语义只维护这一份，杜绝两处各写一套日后漂移。
+ * 判定此前只存在于 app.js 的 allowed()（消息入口用），发送侧没有任何闸：群被移出
+ * 白名单前设下的提醒/闹钟到点照样往那个群发消息，会话运行中途被移出时回复也照发。
+ * 现在入口（app.js）与发送咽喉（sender.js 五个发送方法）统一走本函数，语义只维护
+ * 这一份，杜绝两处各写一套日后漂移。
  *
- * 语义（与原 app.js allowed() 完全一致）：
+ * 语义：
  *   1. deny 命中 → 一票否决
  *   2. allow 名单非空 → 必须在名单内
  *   3. allow 名单为空 → 仅当 allowAllWhenEmpty=true 才放行
@@ -1049,9 +1008,8 @@ export function isChatAllowed(kind, id, cfg = getConfig()) {
 /**
  * 峰谷切换：判定当前时间落在哪个时段，返回该时段的滑条位置（0~100）。
  * 未启用 / 时段未设定 → 返回 null（用全局滑条）。
- * 2026-09-18 四象限改版后的语义：高峰窗口内 = peak.sliderPos，
- * 窗口外一律 = valley.sliderPos（低谷时段不再单独编辑）。
- * 注意：这里只算**全局**双点；分群峰谷（groupPeakPos）由 storeConfigForChat 处理。
+ * 高峰窗口内 = peak.sliderPos，窗口外一律 = valley.sliderPos（低谷时段不单独编辑）。
+ * 这里只算全局双点；分群峰谷（groupPeakPos）由 storeConfigForChat 处理。
  */
 export function resolvePeakSliderPos(store, at = new Date()) {
   const ps = store?.peakSchedule;

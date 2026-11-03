@@ -1,45 +1,42 @@
-// 数据移植：把**另一个 QQ Agent 实例**的 data 目录安全搬进当前实例。
+// 数据移植：把另一个 QQ Agent 实例的 data 目录安全搬进当前实例。
 //
-// ⚠️ 2026-10-22：Harness 里的「数据移植」页已删除（被「打包 / 接收」取代）。
-//    本文件不再是"一个页面的后端"，而是**数据落地的引擎**：
-//      · bundle.inspectBundle 用 scanSource() 给出"源有几条 / 本机有几条 / 会多出多少"
-//      · /api/bundle/import-data 用 applyImport() 真正写盘（合并/去重/备份/置已读）
-//      · /api/migrate/backups|rollback 仍然对外，供「接收整包」页回滚
-//    /api/migrate/scan 与 /api/migrate/apply 已随页面一起下线。
-//    新增数据入口时请复用这里的 applyImport，不要另写一套写盘逻辑。
+// Harness 里的「数据移植」页已被「打包 / 接收」取代，本文件现在是数据落地的
+// 引擎：
+//   · bundle.inspectBundle 用 scanSource() 给出"源有几条 / 本机有几条 / 会多出多少"
+//   · /api/bundle/import-data 用 applyImport() 真正写盘（合并/去重/备份/置已读）
+//   · /api/migrate/backups|rollback 仍对外，供「接收整包」页回滚
+//   /api/migrate/scan 与 /api/migrate/apply 已随页面一起下线。
+// 新增数据入口时请复用这里的 applyImport，不要另写一套写盘逻辑。
 //
-// ── 一期范围（价值/风险比最高的一批）─────────────────────────────────────
-//   messages/    会话存档（真相源，不可再生）—— 合并 / 覆盖两种策略
+// 搬运范围：
+//   messages/    会话存档（真相源，不可再生）：合并 / 覆盖两种策略
 //   memory/      群友印象（按成员文件合并，按内容去重）
 //                旧版单文件 memory/<会话>.json 一并认（字段 memberImpression），
-//                导入时按 memory.js 的同一套规则拆成每成员文件 —— 见
-//                mergeLegacyMemoryFile 上方说明。
+//                导入时按 memory.js 的同一套规则拆成每成员文件。
 //   统计类       cost-guard.json（相加）、telemetry-totals.json（相加）、
 //                usage-daily.json（仅补缺：目标没有的"天"才导入）
 //
-// ── 明确不搬的（搬了也是脏数据 / 风险太高）────────────────────────────────
-//   memory-v2/   messages 的派生物（长时索引）。导入后按会话全量重建，
-//                绝不直接复制 —— 两边水位/块 id 会打架。
-//   config.json  含身份字段（selfId/apiKey/provider），整份覆盖等于换魂。
-//                字段级合并放二期。
-//   sessions/    运行档案（4M+，纯历史记录，可再生价值低）。
+// 明确不搬的（搬了也是脏数据 / 风险太高）：
+//   memory-v2/    messages 的派生物（长时索引）。导入后按会话全量重建，
+//                 绝不直接复制，两边水位/块 id 会打架。
+//   config.json   含身份字段（selfId/apiKey/provider），整份覆盖等于换魂。
+//   sessions/     运行档案（纯历史记录，可再生价值低）。
 //   *-cache*.json / *.lock / window-state / telemetry.json / usage-today.json
-//                缓存、运行态、本机状态。
-//   semantic-cards/ cross-turn/ plugin-data/ stickers.json
-//                资产类，二期再议。
+//                 缓存、运行态、本机状态。
+//   semantic-cards/ cross-turn/ plugin-data/ stickers.json  资产类。
 //
-// ── 安全机制 ─────────────────────────────────────────────────────────────
+// 安全机制：
 //   1. 导入前把每个将被改动/覆盖的文件备份到 data/import-backups/<ts>/，
 //      附 manifest.json（来源 / 时间 / 逐条动作），支持一键回滚。
-//   2. 所有写盘走 tmp+rename 原子写（与 store.js 同款）。
+//   2. 所有写盘走 tmp+rename 原子写（见 atomic-write.js）。
 //   3. 热生效：写完 messages 后由调用方失效 ChatStore 内存并触发该会话的
 //      force 巩固（conversation-memory 的官方重建路径）。本模块不 import
-//      store / 插件 —— 通过 hooks 回调注入，保持可独立测试。
+//      store / 插件，通过 hooks 回调注入，保持可独立测试。
 //   4. 导入的历史消息一律置 read:true，绝不让机器人在新实例上把几个月的
 //      存档当成"未读轰炸"逐条回复。
 //
 // 已知边界：导入是几百毫秒的批量操作，期间若有新消息写入同一会话文件，
-// 会以后写者为准。建议在群里安静时导入（一期不做写冻结）。
+// 会以后写者为准。建议在群里安静时导入（不做写冻结）。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -64,8 +61,8 @@ function readJson(file, fallback = null) {
   }
 }
 
-// 2026-10-16（外部审查 #13）：改走 src/atomic-write.js 的统一实现（原来是本文件
-// 自己写的一份）。保持原口径不变：字符串入参**原样写**、对象按缩进 1 序列化
+// 改走 src/atomic-write.js 的统一实现（原来是本文件自己写的一份）。
+// 保持原口径不变：字符串入参原样写、对象按缩进 1 序列化
 // （atomicWriteJson 会把字符串也 JSON 编码，那是另一种语义，所以这里分开走）。
 function atomicWrite(file, data) {
   if (typeof data === 'string') atomicWriteText(file, data);
@@ -135,11 +132,11 @@ export function scanSource(sourceDir) {
     return { ok: false, error: `目录不存在或不是文件夹：${abs}` };
   }
 
-  // ⚠️ 自我导入守卫（2026-10-06 加）：源 == 本机 data 时，messages 靠 mid 去重
-  //    还算安全，但**统计类是"同键相加"**——cost-guard / telemetry-totals 会
-  //    自己加自己，导入一次用量统计直接翻倍（且看不见、只能靠对比发现）。
-  //    备份也会变成"把本机文件复制成本机文件的备份"，回滚等于没回滚。
-  //    这个模块的语义是"两个实例之间搬家"，所以这里直接拒绝，不给侥幸空间。
+  // 自我导入守卫：源 == 本机 data 时，messages 靠 mid 去重还算安全，但统计类
+  // 是"同键相加"：cost-guard / telemetry-totals 会自己加自己，导入一次用量
+  // 统计直接翻倍（且看不见、只能靠对比发现）。备份也会变成"把本机文件复制成
+  // 本机文件的备份"，回滚等于没回滚。这个模块的语义是"两个实例之间搬家"，
+  // 所以这里直接拒绝。
   const selfDir = path.resolve(DATA_DIR);
   if (abs === selfDir) {
     return { ok: false, error: `源目录就是当前实例的 data 目录（${selfDir}）。请选**另一个** QQ Agent 实例的 data —— 自我导入会让成本/调用统计翻倍。` };
@@ -184,12 +181,11 @@ export function scanSource(sourceDir) {
   } catch { /* 源没有 messages 目录 */ }
   result.messages.sort((a, b) => (b.source?.lastTs || 0) - (a.source?.lastTs || 0));
 
-  // ── 群友印象 ──
-  // ⚠️ 两种形态都要认（2026-10-06 修）：新版是每成员一个文件
+  // 群友印象：两种形态都要认。新版是每成员一个文件
   //    （memory/<会话>/<QQ>.json），旧版是每会话一个单文件
   //    （memory/<会话>.json，字段 memberImpression）。
-  //    以前只遍历目录 → 源实例若是旧版形态，界面显示"没有印象可导入"，
-  //    用户以为源里没记忆，整块印象被静默丢弃。
+  //    只遍历目录的话，源实例若是旧版形态，界面会显示"没有印象可导入"，
+  //    整块印象被静默丢弃。
   try {
     const memDir = path.join(abs, 'memory');
     const byChat = new Map();     // chatKey -> { chatKey, members, notes, legacy }
@@ -276,11 +272,11 @@ function backupFile(backupDir, absTarget) {
   return { backup: rel };
 }
 
-// ⚠️ 必须是**命名导出**：routes.js 用的是
+// 必须是命名导出：routes.js 用的是
 //   import { scanSource, applyImport, rollbackImport, listBackups } from './migrate.js'
-// 少了 export 关键字时，ESM 在**模块实例化阶段**就抛
+// 少了 export 关键字时，ESM 在模块实例化阶段就抛
 // "does not provide an export named 'listBackups'"，整个 app.js → routes.js
-// 链路加载失败 —— 表现是 Electron 主进程启动即崩、窗口根本打不开（2026-09-30 实测）。
+// 链路加载失败，表现是 Electron 主进程启动即崩、窗口根本打不开。
 // 下面的 migrateAdmin 对象仍然引用这一个函数，两处共用同一份实现。
 export function listBackups() {
   try {
@@ -371,7 +367,7 @@ function mergeMemoryChat(srcChatDir, dstChatDir) {
   try {
     files = fs.readdirSync(srcChatDir).filter((f) => f.endsWith('.json'));
   } catch {
-    // 源这边只有旧版单文件（没有同名文件夹）——不是错误，交给 mergeLegacyMemoryFile
+    // 源这边只有旧版单文件（没有同名文件夹），不是错误，交给 mergeLegacyMemoryFile
     return { members, added };
   }
   for (const f of files) {
@@ -424,7 +420,7 @@ function memberFileName(userId, name = '') {
 
 /**
  * 解析旧版单文件里的 memberImpression。target 是纯数字（5~15 位）就当 QQ 号，
- * 否则落成"无 QQ 号"条目（_n_<名字>.json）—— 与 memory.js 完全同规则。
+ * 否则落成"无 QQ 号"条目（_n_<名字>.json），与 memory.js 完全同规则。
  * @returns {Array<{ userId: string, name: string, content: string, createdAt: number }>}
  */
 function legacyImpressionEntries(file) {
@@ -682,9 +678,9 @@ async function applyImportInner(sourceDir, selection = {}, hooks = {}) {
     const memSummary = { chats: 0, added: 0, failed: 0 };
     try {
       for (const c of scan.memory.chats) {
-        // ⚠️ 逐会话 try：以前整个循环共用一个 try，任何一个会话出问题
-        //    （比如源那边只有旧版单文件、没有同名文件夹）都会把后面所有
-        //    会话的印象一起丢掉，而报告只留一句 error。
+  // 逐会话 try：整个循环共用一个 try 的话，任何一个会话出问题（比如源那边
+  // 只有旧版单文件、没有同名文件夹）都会把后面所有会话的印象一起丢掉，
+  // 而报告只留一句 error。
         try {
           const safeChat = String(c.chatKey).replace(/[^a-z0-9_]/gi, '_');
           const srcChatDir = path.join(abs, 'memory', safeChat);
@@ -781,13 +777,12 @@ export async function rollbackImport(backupId, hooks = {}) {
   if (!manifest || !Array.isArray(manifest.actions)) {
     return { ok: false, error: `备份不存在或缺少 manifest：${id}` };
   }
-  // ⚠️ 两类会话要分开失效（2026-10-06 修）：
+  // 两类会话要分开失效：
   //   messages 改动 → ChatStore 内存 + memory-v2 长时索引（后者要重建）；
   //   群友印象改动 → MemoryStore 内存（与 memory-v2 无关，不需要重建）。
-  //   以前只收 messages 类型：**只勾了"群友印象"的导入回滚后，MemoryStore 缓存
-  //   还留着合并后的状态，下一次写记忆（append/整理）就把回滚内容原样写回磁盘**
-  //   —— 回滚看起来成功、实际被内存缓存悄悄撤销。routes 早就把这个钩子传进来了，
-  //   是这里一直没调用。
+  //   只收 messages 类型的话，只勾了"群友印象"的导入回滚后 MemoryStore 缓存
+  //   还留着合并后的状态，下一次写记忆（append/整理）就把回滚内容原样写回磁盘
+  //   回滚看起来成功、实际被内存缓存悄悄撤销。
   const msgChats = new Set();
   const memChats = new Set();
   let restored = 0, removed = 0, failed = 0;

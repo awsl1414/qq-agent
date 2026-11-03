@@ -1,9 +1,8 @@
 // 响应档位滑条的换算：滑条位置（0~100）↔ 档位 / 随机概率。
 //
-// 刻意做成**零依赖模块**：不 import config.js、prompt.js 等任何东西。
+// 刻意做成零依赖模块：不 import config.js、prompt.js 等任何东西。
 // 因为 config.js（保存配置时派生档位）和 prompt.js（运行时判定档位）
-// 都需要它，而 prompt.js 又 import config.js —— 若把这个函数放进任一方
-// 都会形成循环依赖（config → prompt → config）。
+// 都需要它，而 prompt.js 又 import config.js。放进任一方都会形成循环依赖。
 //
 // 滑条分段（长度由用户指定）：
 //
@@ -11,8 +10,7 @@
 //   │  1 档  │  2 档 │      3 档（70%）      │ 4 档 │
 //   仅艾特    +关键词   概率线性增长 0→100%    全响应
 //
-// 3 档概率线性，公式 prob = (pos - 20) / 70 * 100
-//   pos=20 → 0%   pos=55（该段正中）→ 50%   pos=90 → 100%
+// 3 档概率线性：pos=20 → 0%，pos=90 → 100%。
 
 /** 滑条各段的分界位置 */
 export const TIER_SLIDER_BANDS = {

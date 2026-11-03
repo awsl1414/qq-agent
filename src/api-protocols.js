@@ -1,16 +1,16 @@
-// API 协议适配层（2026-10-19）——「API 协议」下拉的下半场。
+// API 协议适配层：「API 协议」下拉的下半场。
 //
-// 为什么单独一个模块：llm.js 已经 1180 行，而且它内部的一切（工具调用、
-// Skill 请求改写、前缀缓存指纹、媒体预算、sameBody 预热）都建立在
-// **OpenAI 形态**的 body 上。本模块的职责是把边界收窄到"发出去/收回来"两刻：
+// 单独一个模块，因为 llm.js 内部的一切（工具调用、Skill 请求改写、前缀缓存指纹、
+// 媒体预算、sameBody 预热）都建立在 OpenAI 形态的 body 上。本模块把职责收窄到
+// "发出去/收回来"两刻：
 //
 //   发送前：OpenAI 形态 body  →  buildProtocolRequest()  →  目标协议的 URL/headers/body
 //   收到后：目标协议的 JSON   →  parseProtocolResponse() →  OpenAI 形态 {choices, usage, model}
 //
-// 这样 llm.js 的其余机制一字不改：Skill 改写的仍是 OpenAI 形态（各家中转站
-// 的思考参数本来就按 OpenAI 兼容网关设计）、req-fp / body-lcp / media-cap
-// 看到的仍是同一份 body，sameBody 逐字节预热照旧成立 —— 同一份 OpenAI body
-// 经本模块的确定性翻译，落到线上仍是逐字节一致的请求。
+// 这样 llm.js 的其余机制一字不改：Skill 改写的仍是 OpenAI 形态（各家中转站的
+// 思考参数本来就按 OpenAI 兼容网关设计）、req-fp / body-lcp / media-cap 看到的
+// 仍是同一份 body，sameBody 逐字节预热照旧成立：同一份 OpenAI body 经本模块
+// 的确定性翻译，落到线上仍是逐字节一致的请求。
 //
 // 支持的协议：
 //   openai           OpenAI Chat Completions（现状，逐字节直通）
@@ -19,10 +19,10 @@
 //   google           Google Gemini generateContent（functionCall/functionResponse）
 //   mistral          Mistral 官方 API（本身就是 OpenAI 兼容格式，仅默认端点不同）
 //
-// 注意：此项"不总是和模型相关联"——多数中转站（A6API 等）对各家模型都提供
-// OpenAI 兼容协议，默认 openai 即可；只有直连官方端点或明确要求原生协议时才需要换。
+// 此项不总是和模型相关联：多数中转站（A6API 等）对各家模型都提供 OpenAI 兼容
+// 协议，默认 openai 即可；只有直连官方端点或明确要求原生协议时才需要换。
 
-// ── 协议目录 ────────────────────────────────────────────────────────────────
+// ── 协议目录 ───────────────────────────────────────────────────────────────
 
 export const API_PROTOCOLS = [
   { id: 'openai', label: 'OpenAI (Chat Completions)' },
@@ -55,7 +55,7 @@ export function protocolLabel(id) {
   return API_PROTOCOLS.find((p) => p.id === normalizeProtocol(id))?.label || 'OpenAI (Chat Completions)';
 }
 
-/** openai 家族（Chat Completions / Responses / Mistral）——鉴权与 /models 同一套。 */
+/** openai 家族（Chat Completions / Responses / Mistral）：鉴权与 /models 同一套。 */
 export function isOpenAiFamily(proto) {
   return proto === 'openai' || proto === 'openai-responses' || proto === 'mistral';
 }
@@ -96,19 +96,19 @@ function anthroBase(baseUrl) {
   return base;
 }
 
-// ── 请求侧：OpenAI 形态 → 目标协议 ──────────────────────────────────────────
+// ── 请求侧：OpenAI 形态 → 目标协议 ─────────────────────────────────────────
 
 /**
- * OpenAI 家族的鉴权头。**必须由这里统一给**，不能只靠调用方的 extraHeaders：
- * 2026-10-20 修 —— 此前 buildProtocolRequest 对 openai/openai-responses/mistral
- * 只吐 content-type，Authorization 由 llm.js 的 authHeaders() 经 extraHeaders 注入。
- * 于是「测试连通性」（providers.js → testModelChat，只传了 opencode 路由头）发出去的
- * 是一个**没有任何鉴权信息的请求**，任何 OpenAI 兼容端点都会回 401 —— 用户看到的
- * 是"所有配置都对，测试却报 401"，看起来像 Key 填错了，实际是头根本没带。
+ * OpenAI 家族的鉴权头必须由这里统一给，不能只靠调用方的 extraHeaders。
+ * 此前 buildProtocolRequest 对 openai/openai-responses/mistral 只吐 content-type，
+ * Authorization 由 llm.js 的 authHeaders() 经 extraHeaders 注入，于是「测试连通性」
+ * （providers.js → testModelChat，只传了 opencode 路由头）发出去的是一个没有任何
+ * 鉴权信息的请求，任何 OpenAI 兼容端点都会回 401，用户看到的是"所有配置都对，
+ * 测试却报 401"，看起来像 Key 填错了，实际是头根本没带。
  * 顺序：先鉴权、后 extraHeaders，调用方仍可覆盖（llm.js 传的值与这里等价）。
  */
 function bearerHeader(apiKey) {
-  // 掩码值（前端回传的 ******）绝不能当成真 Key 发出去 —— 那会得到一个
+  // 掩码值（前端回传的 ******）绝不能当成真 Key 发出去，那会得到一个
   // "Key 无效"的 401，而真实原因是"这本来就不是 Key"。
   const k = String(apiKey ?? '').trim();
   return (k && k !== '******') ? { authorization: `Bearer ${k}` } : {};
@@ -377,7 +377,7 @@ function responsesBody(openaiBody) {
   return body;
 }
 
-// ── 响应侧：目标协议 → OpenAI 形态 ──────────────────────────────────────────
+// ── 响应侧：目标协议 → OpenAI 形态 ─────────────────────────────────────────
 
 /**
  * 把目标协议的响应 JSON 归一成 OpenAI 形态。
@@ -495,7 +495,7 @@ function parseGoogle(data, fallbackModel) {
   };
 }
 
-// ── 模型列表：按协议拉 /models ──────────────────────────────────────────────
+// ── 模型列表：按协议拉 /models ─────────────────────────────────────────────
 
 /**
  * 目标协议的"列模型"请求描述。
