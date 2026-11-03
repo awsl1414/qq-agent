@@ -48,7 +48,7 @@ OneBot v11 协议端（SnowLuma / NapCat）
 | 文件 | 适用范围 | 内容 |
 |---|---|---|
 | `.claude/rules/conventions.md` | 全项目 | 五项核心原则、根因修复、实际边界、兼容代码清查、复用与解耦、编码、文档与版本 |
-| `.claude/rules/frontend.md` | `ui/`、任意 CSS / HTML | 运行环境、脚本加载、视觉与交互、插件面板 |
+| `.claude/rules/frontend.md` | `ui/`、任意 CSS / HTML | 运行环境、脚本加载、组件编辑入口、主题令牌、间距密度、动效与焦点、样式拆分边界、插件面板 |
 | `.claude/rules/backend.md` | `src/`、`electron/`、`plugins/`、`skills/`、`tests/` | 提示词缓存、扩展与指纹、发送链路、安全边界 |
 
 ## 4. 按任务查阅文档
