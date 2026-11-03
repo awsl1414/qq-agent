@@ -1546,6 +1546,18 @@ function renderDesktopSection(c) {
       </div>
       <div class="hint">所有用户数据（配置、聊天记录、记忆、表情包）都存在这个目录里。建议定期复制一份到别处备份。</div>
     </div>
+    <!-- 旧版本残留：跨版本迁移搬进 data/runtime/legacy-backup/ 的旧文件。
+         检测是异步的（GET /api/maintenance/legacy），首帧只留空占位；
+         列表为空时整块保持 hidden —— 绝大多数用户永远看不到它，不该常驻。 -->
+    <div class="field" id="legacy-residue-field" hidden>
+      <label>旧版本留下的文件</label>
+      <div class="hint" id="legacy-residue-hint" style="margin-bottom:6px"></div>
+      <div id="legacy-residue-list"></div>
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+        <button class="btn btn-small" id="legacy-residue-remove">删除选中的文件</button>
+        <span class="hint" id="legacy-residue-status" style="margin:0"></span>
+      </div>
+    </div>
     <div class="danger-zone">
       <div class="dz-title">⚠️ 危险区</div>
       <div class="dz-sub">下面的操作会删除数据且<b>不可恢复</b>。动手前建议先点上面的「打开文件夹」，把整个 data/ 目录复制一份。</div>
@@ -1582,7 +1594,7 @@ function renderOnebotSection(c) {
     </div>
 
     <h3 style="margin-top:22px">QQ 来源</h3>
-    <div class="hint" style="margin-bottom:10px">推荐直接用你电脑里已装的 QQ（检测到就自动用它，无需任何安装步骤）。下面的「装独立副本」是给想要彻底隔离的人准备的「可选项」，不装也完全能用。</div>
+    <div class="hint" id="qq-source-intro" style="margin-bottom:10px">推荐直接用你电脑里已装的 QQ（检测到就自动用它，无需任何安装步骤）。下面的「装独立副本」是给想要彻底隔离的人准备的「可选项」，不装也完全能用。</div>
     <div class="field">
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="btn btn-small" id="qq-portable-start-btn" title="启动应用自带的便携版 QQ（装了独立副本才有意义）" style="display:none">单独启动便携 QQ</button>

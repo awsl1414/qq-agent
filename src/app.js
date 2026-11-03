@@ -8,9 +8,9 @@ import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getConfig, updateConfig, ROOT, DATA_DIR, isChatAllowed } from './config.js';
-// 版本迁移：清理跨版本升级后残留的旧插件目录/配置引用。必须在 reloadSkills 之前跑，
-// 插件扫描读的就是 config.trustedPlugins。
-import { runUpgrades } from './upgrade.js';
+// 版本迁移：跨版本的配置改写与磁盘搬迁（旧插件残留、旧随包二进制、运行时目录调整）。
+// 必须在 reloadSkills 之前跑，插件扫描读的就是 config.trustedPlugins。
+import { runUpgrades, runtimeDirPath } from './upgrade.js';
 import { OneBotClient, segmentsToText, extractMediaFromSegments, expandForwardNodes, fetchForwardNodes } from './onebot.js';
 // 协议端配置探测：令牌是 SnowLuma 按账号随机生成的，让新用户从 WebUI 手抄两串 43 位
 // 字符串是首次配置最容易失败的一步，这里直接读它的配置文件填好端点与令牌。
@@ -248,11 +248,16 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   let qqPortableLaunching = false;   // 便携 QQ 启动互斥标记（防连点「启动 QQ」并发拉起）
 
   function qqPortableDir() {
-    return path.join(ROOT, 'runtime', 'qq-portable');
+    // 运行时内容统一挂在 DATA_DIR/runtime/ 下（见 upgrade.js 文件头）。
+    // 迁移项 relocate-portable-qq 会在启动时把程序目录下的那份搬过来；
+    // 搬成功之前它还在 ROOT/runtime/ 下，所以解析要两处都看，且先看数据目录。
+    // 这不是给旧版本留的兼容分支：迁移失败（便携 QQ 正在运行、文件被占用）
+    // 时用户仍必须能正常用便携 QQ，否则一次搬移失败就等于功能消失。
+    return runtimeDirPath('qq-portable', { appRoot: ROOT, dataDir: DATA_DIR });
   }
 
   function qqPortableDataDir() {
-    return path.join(ROOT, 'runtime', 'qq-portable-data');
+    return runtimeDirPath('qq-portable-data', { appRoot: ROOT, dataDir: DATA_DIR });
   }
 
   function qqPortableExe() {
@@ -504,6 +509,10 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     const target = await resolveQqTarget(opts);
     return {
       ready: target.exe !== null,
+      // 便携 QQ（含「一键安装独立副本」）依赖 QQNT，只有 Windows 有。
+      // 前端据此隐藏/改写这块文案：在 mac/Linux 上点进安装永远只会得到
+      // 「没找到本机安装的 QQ」，那是不可达的操作，不是"还没装"。
+      supported: process.platform === 'win32',
       running: pid !== null,
       pid,
       dir: target.dir || qqPortableDir(),
@@ -1931,11 +1940,12 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   }
 
   async function start() {
-    // ── 版本迁移（必须排在插件扫描之前）──────────────────────────────────
-    // 老用户升级后，旧版被删掉的插件目录可能还在（免安装覆盖路径只写新文件、不删
-    // 旧文件），而 config.trustedPlugins 里指向它的引用也还在，信任闸按目录名直接
-    // 放行，残留插件就会照常加载、与新插件抢同名能力。reloadSkills 读的正是这份
-    // trustedPlugins。同步、开销极小（几次 stat，最多写一次 config）。
+    // ── 版本迁移（必须排在插件扫描和便携 QQ 路径解析之前）─────────────────
+    // 注册表见 upgrade.js 的 UPGRADES。典型场景：老用户升级后，旧版被删掉的插件
+    // 目录还在（免安装覆盖路径只写新文件、不删旧文件），config.trustedPlugins 里
+    // 指向它的引用也还在，信任闸按目录名直接放行，残留插件就会照常加载、与新插件
+    // 抢同名能力。reloadSkills 读的正是这份 trustedPlugins。
+    // 同步、开销极小（几次 stat），失败也绝不阻塞启动。
     try {
       runUpgrades({ log });
     } catch (error) {

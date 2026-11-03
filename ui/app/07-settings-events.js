@@ -1520,7 +1520,7 @@ function bindSettingsEvents(c) {
      /api/status + /api/qq-portable/status 存进 qb，再 qbPaint() 只改 quickbar 与
      「QQ 来源」块的文字/按钮态，不重建表单。 */
   if ($('#quick-start-btn')) {
-    const qb = { qqReady: false, qqRunning: false, protoUp: false, source: 'none', portableInstalled: false, connected: false };
+    const qb = { qqReady: false, qqRunning: false, protoUp: false, source: 'none', portableInstalled: false, portableSupported: true, connected: false };
 
     const qbPaint = () => {
       const text = $('#quick-start-text');
@@ -1533,6 +1533,12 @@ function bindSettingsEvents(c) {
       if (qb.connected) {
         if (text) text.textContent = '机器人已连接，正常工作中 —— 状态与日志见「工具 → 连接」页';
         btn.textContent = '已连接 ✓';
+        btn.disabled = true;
+      } else if (!qb.portableSupported) {
+        // 一键启动依赖 QQNT（只有 Windows 版）。非 Windows 上藏掉按钮，
+        // 只留一句"自己登录 QQ + 自己起协议端"，否则用户点下去只会看到 spawn 失败。
+        if (text) text.textContent = '这台机器上「一键启动 QQ」不可用（便携 QQ 仅 Windows）—— 请自行登录 QQ 并启动协议端（SnowLuma 或 NapCat）';
+        btn.textContent = '不可用';
         btn.disabled = true;
       } else if (!qb.qqReady) {
         if (text) text.textContent = '没找到可用的 QQ —— 装好新版 QQ（QQNT，官网下载即可）后点右边重新检测';
@@ -1551,13 +1557,24 @@ function bindSettingsEvents(c) {
       }
       // 「QQ 来源」块：按状态显隐按钮 + 一句话现状
       const stateEl = $('#qq-portable-state');
+      const pStart = $('#qq-portable-start-btn');
+      const pInstall = $('#qq-install-btn');
+      const intro = $('#qq-source-intro');
+      if (!qb.portableSupported) {
+        // 便携 QQ 依赖 QQNT，只有 Windows 版。mac/Linux 上「装独立副本」永远
+        // 只会得到「没找到本机安装的 QQ」—— 那条路在这里不可达，不是"还没装"。
+        // 藏掉两个按钮，把这句话说清楚，免得用户反复点。
+        if (intro) intro.textContent = '便携 QQ（含「装独立副本」）仅 Windows 可用 —— QQNT 没有 macOS / Linux 版。当前平台请用外部 OneBot 协议端（如 NapCat / LLOneBot）配合你已登录的 QQ。';
+        if (stateEl) stateEl.textContent = '便携 QQ 仅 Windows 可用';
+        if (pStart) pStart.style.display = 'none';
+        if (pInstall) pInstall.style.display = 'none';
+        return;
+      }
       if (stateEl) stateEl.textContent = !qb.portableInstalled
         ? (qb.source === 'none' ? '未检测到 QQ，也没装独立副本 —— 先装一个新版 QQ（QQNT）'
           : '未装独立副本 —— 当前直接用你电脑里已装的 QQ ✓')
         : (qb.qqRunning ? `独立副本 QQ 运行中（pid ${qb.pid ?? '—'}）` : '已装独立副本，未运行');
-      const pStart = $('#qq-portable-start-btn');
       if (pStart) pStart.style.display = qb.portableInstalled ? '' : 'none';
-      const pInstall = $('#qq-install-btn');
       if (pInstall) pInstall.style.display = qb.portableInstalled ? 'none' : '';
     };
 
@@ -1578,6 +1595,9 @@ function bindSettingsEvents(c) {
         qb.pid = qq.pid ?? null;
         qb.source = qq.source || (qb.qqReady ? 'portable' : 'none');
         qb.portableInstalled = qq.portableInstalled !== undefined ? !!qq.portableInstalled : (qb.source === 'portable');
+        // supported 缺省按 true：后端字段未就位时保持 Windows 的现有行为，
+        // 不能因为读不到就突然把安装入口藏掉（与 ffmpeg 的 canAutoInstall 同口径）。
+        qb.portableSupported = qq.supported !== false;
         qb.protoUp = !!st.protocol?.portOpen;
         qb.connected = !!st.onebot?.connected;
         qbPaint();
@@ -2207,6 +2227,96 @@ function bindSettingsEvents(c) {
       qaAlert(`打开数据目录失败：${e?.message || e}`);
     }
   });
+
+  // ── 旧版本残留（数据管理区块）──
+  //
+  // 后端只做检测（GET /api/maintenance/legacy），删除必须用户勾选后 POST。
+  // 这里的路径只用来展示与回传，**不做任何安全判断** —— 校验全在后端
+  // （upgrade.js 的 removeLegacyResidue），前端就算被篡改也删不掉范围外的东西。
+  // 列表为空时整块保持 hidden：旧的备份对绝大多数用户不存在，常驻就是噪音。
+  const legacyField = $('#legacy-residue-field');
+  if (legacyField) {
+    const listEl = $('#legacy-residue-list');
+    const hintEl = $('#legacy-residue-hint');
+    const statusEl = $('#legacy-residue-status');
+    const removeBtn = $('#legacy-residue-remove');
+    // 字节数展示与自检页的 fmtBytes 同口径；13-doctor.js 可能晚于本文件加载，
+    // 取不到时退回本地实现（两处都只在这一屏用，不必强行共享）。
+    const sizeText = (n) => {
+      if (typeof fmtBytes === 'function') return fmtBytes(n);
+      const v = Number(n) || 0;
+      if (v < 1024) return `${v}B`;
+      if (v < 1048576) return `${(v / 1024).toFixed(1)}KB`;
+      return `${(v / 1048576).toFixed(1)}MB`;
+    };
+    // 来源标注：搬入日期 + 当时版本。"哪个版本留下的"比路径有用得多 ——
+    // 用户看到 0.5.0.x 就知道是自己上次升级时搬的，不会疑心是新版生成的。
+    // 定义在 paintLegacy 之前：后者在事件绑定阶段就会调用（不是等用户点击才跑），
+    // const 的 TDZ 会让它在这一行直接炸。
+    const legacyOriginText = (it) => {
+      const day = it.migratedAt ? String(it.migratedAt).slice(0, 10) : '';
+      const ver = it.fromVersion ? ` · v${it.fromVersion}` : '';
+      const when = day ? ` · ${day} 搬入` : '';
+      return `${ver}${when}`;
+    };
+    let legacyItems = [];
+    const paintLegacy = (d) => {
+      const items = Array.isArray(d?.items) ? d.items : [];
+      legacyItems = items;
+      if (!items.length) { legacyField.hidden = true; return; }
+      legacyField.hidden = false;
+      if (hintEl) {
+        hintEl.textContent = `升级时把旧版本留下的文件搬到了数据目录，共 ${items.length} 项、${sizeText(d.totalBytes)}。`
+          + '确认不再需要可以删除；不删也不影响使用。';
+      }
+      listEl.innerHTML = items.map((it, i) => `
+        <label class="pick-item" title="${esc(it.path)}">
+          <input type="checkbox" class="sw" data-legacy-idx="${i}" checked />
+          <span>${esc(it.label)}</span>
+          <span class="hint" style="margin:0;white-space:nowrap">${esc(sizeText(it.sizeBytes))}</span>
+        </label>
+        <div class="hint" style="margin:0 0 6px 44px">${esc(it.relPath)}${legacyOriginText(it)}</div>
+      `).join('');
+    };  // paintLegacy 结束
+    const legacyRefresh = async () => {
+      try {
+        const d = await api('/api/maintenance/legacy');
+        paintLegacy(d);
+      } catch {
+        // 检测失败只影响这一块：不显示，也不打扰用户
+        legacyField.hidden = true;
+      }
+    };
+    removeBtn?.addEventListener('click', async () => {
+      // 回传给后端的只有 path，且后端会重新校验（不信任这里的任何值）
+      const picked = [...listEl.querySelectorAll('input[data-legacy-idx]:checked')]
+        .map((el) => legacyItems[Number(el.dataset.legacyIdx)])
+        .filter(Boolean);
+      if (!picked.length) { if (statusEl) statusEl.textContent = '先勾选要删除的项'; return; }
+      const total = picked.reduce((s, x) => s + (x.sizeBytes || 0), 0);
+      if (!await qaConfirm({
+        danger: true,
+        title: '删除旧版本残留',
+        confirmText: `删除 ${picked.length} 项`,
+        message: `将永久删除 ${picked.length} 项（${sizeText(total)}），不可恢复：\n\n`
+          + picked.map((x) => `- ${x.relPath}`).join('\n')
+      })) return;
+      removeBtn.disabled = true;
+      if (statusEl) statusEl.textContent = '删除中…';
+      try {
+        const r = await api('/api/maintenance/legacy/remove', {
+          method: 'POST',
+          body: JSON.stringify({ paths: picked.map((x) => x.path) })
+        });
+        if (statusEl) statusEl.textContent = `已删除 ${r.removed?.length || 0} 项，释放 ${sizeText(r.freedBytes)}`;
+        await legacyRefresh();
+      } catch (e) {
+        if (statusEl) statusEl.textContent = `删除失败：${e?.message || e}`;
+      }
+      removeBtn.disabled = false;
+    });
+    legacyRefresh();
+  }
 
   const resetDataBtn = $('#reset-data-btn');
   if (resetDataBtn) resetDataBtn.addEventListener('click', async () => {
