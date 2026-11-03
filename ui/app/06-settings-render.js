@@ -1594,7 +1594,7 @@ function renderOnebotSection(c) {
     </div>
 
     <h3 style="margin-top:22px">QQ 来源</h3>
-    <div class="hint" style="margin-bottom:10px">推荐直接用你电脑里已装的 QQ（检测到就自动用它，无需任何安装步骤）。下面的「装独立副本」是给想要彻底隔离的人准备的「可选项」，不装也完全能用。</div>
+    <div class="hint" id="qq-source-intro" style="margin-bottom:10px">推荐直接用你电脑里已装的 QQ（检测到就自动用它，无需任何安装步骤）。下面的「装独立副本」是给想要彻底隔离的人准备的「可选项」，不装也完全能用。</div>
     <div class="field">
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="btn btn-small" id="qq-portable-start-btn" title="启动应用自带的便携版 QQ（装了独立副本才有意义）" style="display:none">单独启动便携 QQ</button>

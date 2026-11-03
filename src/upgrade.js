@@ -1,11 +1,15 @@
-// 版本迁移：处理"跨版本升级后留在用户磁盘/配置里的残留"。
+// 版本迁移：逐版本累加的**迁移注册表**，负责所有跨版本的数据搬迁与清理。
+//
+// 它不只为某一种文件存在。凡是"新版本换了位置、换了名字、换了存储形态，
+// 而用户的磁盘上还留着旧形态"的情况，都归这里：旧插件目录与配置引用、
+// 旧随包二进制、运行时目录结构调整……一次升级要做的事，在这里加一项。
 //
 // 为什么需要这一层：用户数据（data/）不在安装清单里，exe 安装器升级时不碰它，
-// 免安装 zip 覆盖更不会。于是"程序目录里已经被删掉的模块"会以两种形式继续存在：
-//   ① 它的目录还在（免安装覆盖路径只写新文件、不删旧文件）；
-//   ② 指向它的配置引用还在（config.json 的 trustedPlugins / skills）。
-// 两者叠加就出事。0.4.8.5 的真实例子：内置记忆插件从 `conversation-memory`
-// 整体换血为 `mem-layered`，而老用户 config 的 trustedPlugins 里还留着
+// 免安装 zip 覆盖更不会。于是"程序目录里已经被删掉的模块/文件"会以两种形式
+// 继续存在：① 它的目录还在（覆盖路径只写新文件、不删旧文件）；② 指向它的
+// 配置引用还在（config.json 的 trustedPlugins / skills）。两者叠加就出事。
+// 0.4.8.5 的真实例子：内置记忆插件从 `conversation-memory` 整体换血为
+// `mem-layered`，而老用户 config 的 trustedPlugins 里还留着
 // `conversation-memory`，信任闸（plugin-loader.js 的 checkPluginTrust）
 // 按目录名直接放行、不看基线指纹，于是残留的旧插件照常加载，与新插件
 // 争同名能力。后果是三条叠加（详见 plugins/mem-layered/lib/conflict.js）：
@@ -36,6 +40,14 @@
 //   · 用户确认清理（detectLegacyResidue / removeLegacyResidue，界面触发）：
 //     删除不可恢复，所以只检测、不自动做，列在「设置 → 外观与数据」里等用户点。
 //   判断标准一句话：搬得走就自动搬，删了回不来的必须让用户确认。
+//
+// 运行时目录的规范形态（`data/runtime/` 是唯一的运行时根）：
+//   data/runtime/ffmpeg/bin/        设置页下载的 ffmpeg
+//   data/runtime/qq-portable/       便携 QQ 副本（历史上在 <app>/runtime/ 下）
+//   data/runtime/qq-portable-data/  便携 QQ 的隔离登录态（同上）
+//   data/runtime/legacy-backup/     迁移搬走的旧文件，等用户确认删除
+// 历史上 `runtime/` 同时挂在程序目录与数据目录两个父目录下，迁移项
+// relocate-portable-qq 把它收敛到数据目录；解析口径见 runtimeDirPath。
 //
 // 调用点：src/app.js 的 start() 开头，必须在 reloadSkills({reason:'boot'})
 // 之前，因为插件扫描会读 trustedPlugins，晚一步就白做。
@@ -251,6 +263,36 @@ export function movePath(src, dest, { roots, overwrite = false } = {}) {
 }
 
 /**
+ * 只走 rename 的搬移：跨盘（EXDEV）直接失败，绝不降级成复制。
+ *
+ * 与 movePath 的差别只在跨盘这一条：movePath 面对 EXDEV 会 copy + 删源，
+ * 对几十 MB 的 ffmpeg 可以接受；便携 QQ 是 1.5GB，复制一次要几分钟、还要占双份
+ * 空间，中途失败可能留下半套。这里宁可不搬，把决定权交回用户。
+ *
+ * 目标已存在时默认抛错（不覆盖）：迁移项自己判"目标已存在 → 跳过"，
+ * 走到这里说明判断之外还有竞态，覆盖会把用户手工放进去的那份盖掉。
+ */
+export function renamePath(src, dest, { roots, overwrite = false } = {}) {
+  const from = assertSafePath(src, roots);
+  const to = assertSafePath(dest, roots);
+  if (from === to) throw new Error(`源与目标相同：${from}`);
+  if (isStrictlyInside(from, to)) throw new Error(`拒绝把目录搬进它自己里面：${to}`);
+  if (!overwrite && fs.existsSync(to)) throw new Error(`目标已存在，不覆盖：${to}`);
+
+  fs.mkdirSync(path.dirname(to), { recursive: true });
+  try {
+    fs.renameSync(from, to);
+  } catch (error) {
+    if (error?.code === 'EXDEV') {
+      // 跨设备：数据目录与程序目录不在同一分区。不用 copy 兜底的原因见函数头。
+      throw new Error(`源与目标不在同一磁盘分区，已放弃搬移（不做复制）：${from} → ${to}`);
+    }
+    throw error;
+  }
+  return { from, to };
+}
+
+/**
  * 删除文件或目录。路径不存在视为已达成（幂等）。
  * 符号链接由 assertSafePath 整体拒绝：删链接本身虽然安全，但"删除"这个动作
  * 对准的从来不是链接，把选择权留在调用方（迁移项）更不容易误判。
@@ -266,6 +308,98 @@ export function removePath(p, { roots } = {}) {
 /** 备份区根：`data/runtime/legacy-backup/`。旧版本留下的文件都搬到这里。 */
 export function legacyBackupRoot(dataDir = DATA_DIR) {
   return path.join(dataDir, 'runtime', 'legacy-backup');
+}
+
+/**
+ * 每个备份目录里的归属文件。内容是
+ * `{ migrationId, at, fromVersion, items }`。
+ *
+ * 为什么需要它：备份目录名只是给人看的（`ffmpeg-<时间戳>`），谁搬来的、
+ * 哪个版本搬来的，全靠命名前缀猜。加第二、第三个迁移项之后，猜前缀必然漏，
+ * 漏的后果不是报错而是清理界面里"迁移时间与来源版本"静默为空。让目录自己
+ * 记下来源，识别逻辑就与迁移项数量无关。
+ */
+export const BACKUP_META_FILE = 'meta.json';
+
+/**
+ * 没有 meta.json 的老备份目录，按命名前缀认回迁移项。
+ *
+ * 这是**历史形态**，只覆盖 meta 机制上线之前已经产生的备份（那时只有
+ * retire-bundled-ffmpeg 一项会建备份）。新迁移项一律靠 meta.json，
+ * 不要往这张表里加东西 —— 加一条就等于承认"meta 写失败了"是常态。
+ */
+const HISTORY_BACKUP_PREFIXES = [
+  { prefix: 'ffmpeg-', migrationId: 'retire-bundled-ffmpeg' }
+];
+
+/** 读备份目录的 meta.json。没有 / 坏了返回 null（调用方回落到历史前缀或目录名）。 */
+export function readBackupMeta(dir) {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(dir, BACKUP_META_FILE), 'utf8'));
+    if (!j || typeof j !== 'object') return null;
+    return {
+      migrationId: String(j.migrationId || ''),
+      at: String(j.at || ''),
+      fromVersion: String(j.fromVersion || ''),
+      items: Array.isArray(j.items) ? j.items.map(String) : []
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 给备份目录写归属文件。写失败不抛：搬迁本身已经完成，把"元信息写不进去"
+ * 当成整项失败会让下次启动把"源已不存在"重跑一遍，反而丢了这次记录。
+ * 缺 meta 的目录在 detectLegacyResidue 里回落到目录名显示，仍可正常清理。
+ */
+function writeBackupMeta(dir, meta, log = () => {}) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, BACKUP_META_FILE), JSON.stringify(meta, null, 2), 'utf8');
+  } catch (error) {
+    log(`[upgrade]     ⚠️ 备份元信息写入失败（不影响清理，只是界面里少了来源版本）：${error?.message ?? error}`);
+  }
+}
+
+// ── 运行时目录 ──────────────────────────────────────────────────────────
+//
+// 运行时内容的规范根只有一处：`DATA_DIR/runtime/`。历史上 `runtime/` 同时挂在
+// 程序目录（随包 ffmpeg、便携 QQ）与数据目录（下载的 ffmpeg）下，同名不同父。
+// 迁移项 relocate-portable-qq 把便携 QQ 挪进数据目录，之后这里只留一条口径。
+
+/** 便携 QQ 的两个运行时目录名（安装目录 + 隔离登录态）。 */
+const PORTABLE_RUNTIME_NAMES = ['qq-portable', 'qq-portable-data'];
+
+/**
+ * 解析一个运行时子目录的实际位置。
+ *
+ * 顺序：`DATA_DIR/runtime/<name>` 存在就用它；否则回落 `<app>/runtime/<name>`；
+ * 两处都没有就返回数据目录下的**规范位置**（新建内容一律落在数据目录）。
+ *
+ * 回落不是"留兼容代码"，而是迁移成功之前用户必须能继续用便携 QQ：迁移项
+ * relocate-portable-qq 在便携 QQ 运行时会 rename 失败（文件被占用），那一轮
+ * 启动里便携 QQ 仍在程序目录，解析必须找得到它，否则"QQ 明明装着却显示未安装"。
+ * 迁移成功后程序目录那份已不存在，回落分支自然落空 —— 不需要另立删除时机。
+ */
+export function runtimeDirPath(name, { appRoot = ROOT, dataDir = DATA_DIR } = {}) {
+  const canonical = path.join(path.resolve(dataDir), 'runtime', String(name));
+  try { if (fs.existsSync(canonical)) return canonical; } catch { /* 权限/盘掉了：按不存在处理 */ }
+  const legacy = path.join(path.resolve(appRoot), 'runtime', String(name));
+  try { if (fs.existsSync(legacy)) return legacy; } catch { /* 同上 */ }
+  return canonical;
+}
+
+/** 取一个路径所在设备的 dev（用于判断 rename 是否跨盘）。路径不存在时看最近的真实祖先。 */
+function deviceOf(p) {
+  const real = nearestReal(p);
+  if (!real) return null;
+  try { return fs.statSync(real).dev; } catch { return null; }
+}
+
+/** 目录是否为空（读不到当作非空：宁可跳过也不合并/删除）。 */
+function dirIsEmpty(dir) {
+  try { return fs.readdirSync(dir).length === 0; } catch { return false; }
 }
 
 /** 目标已存在时追加 `-2` / `-3`…，保证搬移永远不覆盖已有的备份。 */
@@ -293,6 +427,7 @@ export function backupPath(p, { backupRoot, roots, name } = {}) {
 // ── 迁移注册表 ────────────────────────────────────────────────────────────
 // 加一项只需在此追加一个对象。惯例：
 //   - id 一旦发布永不修改（它是幂等账本的键，改了等于让它再跑一次）；
+//   - label 是给用户看的人类可读名字，清理界面按它显示搬进来的东西；
 //   - run() 只做无损动作：改配置，或把磁盘上的旧文件搬进 legacy-backup；
 //     **不删任何东西**，删除只走用户确认那条路（removeLegacyResidue）；
 //   - 返回 { changed: string[], note?: string, record?: object }，
@@ -301,6 +436,7 @@ export function backupPath(p, { backupRoot, roots, name } = {}) {
 export const UPGRADES = [
   {
     id: 'retire-conversation-memory',
+    label: '旧版记忆插件',
     title: '停用已被取代的旧记忆插件（conversation-memory → mem-layered）',
     run({ appRoot, log, saveConfig }) {
       const LEGACY = 'conversation-memory';
@@ -352,6 +488,7 @@ export const UPGRADES = [
 
   {
     id: 'prune-orphan-trusted',
+    label: '无主信任项',
     title: '清理可信插件清单里指向"已不存在模块"的孤儿项',
     run({ appRoot, log, saveConfig }) {
       const builtin = readBuiltinIds(appRoot);
@@ -393,6 +530,7 @@ export const UPGRADES = [
     // 新版照样能用（解析链在迁移**之后**才去掉兼容候选这件事需要另一次版本发布，
     // 见 src/ffmpeg-resolve.js 文件头）。搬走之后那条候选才失去真实使用方。
     id: 'retire-bundled-ffmpeg',
+    label: '旧版随包 ffmpeg',
     title: '把旧版随包分发的 ffmpeg 搬进备份区（新版改为按需下载到数据目录）',
     run({ appRoot, dataDir, log, now }) {
       const roots = allowedRoots({ appRoot, dataDir });
@@ -455,6 +593,15 @@ export const UPGRADES = [
       // 重试。已搬走的那些不在原位了，重试只会处理剩下的，不会重复搬。
       if (failed) throw failed;
 
+      // 备份目录自报归属，清理界面靠它反查迁移项与来源版本（见 BACKUP_META_FILE）。
+      // 部分失败时上一步已经抛了，所以这里写的一定是一份完整的备份。
+      writeBackupMeta(backupRoot, {
+        migrationId: 'retire-bundled-ffmpeg',
+        at: new Date(now).toISOString(),
+        fromVersion: appVersion,
+        items: moved
+      }, log);
+
       // data/runtime/ffmpeg/bin/ 里若用户已经下载过新版，这里什么都不做：
       // 旧的那份搬走与否都不影响新位置，绝不覆盖。
       const note = `旧随包 ffmpeg 已搬到 ${path.relative(dataDir, backupRoot).replace(/\\/g, '/')}`
@@ -467,6 +614,109 @@ export const UPGRADES = [
           movedTo: path.relative(dataDir, backupRoot).replace(/\\/g, '/'),
           items: moved,
           fromVersion: appVersion
+        }
+      };
+    }
+  },
+
+  {
+    // 便携 QQ 的运行时目录改挂在数据目录下。
+    //
+    // 为什么搬：`runtime/` 这个名词此前同属两个父目录 —— 程序目录下的
+    // `runtime/qq-portable`（约 1.5GB）与数据目录下的 `runtime/ffmpeg`。同一个
+    // 名字两处含义，用户备份/迁移/换机时不知道该拷哪一个，卸载时也不知道
+    // 哪份会被删。统一到 `DATA_DIR/runtime/` 之后只有一处运行时根。
+    //
+    // 平台：便携 QQ 只在 Windows 有实际内容（detectLocalQqDirOnce 在非 win32
+    // 直接返回 null，进程枚举与 QQ.exe 匹配全是 win32 分支）。mac/Linux 上
+    // `<app>/runtime/qq-portable` 永远是空目录或不存在的目录，"没有可搬的内容"
+    // 就是这条迁移项在这些平台上的正常路径，不需要平台分支。
+    id: 'relocate-portable-qq',
+    label: '便携 QQ 运行时目录',
+    title: '把便携 QQ 的运行时目录搬进数据目录（runtime/ 统一挂在 data/ 下）',
+    run({ appRoot, dataDir, log }) {
+      const roots = allowedRoots({ appRoot, dataDir });
+      const legacyRuntime = path.join(path.resolve(appRoot), 'runtime');
+      const canonicalRuntime = path.join(path.resolve(dataDir), 'runtime');
+
+      const moved = [];
+      const skipped = [];
+      const failed = [];
+
+      for (const name of PORTABLE_RUNTIME_NAMES) {
+        const src = path.join(legacyRuntime, name);
+        const dest = path.join(canonicalRuntime, name);
+
+        let srcStat = null;
+        try { srcStat = fs.lstatSync(src); } catch { /* 不存在：本平台没有便携 QQ，正常路径 */ }
+        if (!srcStat) { skipped.push({ name, reason: '不存在' }); continue; }
+        if (srcStat.isSymbolicLink()) {
+          skipped.push({ name, reason: '是符号链接，不搬（不跟链接动别人的文件）' });
+          continue;
+        }
+
+        // 目标已存在：可能上次已经搬过、或用户手动放了一份。
+        // 两个 1.5GB 目录不许合并 —— 合并既慢又会产生"哪份是真的"的歧义。
+        // 空目录视为可覆盖（上次搬了一半留下的壳），非空一律跳过并记日志。
+        let destStat = null;
+        try { destStat = fs.lstatSync(dest); } catch { /* 正常：目标还没有 */ }
+        if (destStat) {
+          if (!destStat.isDirectory() || !dirIsEmpty(dest)) {
+            const reason = `目标已存在且非空，跳过（不合并）：${dest}`;
+            skipped.push({ name, reason });
+            log(`[upgrade]     ⚠️ ${reason}`);
+            continue;
+          }
+          try { fs.rmdirSync(dest); } catch { /* 删不掉就让下面的 rename 去报错 */ }
+        }
+
+        // 跨盘判断：先比 dev，比不出（路径不存在）就交给 rename 的 EXDEV。
+        // 两种都覆盖了，先比是为了在日志里给出"跨盘"这个具体原因，而不是
+        // 一句笼统的失败。
+        const srcDev = deviceOf(src);
+        const destDev = deviceOf(dest);
+        if (srcDev !== null && destDev !== null && srcDev !== destDev) {
+          failed.push({ name, error: `跨磁盘分区（dev ${srcDev} → ${destDev}），不做复制，已放弃` });
+          continue;
+        }
+
+        try {
+          const r = renamePath(src, dest, { roots });
+          moved.push(path.relative(dataDir, r.to).replace(/\\/g, '/'));
+          log(`[upgrade]     已搬移 ${r.from} → ${r.to}`);
+        } catch (error) {
+          // 常见原因：便携 QQ 正在运行，Windows 上文件被占用，rename 失败。
+          // 不为此新增进程扫描 —— 框架本来就是"失败不阻塞、下次启动重试"，
+          // 用户关掉 QQ 后重启应用即可。
+          const msg = error?.message ?? String(error);
+          failed.push({ name, error: msg });
+          log(`[upgrade]     ⚠️ 搬移失败 ${src}：${msg}（可能因为便携 QQ 正在运行、文件被占用）`);
+        }
+      }
+
+      if (failed.length) {
+        const detail = failed.map((f) => `${f.name}：${f.error}`).join('；');
+        const done = moved.length ? `（已搬走 ${moved.join('、')}）` : '';
+        // 整项算失败 → 不进 applied → 下次启动重试。已搬走的那部分不在原位了，
+        // 重试会跳过它（源不存在），只处理剩下的。
+        throw new Error(`${detail}${done}（若是便携 QQ 正在运行导致文件被占用，完全退出 QQ 后重启应用即可；本条会在下次启动重试）`);
+      }
+
+      if (!moved.length) {
+        const why = skipped.length ? skipped.map((s) => `${s.name}（${s.reason}）`).join('、') : '没有便携 QQ 目录';
+        return { changed: [], note: `无需搬移：${why}` };
+      }
+
+      const note = `便携 QQ 运行时目录已搬进数据目录：${moved.join('、')}`
+        + `（源目录 ${path.relative(path.resolve(appRoot), legacyRuntime).replace(/\\/g, '/') || 'runtime'} 下已移除）`;
+      log(`[upgrade]     ${note}`);
+      return {
+        changed: moved,
+        note,
+        record: {
+          movedTo: path.relative(dataDir, canonicalRuntime).replace(/\\/g, '/'),
+          items: moved,
+          fromVersion: readAppVersion(appRoot)
         }
       };
     }
@@ -599,6 +849,14 @@ function dirSize(target, budget = { files: RESIDUE_SIZE_FILE_LIMIT }) {
  *   ② `<app>/runtime` 下仍存在的旧 ffmpeg 形态 —— 正常启动时已被 ① 搬走，
  *      出现在这里说明那次迁移失败或还没跑（例如用户是手动拷进来的）。
  *
+ * 每个备份条目的来源按三级反查（顺着可靠度递减）：
+ *   ① 目录里的 meta.json —— 写了 migrationId / at / fromVersion，最准；
+ *   ② 老备份目录的命名前缀 —— meta 机制上线前只有 ffmpeg 一项会建备份，
+ *      按 HISTORY_BACKUP_PREFIXES 认回；找不到归属的目录不以"某一项"论，
+ *      只按目录名显示；
+ *   ③ 状态文件的 applied[id] —— 只在没有 meta 时用于补时间与版本
+ *      （它记录的是该迁移项最近一次成功的时间，不是每次备份都独立成条）。
+ *
  * @returns {{items: Array, roots: string[]}}
  */
 export function detectLegacyResidue({ appRoot = ROOT, dataDir = DATA_DIR } = {}) {
@@ -606,27 +864,44 @@ export function detectLegacyResidue({ appRoot = ROOT, dataDir = DATA_DIR } = {})
   const backupRoot = legacyBackupRoot(dataDir);
   let state = { applied: {} };
   try { state = readUpgradeState(upgradeStatePath(dataDir)); } catch { /* 状态读不到不影响检测 */ }
-  const ffmpegRecord = normalizeAppliedEntry(state.applied['retire-bundled-ffmpeg']);
+
+  const upgradeById = new Map(UPGRADES.map((u) => [u.id, u]));
 
   // ① 备份区：每个子项一条。大小现算（用户点开设置页才调，不做缓存）。
   let entries = [];
   try { entries = fs.readdirSync(backupRoot, { withFileTypes: true }); } catch { /* 没有备份区 */ }
   for (const e of entries) {
+    // meta.json 是归属文件，不是搬进来的东西
+    if (e.name === BACKUP_META_FILE) continue;
     const abs = path.join(backupRoot, e.name);
     const size = dirSize(abs);
-    const isFfmpegBackup = e.name.startsWith('ffmpeg-');
+
+    const meta = e.isDirectory() ? readBackupMeta(abs) : null;
+    let migrationId = meta?.migrationId || '';
+    if (!migrationId) {
+      // 历史形态：meta 机制之前建的备份只有命名前缀可认
+      const hit = HISTORY_BACKUP_PREFIXES.find((p) => e.name.startsWith(p.prefix));
+      migrationId = hit?.migrationId || '';
+    }
+    const upgrade = upgradeById.get(migrationId);
+    // 状态记录只用来补 meta 缺失的时间/版本（老目录没有 meta）
+    const stateRecord = migrationId ? normalizeAppliedEntry(state.applied[migrationId]) : null;
+
     items.push({
       id: `legacy-backup:${e.name}`,
-      label: isFfmpegBackup ? '旧版随包 ffmpeg' : e.name,
+      // 迁移项自己声明人类可读标签；查不到迁移项（第三方手工放的目录、
+      // 已从注册表移除的旧项）就如实显示目录名，不冒充任何一项。
+      label: upgrade?.label || e.name,
+      migrationId: migrationId || null,
       path: abs,
       relPath: path.relative(dataDir, abs).replace(/\\/g, '/'),
       sizeBytes: size.bytes,
       files: size.files,
       sizeTruncated: size.truncated,
-      // "属于哪个版本"：搬移那一刻的执行时间与程序版本都存在 record 里。
+      // "属于哪个版本"：搬移那一刻的执行时间与程序版本都存在 meta 里。
       // 状态文件顶层的 version 不能用 —— 它每次启动都会被刷成最新值。
-      migratedAt: ffmpegRecord?.at || '',
-      fromVersion: String(ffmpegRecord?.fromVersion || ''),
+      migratedAt: meta?.at || stateRecord?.at || '',
+      fromVersion: String(meta?.fromVersion || stateRecord?.fromVersion || ''),
       action: '删除（不可恢复）',
       kind: 'legacy-backup'
     });

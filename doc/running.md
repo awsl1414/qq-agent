@@ -142,6 +142,8 @@ Bing 网页解析不需要 Key，是默认搜索源。
 | `desktop-pet/` | 桌宠模型（`models/`）、预览图、`state.json` |
 | `exports/` / `import-bundles/` / `import-backups/` | 数据导出包、导入包解压临时区、导入前备份 |
 | `runtime/ffmpeg/` | 设置页「媒体工具」下载的 ffmpeg |
+| `runtime/qq-portable/` | 便携 QQ 副本（仅 Windows；约 1.5GB）。旧版本放在程序目录的 `runtime/` 下，升级后启动时自动搬到这里 |
+| `runtime/qq-portable-data/` | 便携 QQ 的隔离登录态，与用户日常 QQ 互不干扰。同上，旧版本在程序目录 |
 | `runtime/legacy-backup/` | 跨版本迁移搬出来的旧文件（如旧版随包的 ffmpeg）。不自动删除，确认不要了在「设置 → 外观与数据」里清 |
 | `account.json` | 社区市场账号凭据（不进 `config.json`） |
 | `qq-agent.lock` | 进程单实例锁 |

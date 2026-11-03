@@ -8,12 +8,9 @@ import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getConfig, updateConfig, ROOT, DATA_DIR, isChatAllowed } from './config.js';
-// 端口探测目标（host + port）的唯一定义处：协议端可以在局域网另一台机器上，
-// 探测必须跟着 wsUrl 走，不能固定 127.0.0.1。
-import { parseProbeTarget } from './protocol-endpoint.js';
-// 版本迁移：清理跨版本升级后残留的旧插件目录/配置引用。必须在 reloadSkills 之前跑，
-// 插件扫描读的就是 config.trustedPlugins。
-import { runUpgrades } from './upgrade.js';
+// 版本迁移：跨版本的配置改写与磁盘搬迁（旧插件残留、旧随包二进制、运行时目录调整）。
+// 必须在 reloadSkills 之前跑，插件扫描读的就是 config.trustedPlugins。
+import { runUpgrades, runtimeDirPath } from './upgrade.js';
 import { OneBotClient, segmentsToText, extractMediaFromSegments, expandForwardNodes, fetchForwardNodes } from './onebot.js';
 // 协议端配置探测：令牌是 SnowLuma 按账号随机生成的，让新用户从 WebUI 手抄两串 43 位
 // 字符串是首次配置最容易失败的一步，这里直接读它的配置文件填好端点与令牌。
@@ -251,11 +248,16 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   let qqPortableLaunching = false;   // 便携 QQ 启动互斥标记（防连点「启动 QQ」并发拉起）
 
   function qqPortableDir() {
-    return path.join(ROOT, 'runtime', 'qq-portable');
+    // 运行时内容统一挂在 DATA_DIR/runtime/ 下（见 upgrade.js 文件头）。
+    // 迁移项 relocate-portable-qq 会在启动时把程序目录下的那份搬过来；
+    // 搬成功之前它还在 ROOT/runtime/ 下，所以解析要两处都看，且先看数据目录。
+    // 这不是给旧版本留的兼容分支：迁移失败（便携 QQ 正在运行、文件被占用）
+    // 时用户仍必须能正常用便携 QQ，否则一次搬移失败就等于功能消失。
+    return runtimeDirPath('qq-portable', { appRoot: ROOT, dataDir: DATA_DIR });
   }
 
   function qqPortableDataDir() {
-    return path.join(ROOT, 'runtime', 'qq-portable-data');
+    return runtimeDirPath('qq-portable-data', { appRoot: ROOT, dataDir: DATA_DIR });
   }
 
   function qqPortableExe() {
@@ -507,6 +509,10 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     const target = await resolveQqTarget(opts);
     return {
       ready: target.exe !== null,
+      // 便携 QQ（含「一键安装独立副本」）依赖 QQNT，只有 Windows 有。
+      // 前端据此隐藏/改写这块文案：在 mac/Linux 上点进安装永远只会得到
+      // 「没找到本机安装的 QQ」，那是不可达的操作，不是"还没装"。
+      supported: process.platform === 'win32',
       running: pid !== null,
       pid,
       dir: target.dir || qqPortableDir(),
@@ -847,10 +853,13 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   const store = new ChatStore(cfg.store?.maxMessagesPerChat ?? 0);   // 0 = 不限
   const memory = new MemoryStore();
   const sessions = new SessionRegistry(cfg.store?.keepSessionFiles ?? 0);   // 0 = 不限
-  // 端口探测目标（从 protocol.wsUrl 推导 host + port，供端口就绪轮询使用）。
-  // 必须连配置里的主机，不能固定 127.0.0.1：协议端可以跑在局域网另一台机器上。
-  function protocolProbeTarget() {
-    return parseProbeTarget(getConfig().protocol?.wsUrl);
+  // OneBot WS 端口（从 protocol.wsUrl 推导，供端口就绪轮询使用）。
+  function protocolWsPort() {
+    try {
+      const u = new URL(String(getConfig().protocol?.wsUrl || 'ws://127.0.0.1:3001'));
+      if (u.port) return Number(u.port);
+    } catch { /* ignore */ }
+    return 3001;
   }
   const onebot = new OneBotClient({
     wsUrl: cfg.protocol?.wsUrl,
@@ -889,12 +898,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     if (!hit.found) return { ok: false, found: false, reason: hit.reason };
 
     const next = {};
-    // 当前 WS 端口没开、而探测到的那份在开 → 说明地址也填错了，一并纠正。
-    // 探的是配置里那个主机：`autoFillProtocol` 的 dir 缺省时 detectProtocol 就是
-    // 在本机找，用户若已把地址指向局域网另一台，探本机会误判"当前地址没开"而
-    // 把用户特意设置的地址改回本机默认。
-    const curTarget = parseProbeTarget(cur.wsUrl);
-    const curPortOpen = await isPortOpen(curTarget.host, curTarget.port);
+    // 当前 WS 端口没开、而探测到的那份在开 → 说明地址也填错了，一并纠正
+    const curPortOpen = await isPortOpen('127.0.0.1', protocolWsPort());
     if (!curPortOpen && hit.wsPortOpen) {
       if (hit.wsUrl) next.wsUrl = hit.wsUrl;
       if (hit.httpUrl) next.httpUrl = hit.httpUrl;
@@ -1935,11 +1940,12 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   }
 
   async function start() {
-    // ── 版本迁移（必须排在插件扫描之前）──────────────────────────────────
-    // 老用户升级后，旧版被删掉的插件目录可能还在（免安装覆盖路径只写新文件、不删
-    // 旧文件），而 config.trustedPlugins 里指向它的引用也还在，信任闸按目录名直接
-    // 放行，残留插件就会照常加载、与新插件抢同名能力。reloadSkills 读的正是这份
-    // trustedPlugins。同步、开销极小（几次 stat，最多写一次 config）。
+    // ── 版本迁移（必须排在插件扫描和便携 QQ 路径解析之前）─────────────────
+    // 注册表见 upgrade.js 的 UPGRADES。典型场景：老用户升级后，旧版被删掉的插件
+    // 目录还在（免安装覆盖路径只写新文件、不删旧文件），config.trustedPlugins 里
+    // 指向它的引用也还在，信任闸按目录名直接放行，残留插件就会照常加载、与新插件
+    // 抢同名能力。reloadSkills 读的正是这份 trustedPlugins。
+    // 同步、开销极小（几次 stat），失败也绝不阻塞启动。
     try {
       runUpgrades({ log });
     } catch (error) {
@@ -2059,18 +2065,13 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     if (shouldAutoFill()) setTimeout(() => void runAutoFill('首次启动'), 0);
 
     // ── OneBot 端口就绪轮询 ────────────────────────────────────────────────
-    // 协议端 WS 端口只有「QQ 登录 → Hook 检出 → OneBot 实例拉起」后才监听。常见时序：
-    // QQ Agent 先启动（此时端口未开）→ connectLoop 吃 ECONNREFUSED → 退避涨到
-    // 30 秒 → 用户在这中间扫码登录 → 端口开了，但下一次重试可能还要等二十多秒。
+    // WS 3001 只有「QQ 登录 → Hook 检出 → OneBot 实例拉起」后才监听。常见时序：
+    // QQ Agent 先启动（此时 3001 未开）→ connectLoop 吃 ECONNREFUSED → 退避涨到
+    // 30 秒 → 用户在这中间扫码登录 → 3001 开了，但下一次重试可能还要等二十多秒。
     // 这里每 2 秒探一次 WS 端口，端口一开立即触发重连（走 connectLoop 的代际互斥，
     // 不会产生并发连接）。已连接后轮询自动停止；断线时自动恢复，恢复延迟从
     // "最多 30 秒"降到"最多 2 秒 + 一次连接建立"。
-    //
-    // 目标取自配置的 wsUrl（host + port），不固定 127.0.0.1：协议端可以跑在局域网
-    // 另一台机器上。每轮重新解析而不是启动时算一次：用户改端点（/api/protocol/apply）
-    // 后轮询必须跟着改，否则会一直探旧主机、旧端口，直到重启才恢复。
-    // 代价：远端主机不可达时一次探测最坏等满 isPortOpen 的超时（800ms），
-    // 与 2 秒周期仍有余量，且下面用 obProbeInFlight 保证不会叠轮。
+    const obWsPort = protocolWsPort();
     // 边沿触发：原实现端口开着就每 2 秒无条件 reconnect()，而 reconnect 会清零
     // onebot 的指数退避，端口已开但连接失败（如 token 未就绪）时退避完全失效，
     // 被钉死在 2 秒一轮，协议端侧日志里全是永不收敛的 unauthorized 尝试。
@@ -2079,28 +2080,18 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     // 首轮探测只建立基线，不能当成"关→开"边沿：冷启动时进程已经是连接状态、
     // obPortWasOpen 初值为 false，不区分的话第一次探测就会误判为"端口刚开"而白重连一次。
     let obPortEdgePrimed = false;
-    // 单轮探测在途标记：setInterval 不会等 async 回调，远端探测最坏要等满
-    // isPortOpen 的超时（800ms）。探测比周期慢（网络丢包时 800ms 超时确实可能触发）
-    // 时下一轮会叠上来，多轮并发探测的完成顺序互不确定，边沿判定可能被旧结果覆盖。
-    // 这里用"上一轮还没回来就跳过本轮"把并发压成 1，轮询本身不需要补跑。
-    let obProbeInFlight = false;
     obPortPollTimer = setInterval(async () => {
-      if (obProbeInFlight) return;
-      obProbeInFlight = true;
       // 整段兜住异常：这是个 async 定时器回调，抛出的异常没人 await → unhandledRejection。
       // 主进程那条兜底只记日志、不退出，所以一旦这里每 2 秒抛一次，用户看到的就是
       // "窗口还在、但什么都不工作"的半死状态。宁可单轮失败。
       try {
-      // 每轮现读配置：/api/protocol/apply 改端点后轮询必须跟着改，否则会一直
-      // 探旧主机旧端口，直到重启才恢复。
-      const obTarget = protocolProbeTarget();
       // ── 已连接时也要更新端口边沿状态 ─────────────────────────────────────
       // 旧写法是 `if (onebot.connected) return;`，obPortWasOpen 只在"未连接"分支里更新。
       // 若协议端在一个轮询周期内快速重启（端口关→开），而 QQ Agent 的 socket 还没收到
       // close（TCP 半开，connected 仍为 true），这次边沿就被永久吞掉。connected 时
-      // 顺手探一次端口，成本是一次 TCP connect。
+      // 顺手探一次端口，成本是一次本机 connect。
       if (onebot.connected) {
-        const stillOpen = await isPortOpen(obTarget.host, obTarget.port);
+        const stillOpen = await isPortOpen('127.0.0.1', obWsPort);
         // 只是"把状态记下来"还不够：端口关过一次又开（协议端重启 / 换端口前的短暂
         // 关闭），说明手里这条 socket 连的已经是上一代进程，边沿必须在这里消费掉，
         // 否则要等 TCP 自己超时才发现断线。reconnect 内部有连接代际互斥，不会双连。
@@ -2116,7 +2107,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       //   ① 用户在页面「注入目标」显式输入/点选；
       //   ② QQ Agent 自己启动的 QQ 注入成功后，把 probe-login 读到的 uin 记下来
       //     （协议端自行管理账号注入）。
-      const open = await isPortOpen(obTarget.host, obTarget.port);
+      const open = await isPortOpen('127.0.0.1', obWsPort);
       obPortEdgePrimed = true;   // 未连接分支自己就在处理边沿，从此开始按边沿判定
       if (open && !obPortWasOpen && !onebot.connected) {
         // 端口从关到开：协议端就绪（QQ 登录完成 / 协议端刚拉起）。
@@ -2134,8 +2125,6 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       obPortWasOpen = open;
       } catch (error) {
         try { log('[onebot] 端口轮询异常（已忽略，2 秒后继续）:', error?.message ?? error); } catch { /* ignore */ }
-      } finally {
-        obProbeInFlight = false;
       }
     }, 2000);
     obPortPollTimer.unref?.();

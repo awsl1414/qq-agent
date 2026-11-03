@@ -28,9 +28,13 @@ import {
   assertSafePath,
   allowedRoots,
   movePath,
+  renamePath,
   removePath,
   backupPath,
   legacyBackupRoot,
+  readBackupMeta,
+  runtimeDirPath,
+  BACKUP_META_FILE,
   detectLegacyResidue,
   removeLegacyResidue,
   normalizeAppliedEntry
@@ -452,3 +456,295 @@ test('removeLegacyResidue：不存在的项视为已删（幂等，不报错也�
   assert.deepEqual(r.removed, []);
   assert.deepEqual(r.skipped, []);
 });
+
+// ── 备份归属（meta.json）与迁移项 label 反查 ─────────────────────────────
+
+test('迁移项 label：注册表里每一项都有给用户看的 label，且互不相同', () => {
+  const labels = UPGRADES.map((u) => u.label);
+  assert.ok(UPGRADES.length > 0);
+  for (const u of UPGRADES) {
+    assert.equal(typeof u.label, 'string', `${u.id} 缺 label`);
+    assert.ok(u.label.trim().length > 0, `${u.id} 的 label 为空`);
+  }
+  assert.equal(new Set(labels).size, labels.length, 'label 重复会让清理界面分不清是哪一项');
+});
+
+test('retire-bundled-ffmpeg：搬完写出 meta.json，detectLegacyResidue 按它反查 label 与来源版本', () => {
+  const { appRoot, dataDir } = sandbox();
+  fs.writeFileSync(path.join(appRoot, 'runtime', ffmpegExe), 'OLD', 'utf8');
+
+  runOnly(['retire-bundled-ffmpeg'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 5000, saveConfig: () => {} });
+
+  const [dirName] = fs.readdirSync(legacyBackupRoot(dataDir));
+  const meta = readBackupMeta(path.join(legacyBackupRoot(dataDir), dirName));
+  assert.equal(meta.migrationId, 'retire-bundled-ffmpeg');
+  assert.equal(meta.at, new Date(5000).toISOString());
+  assert.equal(meta.fromVersion, '9.9.9.9');
+  assert.equal(meta.items.length, 1);
+
+  const r = detectLegacyResidue({ appRoot, dataDir });
+  assert.equal(r.items.length, 1);
+  const it = r.items[0];
+  assert.equal(it.migrationId, 'retire-bundled-ffmpeg');
+  assert.equal(it.label, '旧版随包 ffmpeg', 'label 应来自迁移项声明，不是目录名');
+  assert.equal(it.migratedAt, new Date(5000).toISOString());
+  assert.equal(it.fromVersion, '9.9.9.9');
+});
+
+test('detectLegacyResidue：老备份目录（无 meta.json）按前缀兜底认回迁移项', () => {
+  const { appRoot, dataDir } = sandbox();
+  const legacyDir = path.join(legacyBackupRoot(dataDir), 'ffmpeg-2026-01-01T00-00-00-000Z');
+  fs.mkdirSync(legacyDir, { recursive: true });
+  fs.writeFileSync(path.join(legacyDir, ffmpegExe), 'OLD', 'utf8');
+
+  const r = detectLegacyResidue({ appRoot, dataDir });
+  assert.equal(r.items.length, 1);
+  assert.equal(r.items[0].migrationId, 'retire-bundled-ffmpeg');
+  assert.equal(r.items[0].label, '旧版随包 ffmpeg');
+  // 没有 meta 也没有状态记录 → 时间与版本为空，但条目照样可清理
+  assert.equal(r.items[0].migratedAt, '');
+  assert.equal(r.items[0].fromVersion, '');
+});
+
+test('detectLegacyResidue：meta.json 本身不作为一条残留列出', () => {
+  const { appRoot, dataDir } = sandbox();
+  const dir = path.join(legacyBackupRoot(dataDir), 'ffmpeg-old');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, BACKUP_META_FILE), JSON.stringify({ migrationId: 'retire-bundled-ffmpeg' }), 'utf8');
+  fs.writeFileSync(path.join(dir, ffmpegExe), 'OLD', 'utf8');
+
+  const r = detectLegacyResidue({ appRoot, dataDir });
+  assert.equal(r.items.length, 1);
+  assert.notEqual(path.basename(r.items[0].path), BACKUP_META_FILE);
+});
+
+test('detectLegacyResidue：认不出归属的目录用目录名显示，不冒充任何迁移项', () => {
+  const { appRoot, dataDir } = sandbox();
+  const dir = path.join(legacyBackupRoot(dataDir), 'user-hand-copy');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'x.txt'), 'x', 'utf8');
+
+  const r = detectLegacyResidue({ appRoot, dataDir });
+  assert.equal(r.items.length, 1);
+  assert.equal(r.items[0].migrationId, null);
+  assert.equal(r.items[0].label, 'user-hand-copy');
+});
+
+test('detectLegacyResidue：meta 缺失时用状态记录补 migratedAt / fromVersion', () => {
+  const { appRoot, dataDir } = sandbox();
+  const dir = path.join(legacyBackupRoot(dataDir), 'ffmpeg-legacy');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, ffmpegExe), 'OLD', 'utf8');
+  fs.writeFileSync(upgradeStatePath(dataDir), JSON.stringify({
+    version: '9.9.9.9',
+    applied: {
+      'retire-bundled-ffmpeg': { at: '2026-01-01T00:00:00.000Z', fromVersion: '0.4.8.0' }
+    }
+  }), 'utf8');
+
+  const r = detectLegacyResidue({ appRoot, dataDir });
+  assert.equal(r.items[0].migratedAt, '2026-01-01T00:00:00.000Z');
+  assert.equal(r.items[0].fromVersion, '0.4.8.0');
+});
+
+// ── renamePath：只走 rename，跨盘不复制 ──────────────────────────────────
+
+test('renamePath：同盘目录搬移，内容原样', () => {
+  const { appRoot, dataDir } = sandbox();
+  const roots = allowedRoots({ appRoot, dataDir });
+  const src = path.join(appRoot, 'runtime', 'thing');
+  fs.mkdirSync(path.join(src, 'inner'), { recursive: true });
+  fs.writeFileSync(path.join(src, 'inner', 'f.txt'), 'payload', 'utf8');
+  const dest = path.join(dataDir, 'runtime', 'thing');
+
+  renamePath(src, dest, { roots });
+  assert.equal(fs.existsSync(src), false);
+  assert.equal(fs.readFileSync(path.join(dest, 'inner', 'f.txt'), 'utf8'), 'payload');
+});
+
+test('renamePath：目标已存在时不覆盖（源保持原位）', () => {
+  const { appRoot, dataDir } = sandbox();
+  const roots = allowedRoots({ appRoot, dataDir });
+  const src = path.join(appRoot, 'runtime', 'a');
+  const dest = path.join(dataDir, 'runtime', 'a');
+  fs.mkdirSync(src, { recursive: true });
+  fs.mkdirSync(dest, { recursive: true });
+  fs.writeFileSync(path.join(src, 'new.txt'), 'NEW', 'utf8');
+  fs.writeFileSync(path.join(dest, 'old.txt'), 'OLD', 'utf8');
+
+  assert.throws(() => renamePath(src, dest, { roots }), /目标已存在/);
+  assert.equal(fs.readFileSync(path.join(src, 'new.txt'), 'utf8'), 'NEW');
+  assert.equal(fs.readFileSync(path.join(dest, 'old.txt'), 'utf8'), 'OLD');
+});
+
+test('renamePath：EXDEV 跨盘直接失败，绝不降级成复制（源与目标都不变）', () => {
+  const { appRoot, dataDir } = sandbox();
+  const roots = allowedRoots({ appRoot, dataDir });
+  const src = path.join(dataDir, 'big');
+  const dest = path.join(dataDir, 'moved', 'big');
+  fs.mkdirSync(src, { recursive: true });
+  fs.writeFileSync(path.join(src, 'payload'), 'X'.repeat(1024), 'utf8');
+
+  // 直接制造 EXDEV：rename 在真实同盘环境里不会抛它，这里替换掉 fs.renameSync
+  // 来钉住"跨盘不复制"这条契约（复制 1.5GB 是这条迁移不能做的事）。
+  const realRename = fs.renameSync;
+  fs.renameSync = () => {
+    const err = new Error('EXDEV: cross-device link not permitted');
+    err.code = 'EXDEV';
+    throw err;
+  };
+  try {
+    assert.throws(() => renamePath(src, dest, { roots }), /不在同一磁盘分区/);
+  } finally {
+    fs.renameSync = realRename;
+  }
+  assert.equal(fs.existsSync(path.join(src, 'payload')), true, '跨盘放弃时源必须原样保留');
+  assert.equal(fs.existsSync(dest), false, '不能留下复制出来的副本');
+});
+
+// ── relocate-portable-qq ────────────────────────────────────────────────
+
+const portableNames = ['qq-portable', 'qq-portable-data'];
+
+test('relocate-portable-qq：目录不存在时无事可做（mac/Linux 的正常路径）', () => {
+  const { appRoot, dataDir } = sandbox();
+  const r = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 20, saveConfig: () => {} });
+  assert.equal(r.ran.length, 1);
+  assert.deepEqual(r.ran[0].changed, []);
+  assert.match(r.ran[0].note, /无需搬移/);
+  // 数据目录下不应凭空建出 runtime/qq-portable 空壳
+  assert.equal(fs.existsSync(path.join(dataDir, 'runtime', 'qq-portable')), false);
+});
+
+test('relocate-portable-qq：正常搬迁两个目录，源清空、内容一致', () => {
+  const { appRoot, dataDir } = sandbox();
+  for (const name of portableNames) {
+    const src = path.join(appRoot, 'runtime', name);
+    fs.mkdirSync(path.join(src, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(src, 'sub', 'marker.txt'), name, 'utf8');
+  }
+
+  const r = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 21, saveConfig: () => {} });
+  assert.equal(r.ran.length, 1);
+  assert.equal(r.ran[0].changed.length, 2);
+  for (const name of portableNames) {
+    assert.equal(fs.existsSync(path.join(appRoot, 'runtime', name)), false, `${name} 应已离开程序目录`);
+    assert.equal(fs.readFileSync(path.join(dataDir, 'runtime', name, 'sub', 'marker.txt'), 'utf8'), name);
+  }
+
+  // 状态里记下了新的运行时根
+  const st = readUpgradeState(upgradeStatePath(dataDir));
+  assert.equal(st.applied['relocate-portable-qq'].movedTo, 'runtime');
+});
+
+test('relocate-portable-qq：目标已存在且非空时跳过，不合并两个目录', () => {
+  const { appRoot, dataDir } = sandbox();
+  const src = path.join(appRoot, 'runtime', 'qq-portable');
+  const dest = path.join(dataDir, 'runtime', 'qq-portable');
+  fs.mkdirSync(src, { recursive: true });
+  fs.mkdirSync(dest, { recursive: true });
+  fs.writeFileSync(path.join(src, 'from-app.txt'), 'APP', 'utf8');
+  fs.writeFileSync(path.join(dest, 'from-data.txt'), 'DATA', 'utf8');
+
+  const r = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 22, saveConfig: () => {} });
+  // 只有 qq-portable 被跳过（qq-portable-data 根本不存在 → 也算无需处理），整项成功
+  assert.equal(r.ran.length, 1);
+  assert.deepEqual(r.ran[0].changed, []);
+  assert.equal(fs.readFileSync(path.join(src, 'from-app.txt'), 'utf8'), 'APP', '源必须原样保留');
+  assert.equal(fs.readFileSync(path.join(dest, 'from-data.txt'), 'utf8'), 'DATA', '目标不能被覆盖');
+  assert.equal(fs.existsSync(path.join(dest, 'from-app.txt')), false, '绝不能合并');
+});
+
+test('relocate-portable-qq：目标目录存在但为空 → 视为上次失败的壳，可以搬进去', () => {
+  const { appRoot, dataDir } = sandbox();
+  const src = path.join(appRoot, 'runtime', 'qq-portable');
+  const dest = path.join(dataDir, 'runtime', 'qq-portable');
+  fs.mkdirSync(src, { recursive: true });
+  fs.mkdirSync(dest, { recursive: true });
+  fs.writeFileSync(path.join(src, 'QQ.exe'), 'QQ', 'utf8');
+
+  const r = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 23, saveConfig: () => {} });
+  assert.equal(r.ran[0].changed.length, 1);
+  assert.equal(fs.readFileSync(path.join(dest, 'QQ.exe'), 'utf8'), 'QQ');
+});
+
+test('relocate-portable-qq：符号链接不搬', { skip: process.platform === 'win32' && 'Windows 上创建符号链接需要额外权限' }, () => {
+  const { root, appRoot, dataDir } = sandbox();
+  const outside = path.join(root, 'outside-qq');
+  fs.mkdirSync(outside, { recursive: true });
+  fs.writeFileSync(path.join(outside, 'QQ.exe'), 'OUT', 'utf8');
+  fs.symlinkSync(outside, path.join(appRoot, 'runtime', 'qq-portable'), 'dir');
+
+  const r = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 24, saveConfig: () => {} });
+  assert.equal(r.ran[0].changed.length, 0);
+  assert.equal(fs.existsSync(path.join(outside, 'QQ.exe')), true, '链接指向的外部文件必须原样');
+});
+
+test('relocate-portable-qq：搬移失败时整项报错且不记 applied，下次启动重试', () => {
+  const { appRoot, dataDir } = sandbox();
+  fs.mkdirSync(path.join(appRoot, 'runtime', 'qq-portable'), { recursive: true });
+  // 让数据目录下的 runtime 成为一个**文件**：目标父路径不可用，rename 必然失败。
+  // 用这个代替"Windows 上文件被占用"，在 mac/Linux 上也能稳定复现失败路径。
+  fs.writeFileSync(path.join(dataDir, 'runtime'), 'blocker', 'utf8');
+
+  const first = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 25, saveConfig: () => {} });
+  assert.deepEqual(first.failed.map((x) => x.id), ['relocate-portable-qq']);
+  assert.equal(fs.existsSync(path.join(appRoot, 'runtime', 'qq-portable')), true, '失败时源目录必须原样保留');
+  assert.equal(readUpgradeState(upgradeStatePath(dataDir)).applied['relocate-portable-qq'], undefined,
+    '失败项不能记入 applied，否则永不重试');
+
+  // 修好之后下一次启动应照常搬
+  fs.rmSync(path.join(dataDir, 'runtime'), { force: true });
+  const second = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 26, saveConfig: () => {} });
+  assert.equal(second.failed.length, 0);
+  assert.equal(second.ran.length, 1);
+  assert.equal(fs.existsSync(path.join(dataDir, 'runtime', 'qq-portable')), true);
+});
+
+test('relocate-portable-qq：跑两次，第二次跳过（幂等）', () => {
+  const { appRoot, dataDir } = sandbox();
+  fs.mkdirSync(path.join(appRoot, 'runtime', 'qq-portable'), { recursive: true });
+  const first = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 27, saveConfig: () => {} });
+  assert.equal(first.ran.length, 1);
+  const second = runOnly(['relocate-portable-qq'], { appRoot, dataDir, version: '9.9.9.9', log: silent, now: 28, saveConfig: () => {} });
+  assert.deepEqual(second.skipped, ['relocate-portable-qq']);
+  assert.equal(second.ran.length, 0);
+});
+
+// ── 运行时目录解析优先级 ────────────────────────────────────────────────
+
+test('runtimeDirPath：数据目录优先，其次回落程序目录，都没有时给规范位置', () => {
+  const { appRoot, dataDir } = sandbox();
+  const canonical = path.join(dataDir, 'runtime', 'qq-portable');
+  const legacy = path.join(appRoot, 'runtime', 'qq-portable');
+
+  // ① 两处都没有 → 返回规范位置（新建内容一律落数据目录）
+  assert.equal(runtimeDirPath('qq-portable', { appRoot, dataDir }), canonical);
+
+  // ② 只有程序目录有（迁移还没成功）→ 用它，保证便携 QQ 照常可用
+  fs.mkdirSync(legacy, { recursive: true });
+  assert.equal(runtimeDirPath('qq-portable', { appRoot, dataDir }), legacy);
+
+  // ③ 数据目录也有了（迁移完成）→ 优先用数据目录
+  fs.mkdirSync(canonical, { recursive: true });
+  assert.equal(runtimeDirPath('qq-portable', { appRoot, dataDir }), canonical);
+
+  // ④ 迁移后程序目录那份不在 → 仍是数据目录
+  fs.rmSync(legacy, { recursive: true, force: true });
+  assert.equal(runtimeDirPath('qq-portable', { appRoot, dataDir }), canonical);
+});
+
+test('runtimeDirPath：qq-portable-data 与 qq-portable 各自独立解析', () => {
+  const { appRoot, dataDir } = sandbox();
+  fs.mkdirSync(path.join(appRoot, 'runtime', 'qq-portable'), { recursive: true });
+  fs.mkdirSync(path.join(dataDir, 'runtime', 'qq-portable-data'), { recursive: true });
+  assert.equal(
+    runtimeDirPath('qq-portable', { appRoot, dataDir }),
+    path.join(appRoot, 'runtime', 'qq-portable')
+  );
+  assert.equal(
+    runtimeDirPath('qq-portable-data', { appRoot, dataDir }),
+    path.join(dataDir, 'runtime', 'qq-portable-data')
+  );
+});
+

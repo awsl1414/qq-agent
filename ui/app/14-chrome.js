@@ -1154,7 +1154,13 @@
 
     var qqReady = !!(st && st.qqPortable && st.qqPortable.ready);
     var qqRunning = !!(st && st.qqPortable && st.qqPortable.running);
+    var qqSupported = !(st && st.qqPortable && st.qqPortable.supported === false);
     var protoUp = !!(st && st.protocol && st.protocol.portOpen);
+    // 非 Windows：QQNT 没有另外两版，一键启动这条路走不通，别让人去装 QQNT。
+    if (!qqSupported) {
+      setSub('这台机器上「一键启动 QQ」不可用（便携 QQ 仅 Windows）—— 请自行登录 QQ 并启动协议端（SnowLuma 或 NapCat）');
+      return;
+    }
     // ready=false = 便携副本没装且本机也没检测到 QQ，此时"去点一键安装"的指引
     // 必然失败（没源可复制），改成让人去装 QQ / 重新检测。
     if (!qqReady) { setSub('没找到可用的 QQ：先装一个新版 QQ（QQNT），然后到 设置 → 连接 QQ 重试'); return; }
