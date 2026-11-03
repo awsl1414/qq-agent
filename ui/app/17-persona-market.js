@@ -416,7 +416,7 @@ function openPersonaPreview({ title, text, author = '', trigger = null, action =
   const head = full.slice(0, PERSONA_PREVIEW_CHARS);
   const more = full.length > head.length;
   const panel = ensurePreviewLayer();
-  personaPreviewBtn = trigger || null;
+  personaPreviewBtn = trigger || document.activeElement;
   personaPreviewAction = action;
   panel.hidden = false;
   panel.innerHTML = `
@@ -434,6 +434,7 @@ function openPersonaPreview({ title, text, author = '', trigger = null, action =
         ${action ? `<button class="mk-btn pm-prev-try" type="button" data-pm-prev-act>${esc(action.label)}</button>` : ''}
       </div>
     </div>`;
+  registerFocusTrap(panel);
   document.addEventListener('keydown', personaPreviewEsc, true);
   // 焦点落到关闭键：键盘 / 读屏用户一进来就知道浮层开着，Esc 和回车都够得着
   try { panel.querySelector('.pm-prev-x')?.focus(); } catch { /* 焦点失败不影响显示 */ }
@@ -470,6 +471,7 @@ async function personaPreview(id, btn) {
 function closePersonaPreview() {
   document.removeEventListener('keydown', personaPreviewEsc, true);
   const panel = document.getElementById('pm-preview');
+  unregisterFocusTrap(panel);
   if (panel && !panel.hidden) {
     panel.hidden = true;
     panel.innerHTML = '';
@@ -492,6 +494,7 @@ function personaPreviewEsc(e) {
     document.removeEventListener('keydown', personaPreviewEsc, true);
     return;
   }
+  if (__topModalOverlay() !== panel) return;
   e.stopPropagation();
   e.preventDefault();
   closePersonaPreview();

@@ -44,7 +44,8 @@
   --line-str: rgba(255, 255, 255, .15);  /* 控件描边（要更清楚） */
   --fg: #e9eaec;
   --fg-dim: #9aa0aa;
-  --fg-mute: #6f757f;
+  /* 辅助正文在卡片 / 次级面 / 浮层上分别为 5.33 / 4.86 / 4.53:1。 */
+  --fg-mute: #9399a3;
   --field-bg: #1d1e23;     /* 输入框底 */
   --bubble-me: #2f3a4d;
   --bubble-bot: #26272e;
@@ -1053,6 +1054,7 @@ tr.quote-selected td { background: color-mix(in srgb, var(--accent) 10%, transpa
       一处改动三处生效。 */
 .detail-pane {
   flex: 1; min-width: 0; overflow-y: auto; padding: 20px 24px;
+  width: 100%;
   max-width: 990px;
   margin-inline: auto;
 }
@@ -1821,7 +1823,7 @@ tr.chat-del-selected td { background: color-mix(in srgb, var(--red) 10%, transpa
 /* 窄屏：纵向堆叠，彻底避免挤压 */
 @media (max-width: 560px) {
   .model-modal { padding: 12px; }
-  .model-modal-body { flex-direction: column; }
+  .model-modal-body.row { flex-direction: column; }
   .model-modal-left {
     flex: 0 0 auto; max-width: none;
     border-right: none; border-bottom: 1px solid var(--edge);
@@ -1872,7 +1874,7 @@ tr.chat-del-selected td { background: color-mix(in srgb, var(--red) 10%, transpa
 /* foot 始终渲染（动态弹窗要在里面塞按钮），但没内容时收掉分隔线占位 */
 .model-modal-foot:empty { display: none; }
 .field-row { display: flex; gap: 14px; margin-bottom: 10px; flex-wrap: wrap; }
-.field { flex: 1; min-width: 220px; }
+.field { flex: 1; min-width: min(220px, 100%); }
 /* 标签行数不同的 field（如 HTTP 令牌标签折两行）各自从顶部排，
    控件高度靠下面的固定高度对齐，否则缩放/换行时四个输入框底边参差 */
 .field-row .field { align-self: flex-start; }
@@ -1888,6 +1890,7 @@ tr.chat-del-selected td { background: color-mix(in srgb, var(--red) 10%, transpa
    "缩放后输入框不齐"的根因，锁死高度后任何缩放下都等高。 */
 .field input[type=text], .field input[type=password], .field input[type=number], .field input[type=time], .field select, .field textarea {
   width: 100%;
+  min-width: 0;
   background: var(--inset-bg);
   border: 1px solid var(--border);
   color: var(--text);
@@ -2533,7 +2536,7 @@ body.switching .view:not(.active) * {
 /* 表单：两列自适应网格 */
 .skill-form {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
   gap: 18px 22px;
 }
 /* 长文本（人设、规则、说明）占满整行，避免窄列里换行成一条 */
@@ -2783,13 +2786,17 @@ input.sw[data-pending] { cursor: progress; }
 }
 
 .skill-modal__foot {
-  display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px;
   padding: 14px 28px 18px;
   border-top: 1px solid var(--border);
   background: linear-gradient(to top, var(--hover), transparent);
 }
 .skill-modal__foot .spacer { flex: 1; }
 .skill-modal__foot-tip { font-size: 11.5px; color: var(--faint); }
+@media (max-width: 560px) {
+  .skill-modal__head { max-height: 32vh; overflow-y: auto; flex-shrink: 0; }
+  .skill-modal__foot-tip { flex-basis: 100%; order: -1; }
+}
 
 /* ── 「连接」页签 ──
    四段：页头（一句话结论）/ 状态瓦片 / 分组操作 / 日志面板。
@@ -2808,8 +2815,8 @@ input.sw[data-pending] { cursor: progress; }
 .snowluma-page-card h2 { font-size: 16px; }
 
 /* 页头：标题 + 一句话总体状态 */
-.sl-head { display: flex; align-items: flex-start; gap: 14px; }
-.sl-head-main { min-width: 0; }
+.sl-head { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px; }
+.sl-head-main { flex: 1; min-width: min(240px, 100%); }
 .sl-head-sub { margin-top: 5px; font-size: 12px; color: var(--muted); line-height: 1.5; }
 .sl-chip {
   margin-left: auto; flex-shrink: 0;
@@ -2884,7 +2891,7 @@ input.sw[data-pending] { cursor: progress; }
 }
 .sl-panel-title { font-size: 12px; font-weight: 600; }
 .sl-panel-meta { font-size: 11.5px; color: var(--muted); }
-.sl-panel-tools { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.sl-panel-tools { margin-left: auto; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .sl-level { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
 
 .snowluma-logs-view {
@@ -2907,7 +2914,7 @@ input.sw[data-pending] { cursor: progress; }
    协议端不随包分发、也不由本软件启动，用户要自己装，这一节是
    「装什么、怎么配」的唯一入口，所以给足可读性：两张卡并排，窄窗口自动堆叠。
    类名沿用 sl-*（与上面那段同一族），不新开一套设计语言。 */
-.sl-proto-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.sl-proto-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 12px; }
 .sl-proto-card {
   border: 1px solid var(--border); border-radius: 12px;
   background: var(--layer-2); padding: 14px 16px;
@@ -3136,7 +3143,7 @@ input.sw[data-pending] { cursor: progress; }
 .usage-wrap { max-width: 940px; margin: 0 auto; }
 .usage-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; gap: 12px; flex-wrap: wrap; }
 .usage-head h2 { font-size: 17px; font-weight: 600; }
-.usage-days { display: flex; gap: 6px; }
+.usage-days { display: flex; flex-wrap: wrap; gap: 6px; }
 /* 图表控制条：右对齐，紧贴第一张图上方。
    ⚠️ 它必须是 [data-block="days"] 的兄弟节点，不能放进块内，选「今日/24小时」时
       后端 mode ≠ 'days'，整块会被隐藏，控制条住在里面就会跟着消失。 */
@@ -6859,6 +6866,13 @@ code, .mono { font-family: var(--mono); }
 .bp-left { width: 286px; flex: 0 0 286px; min-height: 0; overflow-y: auto; padding: 2px 2px 8px; scrollbar-gutter: stable; }
 .bp-right { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .bp-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 4px 12px; }
+@media (max-width: 560px) {
+  .bp-mode { flex-direction: column; padding: var(--space-sm); }
+  .bp-mode-chat > #session-list, .bp-mode-setup > .bp-left {
+    width: 100%; flex: 0 1 30vh; min-height: 0;
+    border-right: 0; border-bottom: 1px solid var(--line-str);
+  }
+}
 /* ── 全屏「会话设置」页右栏内容列收口到全站基准 940 ────────────────
    renderSetupPane()（14-chrome.js）自己渲染 #bp-setup-scroll 的内容，
    **不再借用 #settings-form**，所以给 .settings-pane 加的 max-width 对它无效。
@@ -8496,6 +8510,12 @@ code, .mono { font-family: var(--mono); }
   .mk-fld { flex-wrap: wrap; }
   .mk-select { min-width: 145px; max-width: calc(100vw - 100px); }
 }
+@media (max-width: 560px) {
+  /* 三个市场共用：操作另起一行，避免多按钮把标题 / 简介挤成单字列。 */
+  .mk-card { flex-wrap: wrap; align-items: flex-start; }
+  .mk-info { flex-basis: calc(100% - 59px); }
+  .mk-action { margin-left: auto; max-width: 100%; }
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    改造层 · 29. 会话报错「说人话」卡片
@@ -9126,6 +9146,12 @@ input.mig-input:focus-visible,
 .ob-skip {
   color: var(--fg-dim);
 }
+@media (max-width: 560px) {
+  /* 序号仍用原有 22px 图标槽，操作移到说明下方，避免正文被挤成竖条。 */
+  .ob-step { display: grid; grid-template-columns: 22px minmax(0, 1fr); }
+  .ob-step-go { grid-column: 2; justify-self: start; }
+  .ob-step-title, .ob-foot { flex-wrap: wrap; }
+}
 
 /* 「使用引导」侧栏入口：视觉与分区项同族（PCL 菜单项），
    用上边距与主菜单分开；图标用当前色。 */
@@ -9315,7 +9341,17 @@ input.mig-input:focus-visible,
   #topbar .brand-sub { display: none; }
   #tabs { min-width: 0; overflow-x: auto; justify-content: flex-start; }
   #tabs .nav-item { flex-shrink: 0; padding-inline: var(--space-sm); }
-  .sidebar.is-set { --side-w: calc(var(--space-lg) * 6); padding-inline: var(--space-xs); }
+  /* 固定侧栏在 360px 会吃掉内容列；导航移到上方，列表仍可独立滚动。 */
+  .stage-main { flex-direction: column; }
+  .sidebar { width: 100%; max-height: 30vh; padding: var(--space-sm); border-right: 0; border-bottom: 1px solid var(--line-str); }
+  .side-nav { display: flex; flex-wrap: wrap; gap: var(--space-xs); flex: 0 1 auto; }
+  .sn-sec { flex-basis: 100%; padding: var(--space-xs); }
+  .sn-item { width: auto; flex: 1 0 auto; }
+  .side-launch { flex-direction: row; gap: var(--space-md); }
+  .side-actions { flex: 1; min-width: 0; }
+  .idwrap { flex: 1; }
+  .stage-empty { min-width: 0; padding: var(--space-md); overflow-y: auto; }
+  .sidebar.is-set { padding-inline: var(--space-xs); }
   .sidebar.is-set .settings-runstate { padding: var(--space-xs); }
   .sidebar.is-set .settings-menu-item { padding-inline: var(--space-xs); gap: var(--space-xs); }
   .sidebar.is-set .settings-menu-item .sm-ico { display: none; }

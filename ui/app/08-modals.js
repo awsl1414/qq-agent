@@ -91,7 +91,7 @@ let __trapInstalled = false;
 // （#gp-pick / #pcp-pick）就是 readonly，焦点落在它上面时 Ctrl+V 等原生编辑
 // 命令会被 Chromium 静默吞掉（无 paste 事件、无反馈）。
 // Tab 循环与 focusin 兜底都不该把焦点往只读框上拽。
-const __FOCUSABLE = 'a[href], button:not([disabled]), input:not([type=hidden]):not([readonly]):not([disabled]),' +
+const __FOCUSABLE = 'a[href], iframe, button:not([disabled]), input:not([type=hidden]):not([readonly]):not([disabled]),' +
   ' select:not([disabled]), textarea:not([readonly]):not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 // 「可编辑」焦点目标：接受 Ctrl+V/Ctrl+C/Ctrl+X/Ctrl+A 等原生编辑命令的控件。
@@ -127,10 +127,16 @@ function focusFirstEditableAfter(anchor) {
   return next || null;
 }
 
-/** 当前最上层的弹窗遮罩（按 DOM 顺序取最后一个「未在退场」的）。 */
+/** 从登记过的遮罩中按层号、同层 DOM 顺序选顶层；包含技能设置与白名单。 */
 function __topModalOverlay() {
-  const all = document.querySelectorAll('.model-modal-overlay:not(.closing)');
-  return all.length ? all[all.length - 1] : null;
+  let top = null;
+  let topZ = -Infinity;
+  for (const overlay of document.body.children) {
+    if (!__focusTraps.has(overlay) || overlay.classList.contains('closing') || !overlay.getClientRects().length) continue;
+    const z = Number(getComputedStyle(overlay).zIndex) || 0;
+    if (z >= topZ) { top = overlay; topZ = z; }
+  }
+  return top;
 }
 /** overlay 内可见且可聚焦的元素（tabindex="-1" 与隐藏节点排除）。 */
 function __focusablesIn(overlay) {
@@ -393,11 +399,7 @@ function modelModalShell({ head, body, foot = '', danger = false, closeOnBackdro
   // 只让"最上层"的弹窗响应 Esc：弹窗可以叠（模型选择 → 添加模型）
   overlay._onKey = onKey;
   overlay._prevFocus = prevFocus;
-  const isTopmost = () => {
-    const all = $$('.model-modal-overlay');
-    return all[all.length - 1] === overlay;
-  };
-  const keyHandler = (e) => { if (isTopmost()) onKey(e); };
+  const keyHandler = (e) => { if (__topModalOverlay() === overlay) onKey(e); };
   overlay._keyHandler = keyHandler;
   // 第三参 true = 捕获阶段：先于所有冒泡监听器（含 14-chrome 的关全屏页）执行
   document.addEventListener('keydown', keyHandler, true);
@@ -2305,12 +2307,12 @@ async function openWhitelistPicker(kind) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="选择${isGroups ? '群' : '好友'}">
       <div class="modal-head">选择${isGroups ? '群' : '好友'}（已选 ${selected.size} 个）</div>
       <div class="modal-list">
         ${list.map((g) => `
           <label class="pick-item">
-            <input type="checkbox" value="${esc(g.id)}" ${selected.has(g.id) ? 'checked' : ''} />
+            <input class="sw" type="checkbox" value="${esc(g.id)}" ${selected.has(g.id) ? 'checked' : ''} />
             <span>${esc(g.name)}</span>
             <span class="muted">${esc(g.id)}</span>
           </label>`).join('')}
@@ -2324,13 +2326,16 @@ async function openWhitelistPicker(kind) {
   // 手搓遮罩也要纳入焦点陷阱：自动登记只认 .model-modal-overlay，
   // 这个弹窗用的是 .modal-overlay，不登记的话 Tab 能跑出弹窗到背后的设置页。
   registerFocusTrap(overlay);
+  const previousFocus = document.activeElement;
+  __focusablesIn(overlay)[0]?.focus({ preventScroll: true });
   const closePicker = () => {
     document.removeEventListener('keydown', onPickerEsc, true);
     unregisterFocusTrap(overlay);
     overlay.parentNode?.removeChild(overlay);
+    if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
   };
   const onPickerEsc = (e) => {
-    if (e.key !== 'Escape') return;
+    if (e.key !== 'Escape' || __topModalOverlay() !== overlay) return;
     e.preventDefault(); e.stopPropagation(); closePicker();
   };
   document.addEventListener('keydown', onPickerEsc, true);

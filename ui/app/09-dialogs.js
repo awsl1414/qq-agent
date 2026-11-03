@@ -104,7 +104,7 @@ function qaPrompt(...args) {
     head: title || QA_DEFAULTS.prompt.title,
     body:
       `<div class="qa-dialog-body">${qaMsgToHtml(message)}</div>` +
-      `<input class="qa-input" type="text" placeholder="${esc(placeholder || '')}" value="${esc(defaultValue || '')}" />`,
+      `<input class="qa-input" type="text" aria-label="${esc(title || QA_DEFAULTS.prompt.title)}" placeholder="${esc(placeholder || '')}" value="${esc(defaultValue || '')}" />`,
     foot:
       `<button class="btn qa-cancel" type="button">${esc(cancelText)}</button>` +
       `<button class="btn btn-primary qa-ok" type="button">${esc(confirmText)}</button>`

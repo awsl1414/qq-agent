@@ -1630,14 +1630,15 @@ function renderOnebotSection(c) {
  * 拉取技能/插件列表（内存态）。**不含磁盘重扫**，想让新放入的目录
  * 被看到，走 rescanSkills()。
  */
-async function loadSkillsStatus() {
+async function loadSkillsStatus({ throwOnError = false } = {}) {
   try {
     const data = await api('/api/skills');
     state.skills = data.skills || [];
     state.skillsSummary = data.summary || {};
     state.uninstalledSkills = data.uninstalled || [];
-  } catch {
-    /* 取不到就保持原值，不覆盖成空列表造成"条目都不见了"的假象 */
+  } catch (error) {
+    // 后台预热保留旧列表；首次加载与用户刷新必须把失败交给页面显示，不能伪装为空。
+    if (throwOnError) throw error;
   }
 }
 
@@ -1648,7 +1649,7 @@ async function loadSkillsStatus() {
  * 现在先 POST /api/skills/reload 让后端真正重扫；接口不可用时退回
  * 普通列表拉取（不比旧行为差）。
  */
-async function rescanSkills({ quiet = false } = {}) {
+async function rescanSkills({ quiet = false, throwOnError = false } = {}) {
   try {
     const r = await api('/api/skills/reload', { method: 'POST' });
     if (r && r.skills) {
@@ -1664,7 +1665,7 @@ async function rescanSkills({ quiet = false } = {}) {
   } catch (e) {
     console.warn('[skill] 重扫请求失败：', e?.message || e);
   }
-  await loadSkillsStatus();
+  await loadSkillsStatus({ throwOnError });
   return null;
 }
 
@@ -1743,7 +1744,7 @@ function renderSkillSettingsModal(skill) {
     } else {
       input = `<input type="${isSecret ? 'password' : 'text'}" id="${id}" data-key="${esc(key)}" data-type="string" value="${isSecret ? '' : esc(v)}" placeholder="${isSecret ? (v ? '已设置（留空 = 不修改）' : '未设置') : ''}" autocomplete="off" />`;
     }
-    return `<div class="${cls}"><label>${label}${d.secret ? ' 🔒' : ''}</label>${input}${hint}</div>`;
+    return `<div class="${cls}"><label for="${id}">${label}${d.secret ? ' 🔒' : ''}</label>${input}${hint}</div>`;
   };
 
   return { html: `<div class="modal skill-modal" role="dialog" aria-modal="true" aria-label="${esc(skill.name)} 设置">
@@ -1844,24 +1845,31 @@ function openPluginPanel(url, title) {
     </div>
   </div>`;
   document.body.appendChild(layer);
+  const previousFocus = document.activeElement;
+  registerFocusTrap(layer);
+  layer.querySelector('#ppanel-x').focus({ preventScroll: true });
 
   let closed = false;
   // 关掉时要把探活定时器一起清掉，否则弹层已移除、回调还在跑（且会往已脱离的节点写）
   let probeTimer = 0;
+  let frameDocument = null;
   const close = () => {
     if (closed) return;
     closed = true;
     if (probeTimer) clearTimeout(probeTimer);
     document.removeEventListener('keydown', onEsc, true);
+    frameDocument?.removeEventListener('keydown', onEsc, true);
     // 摘掉面板命令桥（onPanelMsg 在下方定义；close 只在用户交互时调用，晚于它初始化）
     try { window.removeEventListener('message', onPanelMsg); } catch { /* 未定义时忽略 */ }
+    unregisterFocusTrap(layer);
     layer.remove();
+    if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
   };
   // 挂 document 捕获、且**在设置弹窗的 onEsc 之后注册**，那一层会先跑，
-  // 它靠 `document.querySelector('.plugin-panel-overlay')` 判断上面还压着一层而让路，
+  // 它通过统一焦点管理器判断上面还压着一层而让路，
   // 于是 Esc 只关这一层（见 openSkillSettings 里的 onEsc）。
   const onEsc = (e) => {
-    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+    if (e.key === 'Escape' && __topModalOverlay() === layer) { e.preventDefault(); e.stopPropagation(); close(); }
   };
   document.addEventListener('keydown', onEsc, true);
 
@@ -1881,6 +1889,10 @@ function openPluginPanel(url, title) {
   };
   frame.addEventListener('load', () => {
     if (probeTimer) { clearTimeout(probeTimer); probeTimer = 0; }
+    // iframe 内的键盘事件不会冒泡到宿主 document；同源面板也要能用 Esc 退出。
+    frameDocument?.removeEventListener('keydown', onEsc, true);
+    frameDocument = frame.contentDocument;
+    frameDocument?.addEventListener('keydown', onEsc, true);
     fallback.hidden = !looksLikeErrorPage();
   });
   probeTimer = setTimeout(() => {
@@ -1950,11 +1962,11 @@ function openSkillSettings(skillId) {
     if (closed) return;
     closed = true;
     document.removeEventListener('keydown', onEsc, true);
+    unregisterFocusTrap(overlay);
+    overlay.remove();
     if (prevFocus && typeof prevFocus.focus === 'function' && prevFocus.isConnected) {
       try { prevFocus.focus({ preventScroll: true }); } catch { /* ignore */ }
     }
-    unregisterFocusTrap(overlay);
-    overlay.remove();
   };
   // ⚠️ Esc 走捕获阶段挂 document，而不是挂在 overlay 上：挂 overlay 时只在
   //    "焦点在弹窗内"才收得到；挂 document 捕获则先于 14-chrome.js 的冒泡处理器
@@ -1963,7 +1975,7 @@ function openSkillSettings(skillId) {
     if (e.key === 'Escape') {
       // 上面还压着一层插件页面弹层时让路：Esc 该先关那一层（它自己的处理器负责），
       // 否则一次 Esc 会连设置弹窗一起关掉，而用户只是想从查看器退回来。
-      if (document.querySelector('.plugin-panel-overlay')) return;
+      if (__topModalOverlay() !== overlay) return;
       e.preventDefault(); e.stopPropagation(); close();
     }
   };
@@ -2402,8 +2414,13 @@ async function loadModulePage(kind, { rescan = false, fresh = false } = {}) {
     try { box.innerHTML = renderModuleSkeleton(meta); } catch { /* 骨架画不出来也不影响后续渲染 */ }
   }, 120);
   try {
-    if (rescan) await rescanSkills({ quiet: true });
-    else await loadSkillsStatus();
+    if (rescan) await rescanSkills({ quiet: true, throwOnError: true });
+    else await loadSkillsStatus({ throwOnError: true });
+  } catch (error) {
+    box.innerHTML = `<div class="empty-hint" role="alert">${esc(meta.title)}加载失败：${esc(error.message)}<br><br>`
+      + '<button class="btn btn-small" type="button" data-module-retry>重试</button></div>';
+    box.querySelector('[data-module-retry]').addEventListener('click', () => loadModulePage(kind, { fresh: true }));
+    return;
   } finally {
     settled = true;
     clearTimeout(skelTimer);
