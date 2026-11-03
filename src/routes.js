@@ -40,12 +40,62 @@ import { getGlobalBlocklist, updateGlobalBlocklist, FIXED_PRICE_FEED_URL } from 
 import { listAccounts, removeAccount, loginAccount, publishModule, verifyInstallCodes, downloadModuleZip, listMarketItems, clearMarketListCache, listPersonaItems, fetchPersonaPrompt } from './market.js';
 import { importModules } from './module-import.js';
 import { applyImport, rollbackImport, listBackups } from './migrate.js';
+import * as backup from './backup/index.js';
+import { encryptCredential } from './backup/crypto.js';
+import { TARGET_TYPES } from './backup/targets/index.js';
+
 import { listBundleOptions, exportBundle, inspectBundle, moduleZipOf, dataDirOf, discardBundle } from './bundle.js';
 import { SKILLS_DIR, PLUGINS_DIR, isBuiltinModuleDir } from './plugin-loader.js';
 import { toOpenAiTools, executeTool } from './tools.js';
 // 探测结果的"可对外"视图：删掉两枚令牌，只留有无标记。
 // 令牌不越过 HTTP 边界的保证在这个纯函数里，路由只负责调它。
 import { publicView as protocolDetectView } from './protocol-detect.js';
+
+const BACKUP_SECRET_FIELDS = ['credentials', 'secretAccessKeyCipher', 'accessKeyId', 'username', 'password', 'secretAccessKey'];
+const BACKUP_TARGET_FIELDS = ['id', 'name', 'type', 'enabled', 'dir', 'url', 'endpoint', 'region', 'bucket', 'forcePathStyle', 'categories'];
+function publicBackupConfig(config = {}) {
+  return { ...config, targets: (config.targets || []).map((target) => {
+    const out = Object.fromEntries(BACKUP_TARGET_FIELDS.filter((key) => key in target).map((key) => [key, target[key]]));
+    for (const key of BACKUP_SECRET_FIELDS) {
+      delete out[key];
+      out['has' + key[0].toUpperCase() + key.slice(1)] = Boolean(target[key]);
+    }
+    return out;
+  }) };
+}
+function prepareBackupConfig(patch = {}) {
+  const current = getConfig().backup || {};
+  const out = {};
+  for (const key of ['enabled', 'includeSecrets']) if (key in patch) {
+    if (typeof patch[key] !== 'boolean') throw new Error('备份开关必须是布尔值');
+    out[key] = patch[key];
+  }
+  for (const key of ['intervalHours', 'retention']) if (key in patch) {
+    if (!Number.isFinite(patch[key]) || patch[key] <= 0 || (key === 'retention' && !Number.isInteger(patch[key]))) throw new Error('备份间隔和保留数量必须为正数');
+    out[key] = patch[key];
+  }
+  if ('targets' in patch) {
+    if (!Array.isArray(patch.targets)) throw new Error('targets 必须是数组');
+    const ids = new Set();
+    out.targets = patch.targets.map((target) => {
+      if (!target || !target.id || ids.has(target.id) || !TARGET_TYPES.includes(target.type)) throw new Error('备份目标类型或 ID 无效');
+      ids.add(target.id);
+      const previous = (current.targets || []).find((item) => item.id === target.id && item.type === target.type) || {};
+      const entry = {};
+      for (const key of BACKUP_TARGET_FIELDS) if (key in target) entry[key] = target[key];
+      for (const key of ['url', 'endpoint']) if (entry[key]) {
+        const url = new URL(entry[key]);
+        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('目标 URL 不允许内嵌凭据');
+      }
+      for (const key of ['username', 'accessKeyId']) entry[key] = typeof target[key] === 'string' && target[key] ? target[key] : previous[key] || '';
+      // 空输入表示保留已存凭据，客户端永远不需要拿到密文再回传。
+      entry.credentials = target.password ? encryptCredential(String(target.password)) : previous.credentials || '';
+      entry.secretAccessKeyCipher = target.secretAccessKey ? encryptCredential(String(target.secretAccessKey)) : previous.secretAccessKeyCipher || '';
+      return entry;
+    });
+  }
+  return out;
+}
 
 // 更新源健康状态：远端 version.json 落后于当前安装版本时，「hasUpdate=false」和
 // 「已经是最新」长得一模一样，源荒废了也不会有人发现。同一进程里只告警一次，
@@ -146,7 +196,49 @@ export function createRoutes(deps) {
     };
   };
 
+  const backupHooks = {
+    storeInvalidate: (key) => store?.invalidate(key),
+    memoryInvalidate: (key) => memory?.invalidate(key),
+    rebuildChat: async (chatKey) => {
+      const providers = skillManager.getCapabilityProviders('memory.rebuild', skillRuntimeContext());
+      return providers.length ? providers[0].fn({ chatKey }) : null;
+    }
+  };
+  const sanitizedConfig = (config) => ({ ...sanitizeConfig(config), backup: publicBackupConfig(config.backup) });
   return [
+    // app.js 在路由分发前统一执行 authorize 和 originAllowed，与其他写接口相同。
+    { method: 'GET', pattern: '/api/backup/config', handler: async ({ res, json }) => json(res, 200, { ok: true, config: publicBackupConfig(getConfig().backup) }) },
+    { method: 'POST', pattern: '/api/backup/config', handler: async ({ req, res, json }) => {
+      try {
+        const patch = prepareBackupConfig(await bodyOf(req));
+        updateConfig({ backup: patch });
+        emit('status', { configUpdated: true });
+        return json(res, 200, { ok: true, config: publicBackupConfig(getConfig().backup) });
+      } catch { return json(res, 400, { ok: false, error: '备份配置无效，保存失败' }); }
+    } },
+    { method: 'GET', pattern: '/api/backup/targets', handler: async ({ res, json }) => json(res, 200, { ...backup.getStatus(), rollbacks: listBackups() }) },
+    { method: 'GET', pattern: '/api/backup/list', handler: async ({ res, json, url }) => {
+      const targetId = url.searchParams.get('targetId');
+      return json(res, 200, await backup.listBackups({ targetIds: targetId ? [targetId] : null }));
+    } },
+    ...['test', 'run', 'preview', 'restore', 'rollback'].map((action) => ({
+      method: 'POST', pattern: '/api/backup/' + action,
+      handler: async ({ req, res, json }) => {
+        const body = await bodyOf(req);
+        try {
+          let result;
+          if (action === 'test') result = await backup.testTarget(String(body.targetId || ''));
+          if (action === 'run') result = await backup.runBackup({ targetIds: body.targetIds });
+          if (action === 'preview') result = await backup.restorePreview({ targetId: body.targetId, key: body.key });
+          if (action === 'restore') result = await backup.runRestore({ targetId: body.targetId, key: body.key, hooks: backupHooks });
+          if (action === 'rollback') result = await rollbackImport(body.backupId, backupHooks);
+          const targetErrors = (result.targets || []).filter((target) => !target.ok)
+            .map((target) => `${target.id}：${target.error || '操作失败'}`).join('；');
+          if (action === 'run' && result.ok) result = { ...result, partial: Boolean(targetErrors) };
+          return json(res, result.ok ? 200 : 400, result.ok ? result : { ...result, error: result.error || result.message || targetErrors || '备份操作失败' });
+        } catch { return json(res, 400, { ok: false, error: '备份操作失败，请检查目标配置' }); }
+      }
+    })),
     // ── 系统自检（self-doctor 插件提供的 doctor.report 能力）────────────────
     // 三条路由都是"能力代理"：核心不 import 那个插件，靠能力名问它要结果，
     // 关掉 self-doctor 后这些接口会明确报"未启用"，而不是 500 或空数据。
@@ -3229,7 +3321,7 @@ export function createRoutes(deps) {
     // ── 配置 ─────────────────────────────────────────────────────────
     {
       method: 'GET', pattern: '/api/config',
-      handler: async ({ res, json }) => json(res, 200, sanitizeConfig(getConfig()))
+      handler: async ({ res, json }) => json(res, 200, sanitizedConfig(getConfig()))
     },
     {
       // 完整系统提示词预览：按**当前**插件/技能/工具启用状态组装（没开的不出现），
@@ -3766,7 +3858,7 @@ export function createRoutes(deps) {
           ok: true,
           removed: removable,
           skipped: ids.filter((id) => installed.has(id)),
-          config: sanitizeConfig(getConfig())
+          config: sanitizedConfig(getConfig())
         });
       }
     },
@@ -3834,7 +3926,7 @@ export function createRoutes(deps) {
           skills: skillManager.list(context),
           summary: skillManager.summary(context),
           capabilities: skillManager.capabilities.list().sort(),
-          config: sanitizeConfig(getConfig())
+          config: sanitizedConfig(getConfig())
         });
       }
     },
@@ -3883,7 +3975,7 @@ export function createRoutes(deps) {
           //    直接回 getSkillConfig（明文）会在保存一次设置后把
           //    apiKey / Cookie 原文发回浏览器，与 GET 列表的脱敏口径相反。
           settings: skillManager.settingsView(id),
-          config: sanitizeConfig(getConfig())
+          config: sanitizedConfig(getConfig())
         });
       }
     },
@@ -3927,6 +4019,7 @@ export function createRoutes(deps) {
       method: 'POST', pattern: '/api/config',
       handler: async ({ req, res, json }) => {
         const patch = await readBody(req);
+        if (patch.backup) patch.backup = prepareBackupConfig(patch.backup);
         const next = updateConfig(patch);
         store.setMaxPerChat(next.store?.maxMessagesPerChat ?? 0);
         sessions?.setKeepFiles?.(next.store?.keepSessionFiles ?? 0);
@@ -3943,7 +4036,7 @@ export function createRoutes(deps) {
         // ⚠️ 必须脱敏：updateConfig 返回的是内存里的活配置对象，含明文 apiKey /
         //    accessToken / dshProviderKeys。GET /api/config 一直是脱敏的，
         //    这里漏掉会让"任何一次保存设置"把全部明文密钥回传给浏览器。
-        return json(res, 200, { ok: true, config: sanitizeConfig(next) });
+        return json(res, 200, { ok: true, config: sanitizedConfig(next) });
       }
     },
     {

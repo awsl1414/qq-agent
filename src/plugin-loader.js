@@ -1131,7 +1131,14 @@ export function watchPlugins({ log = console.log, onReload, roots: rootsOpt = nu
 
   for (const root of roots) {
     try {
-      watchers.push(fs.watch(root, { recursive: true }, (_e, filename) => scheduleReload(filename)));
+      const watcher = fs.watch(root, { recursive: true }, (_e, filename) => scheduleReload(filename));
+      // 防御操作系统在监听建立后报告的权限/目录失效：这些异步 error 不会
+      // 被外层 try/catch 接住，缺少监听器会让 EventEmitter 直接终止进程。
+      watcher.on('error', (error) => {
+        try { log(`[skill] 目录监听失效 ${root}：${error?.message ?? error}（请手动刷新扩展以重建监听）`); }
+        catch { /* 日志出口故障不能让 watcher 的错误处理再次抛出 */ }
+      });
+      watchers.push(watcher);
     } catch (error) {
       log(`[skill] 无法监听 ${root}：${error?.message ?? error}`);
     }

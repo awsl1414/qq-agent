@@ -34,6 +34,8 @@ import { initPriceFeed, stopPriceFeed } from './price-feed.js';
 import { startTelemetryLoop, stopTelemetryLoop } from './telemetry.js';
 import { startCacheWarm, loadPersistedPrefix, seedPrefixFromSessions, warmOnce, markCurrentShapeWarmed } from './cache-warm.js';
 import { diskPressure, diskPressureText } from './disk-space.js';
+import { runBackup, startBackupOperations, stopBackupOperations } from './backup/index.js';
+import { start as startBackupSchedule, stop as stopBackupSchedule } from './backup/schedule.js';
 import { loadPlugins, watchPlugins, setOnebotClient, PLUGINS_DIR, SKILLS_DIR } from './plugin-loader.js';
 // 工具集批量静默期：重扫期间 N 个插件会逐个注册工具，中间态一律不发给模型，
 // 扫描结束一次性生效。详见 tool-registry.js「批量加载静默期」注释。
@@ -2181,6 +2183,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     // 赋值给外层 let，不能用 const（会遮蔽，stop() 里的 clearInterval 永远清不到）
     diskPatrolTimer = setInterval(diskCheck, 60 * 60 * 1000);
     diskPatrolTimer.unref?.();
+    startBackupOperations();
+    startBackupSchedule({ runBackup, getConfig });
     log(`OneBot 协议端: ws=${getConfig().protocol?.wsUrl} http=${getConfig().protocol?.httpUrl}`);
     log(`模型: ${getConfig().api.model || '（未设置，请在设置里选择）'} @ ${getConfig().api.baseUrl}`);
     return port;
@@ -2249,6 +2253,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   }
 
   async function stop() {
+    stopBackupSchedule();
+    await stopBackupOperations();
     // 先停掉热重载 watcher：否则 stop() 之后文件变动仍会触发重载 + 广播
     try { pluginWatcher?.close?.(); } catch { /* ignore */ }
     pluginWatcher = null;

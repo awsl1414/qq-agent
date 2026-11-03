@@ -9264,3 +9264,18 @@ input.mig-input:focus-visible,
 .uc-bar-row.contrast .uc-name { color: var(--text); }
 .uc-bar-row.contrast .uc-bar-fill { background: var(--muted); }
 .up-sumline-note { color: var(--faint); }
+
+/* 让短备份表单也有足够滚动空间，菜单能把分区标题对齐到面板顶部。 */
+#settings-form .set-card:has(#backup-panel) { min-height: 100vh; }
+
+/* 原生 fieldset 的 min-content 宽度与长备份路径不能撑开窄屏设置页。 */
+#backup-panel, #backup-panel fieldset, #backup-panel .field { min-width: 0; }
+#backup-panel { overflow-wrap: anywhere; color: var(--text); }
+#backup-panel fieldset { margin: 1em 0; }
+#backup-panel .checkbox-row { display: flex; align-items: center; gap: .5em; }
+#backup-panel .checkbox-row input.sw { flex-shrink: 0; }
+#backup-panel .backup-actions, #backup-rollbacks { display: flex; flex-wrap: wrap; gap: .5em; }
+#backup-panel .backup-file { display: flex; align-items: center; flex-wrap: wrap; gap: .5em; }
+#backup-panel .backup-file span { flex: 1; min-width: 0; }
+#backup-panel .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+#backup-panel input, #backup-panel select { max-width: 100%; min-width: 0; }

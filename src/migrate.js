@@ -15,6 +15,7 @@
 //                导入时按 memory.js 的同一套规则拆成每成员文件。
 //   统计类       cost-guard.json（相加）、telemetry-totals.json（相加）、
 //                usage-daily.json（仅补缺：目标没有的"天"才导入）
+//   reminders.json / stickers.json 按 id 补缺，同 id 保留本机数据
 //
 // 明确不搬的（搬了也是脏数据 / 风险太高）：
 //   memory-v2/    messages 的派生物（长时索引）。导入后按会话全量重建，
@@ -23,7 +24,7 @@
 //   sessions/     运行档案（纯历史记录，可再生价值低）。
 //   *-cache*.json / *.lock / window-state / telemetry.json / usage-today.json
 //                 缓存、运行态、本机状态。
-//   semantic-cards/ cross-turn/ plugin-data/ stickers.json  资产类。
+//   semantic-cards/ cross-turn/ plugin-data/  资产类。
 //
 // 安全机制：
 //   1. 导入前把每个将被改动/覆盖的文件备份到 data/import-backups/<ts>/，
@@ -43,6 +44,10 @@ import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { logger } from './logger.js';
 import { atomicWriteJson, atomicWriteText } from './atomic-write.js';
+
+const REMINDERS_FILE = 'reminders.json';
+const STICKERS_FILE = 'stickers.json';
+const MERGE_CATEGORIES = ['reminders', 'stickers'];
 
 const MESSAGES_DIR = path.join(DATA_DIR, 'messages');
 const MEMORY_DIR = path.join(DATA_DIR, 'memory');
@@ -156,7 +161,7 @@ export function scanSource(sourceDir) {
       { name: 'config.json', reason: '含身份字段（selfId/apiKey/provider），整份导入等于换魂；字段级合并放二期' },
       { name: 'sessions/', reason: '运行档案（纯历史记录），一期不搬' },
       { name: '各缓存与运行态', reason: 'cache-warm-prefix / session-index-cache / price-feed / window-state / *.lock / telemetry / usage-today' },
-      { name: '资产类', reason: 'semantic-cards / cross-turn / plugin-data / stickers，二期再议' }
+      { name: '资产类', reason: 'semantic-cards / cross-turn / plugin-data，二期再议' }
     ]
   };
 
@@ -229,7 +234,9 @@ export function scanSource(sourceDir) {
   const statDefs = [
     { id: 'costGuard', file: 'cost-guard.json', label: '成本守卫（按天按群）', mode: 'add' },
     { id: 'telemetryTotals', file: 'telemetry-totals.json', label: '调用与工具统计（累计）', mode: 'add' },
-    { id: 'usageDaily', file: 'usage-daily.json', label: '每日用量（仅补缺：目标缺失的天才导入）', mode: 'fill' }
+    { id: 'usageDaily', file: 'usage-daily.json', label: '每日用量（仅补缺：目标缺失的天才导入）', mode: 'fill' },
+    { id: 'usageArchivedDays', file: 'usage-archived-days.json', label: '归档用量（按天补缺）', mode: 'fill' },
+    { id: 'usageToday', file: 'usage-today.json', label: '当日用量（归档后按天补缺）', mode: 'fill' }
   ];
   for (const def of statDefs) {
     const sp = path.join(abs, def.file);
@@ -242,6 +249,15 @@ export function scanSource(sourceDir) {
     });
   }
 
+  for (const category of MERGE_CATEGORIES) {
+    const file = path.join(abs, category === 'reminders' ? REMINDERS_FILE : STICKERS_FILE);
+    const raw = readJson(file);
+    const entries = category === 'reminders' ? raw?.reminders : raw;
+    const valid = Array.isArray(entries);
+    const list = valid ? entries.filter((entry) => entry && typeof entry === 'object') : [];
+    result[category] = { available: valid, count: list.length, total: list.length };
+    if (category === 'reminders') result[category].pending = list.filter((r) => r && !r.fired).length;
+  }
   return result;
 }
 
@@ -361,7 +377,7 @@ function overwriteChatState(sourceState) {
 // ── 群友印象导入 ─────────────────────────────────────────────────────────
 
 /** 按成员文件合并印象（按 content 去重，createdAt 取更早者）。返回 { members, added }。 */
-function mergeMemoryChat(srcChatDir, dstChatDir) {
+function mergeMemoryChat(srcChatDir, dstChatDir, beforeWrite) {
   let members = 0, added = 0;
   let files = [];
   try {
@@ -378,7 +394,8 @@ function mergeMemoryChat(srcChatDir, dstChatDir) {
     fs.mkdirSync(dstChatDir, { recursive: true });
     if (!dstMember || !Array.isArray(dstMember.impressions)) {
       // 目标没有这个成员：直接复制（置已读不适用这里；印象无已读概念）
-      fs.copyFileSync(path.join(srcChatDir, f), dstPath);
+      beforeWrite(dstPath);
+      atomicWrite(dstPath, fs.readFileSync(path.join(srcChatDir, f), 'utf8'));
       members += 1;
       added += Array.isArray(srcMember.impressions) ? srcMember.impressions.length : 0;
       continue;
@@ -395,6 +412,7 @@ function mergeMemoryChat(srcChatDir, dstChatDir) {
     if (n) {
       dstMember.impressions.sort((a, b) => (Number(a?.createdAt) || 0) - (Number(b?.createdAt) || 0));
       dstMember.updatedAt = Math.max(Number(dstMember.updatedAt) || 0, Number(srcMember.updatedAt) || 0);
+      beforeWrite(dstPath);
       atomicWrite(dstPath, dstMember);
       added += n;
     }
@@ -441,7 +459,7 @@ function legacyImpressionEntries(file) {
 }
 
 /** 把旧版单文件里的印象并入目标的每成员文件（按 content 去重）。返回 { members, added }。 */
-function mergeLegacyMemoryFile(srcFile, dstChatDir) {
+function mergeLegacyMemoryFile(srcFile, dstChatDir, beforeWrite) {
   const entries = legacyImpressionEntries(srcFile);
   if (!entries.length) return { members: 0, added: 0 };
   const groups = new Map();      // 成员文件名 -> { userId, name, entries }
@@ -457,6 +475,7 @@ function mergeLegacyMemoryFile(srcFile, dstChatDir) {
     const dstMember = readJson(dstPath, null);
     if (!dstMember || !Array.isArray(dstMember.impressions)) {
       // 目标没有这个成员：整份建出来（与目录形态的"直接复制"等价）
+      beforeWrite(dstPath);
       atomicWrite(dstPath, {
         userId: g.userId,
         name: g.name || g.userId,
@@ -478,6 +497,7 @@ function mergeLegacyMemoryFile(srcFile, dstChatDir) {
     if (n) {
       dstMember.impressions.sort((a, b) => (Number(a?.createdAt) || 0) - (Number(b?.createdAt) || 0));
       dstMember.updatedAt = Math.max(Number(dstMember.updatedAt) || 0, Date.now());
+      beforeWrite(dstPath);
       atomicWrite(dstPath, dstMember);
       added += n;
     }
@@ -579,6 +599,11 @@ function resetMemoryV2ForChat(chatKey) {
 
 // ── 执行导入 ─────────────────────────────────────────────────────────────
 
+async function reloadStickers(hooks) {
+  if (hooks.stickersReload) await hooks.stickersReload();
+  else logger.warn('[migrate] 磁盘已更新但运行中的表情库仍是旧的，需重启或重新同步才能生效');
+}
+
 let importInFlight = false;
 
 /**
@@ -586,9 +611,9 @@ let importInFlight = false;
  * @param {string} sourceDir 源 data 目录
  * @param {object} selection 用户勾选：
  *   { messages: { chatKeys: string[], strategy: 'merge'|'overwrite' },
- *     memory: boolean, stats: { costGuard, telemetryTotals, usageDaily } }
+ *     memory: boolean, reminders: boolean, stickers: boolean, stats: { costGuard, telemetryTotals, usageDaily } }
  * @param {object} hooks 热生效回调（由 routes 层注入）：
- *   { storeInvalidate(chatKey), rebuildChat(chatKey) -> { mode, ... }|Promise }
+ *   { remindersReload(), stickersReload(), storeInvalidate(chatKey), rebuildChat(chatKey) -> { mode, ... }|Promise }
  */
 export async function applyImport(sourceDir, selection = {}, hooks = {}) {
   // 重入闸：导入是"备份 → 覆盖 → 回填缓存"的多步长流程，并发两次会把
@@ -623,6 +648,14 @@ async function applyImportInner(sourceDir, selection = {}, hooks = {}) {
     ok: true, backupId, backupDir: path.relative(DATA_DIR, backupDir).replace(/\\/g, '/'),
     messages: [], memory: null, stats: {}, rebuilt: []
   };
+  const recordAction = (action) => {
+    // 持久化失败就停止该文件的写入；不能产生没有回滚依据的修改。
+    manifest.actions.push(action);
+    try { atomicWrite(path.join(backupDir, 'manifest.json'), manifest); }
+    catch (error) { manifest.actions.pop(); throw error; }
+  };
+  try { atomicWrite(path.join(backupDir, 'manifest.json'), manifest); }
+  catch (error) { return { ...report, ok: false, error: `无法保存回滚清单：${error?.message ?? error}` }; }
 
   // ── 1. 会话存档 ──
   const msgSel = selection.messages || {};
@@ -639,7 +672,7 @@ async function applyImportInner(sourceDir, selection = {}, hooks = {}) {
     }
     try {
       const bk = backupFile(backupDir, dstFile);
-      manifest.actions.push({ type: 'messages', chatKey: item.chatKey, strategy, target: 'messages/' + path.basename(dstFile), backup: bk.backup || null });
+      recordAction({ type: 'messages', chatKey: item.chatKey, strategy, target: 'messages/' + path.basename(dstFile), backup: bk.backup || null });
 
       const targetState = loadChatFile(dstFile);
       let nextState;
@@ -686,29 +719,17 @@ async function applyImportInner(sourceDir, selection = {}, hooks = {}) {
           const srcChatDir = path.join(abs, 'memory', safeChat);
           const srcLegacyFile = path.join(abs, 'memory', `${safeChat}.json`);
           const dstChatDir = path.join(MEMORY_DIR, safeChat);
-          // 备份目标目录里将被触碰的文件（整目录备份，简单可靠）；
-          // 目标原本没有的文件在合并后补记 backup:null 动作，回滚时可删除。
-          const before = new Set();
-          try {
-            if (fs.existsSync(dstChatDir)) {
-              for (const f of fs.readdirSync(dstChatDir)) {
-                before.add(f);
-                const bk = backupFile(backupDir, path.join(dstChatDir, f));
-                if (bk.backup) manifest.actions.push({ type: 'memory', chatKey: c.chatKey, target: `memory/${safeChat}/${f}`, backup: bk.backup });
-              }
-            }
-          } catch { /* ignore */ }
-          const r = mergeMemoryChat(srcChatDir, dstChatDir);                 // 新版：每成员文件
+          const recorded = new Set();
+          const beforeWrite = (file) => {
+            if (recorded.has(file)) return;
+            const bk = backupFile(backupDir, file);
+            recordAction({ type: 'memory', chatKey: c.chatKey, target: path.relative(DATA_DIR, file).replace(/\\/g, '/'), backup: bk.backup || null });
+            recorded.add(file);
+          };
+          const r = mergeMemoryChat(srcChatDir, dstChatDir, beforeWrite);
           const l = fs.existsSync(srcLegacyFile)                              // 旧版：每会话单文件
-            ? mergeLegacyMemoryFile(srcLegacyFile, dstChatDir)
+            ? mergeLegacyMemoryFile(srcLegacyFile, dstChatDir, beforeWrite)
             : { members: 0, added: 0 };
-          try {
-            for (const f of fs.readdirSync(dstChatDir)) {
-              if (!before.has(f)) {
-                manifest.actions.push({ type: 'memory', chatKey: c.chatKey, target: `memory/${safeChat}/${f}`, backup: null });
-              }
-            }
-          } catch { /* ignore */ }
           memSummary.chats += 1;
           memSummary.added += r.added + l.added;
           try { hooks.memoryInvalidate?.(c.chatKey); } catch { /* ignore */ }
@@ -717,7 +738,7 @@ async function applyImportInner(sourceDir, selection = {}, hooks = {}) {
           logger.warn('[migrate]', `群友印象导入失败（${c.chatKey}）：`, error?.message ?? error);
         }
       }
-      report.memory = { ok: true, ...memSummary };
+      report.memory = { ok: memSummary.failed === 0, ...memSummary };
     } catch (error) {
       report.memory = { ok: false, error: String(error?.message ?? error) };
     }
@@ -728,24 +749,36 @@ async function applyImportInner(sourceDir, selection = {}, hooks = {}) {
   const statTargets = {
     costGuard: 'cost-guard.json',
     telemetryTotals: 'telemetry-totals.json',
-    usageDaily: 'usage-daily.json'
+    usageDaily: 'usage-daily.json',
+    usageArchivedDays: 'usage-archived-days.json',
+    usageToday: 'usage-today.json'
   };
   for (const [key, fileName] of Object.entries(statTargets)) {
     if (!statSel[key]) continue;
     const srcFile = path.join(abs, fileName);
-    const dstFile = path.join(DATA_DIR, fileName);
+    // 单槽的当天计数不能覆盖本机正在累计的数据，转入按天归档作为补缺来源。
+    const targetName = key === 'usageToday' ? 'usage-archived-days.json' : fileName;
+    const dstFile = path.join(DATA_DIR, targetName);
     if (!fs.existsSync(srcFile)) continue;
     try {
-      const srcObj = readJson(srcFile, null);
+      let srcObj = readJson(srcFile, null);
+      if (!srcObj) throw new Error('源统计文件损坏或结构无效');
+      if (key === 'usageToday') {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(srcObj.dayKey || '')) throw new Error('源当日用量缺少日期');
+        srcObj = { days: { [srcObj.dayKey]: srcObj } };
+      }
       const dstObj = readJson(dstFile, null);
-      const bk = backupFile(backupDir, dstFile);
-      manifest.actions.push({ type: 'stats', file: fileName, target: fileName, backup: bk.backup || null });
+      // 多个源可能补入同一个归档文件，只保留恢复前的那份快照。
+      if (!manifest.actions.some((action) => action.target === targetName)) {
+        const bk = backupFile(backupDir, dstFile);
+        recordAction({ type: 'stats', file: fileName, target: targetName, backup: bk.backup || null });
+      }
       let detail = {};
       if (key === 'costGuard') {
         atomicWrite(dstFile, mergeCostGuard(srcObj, dstObj));
       } else if (key === 'telemetryTotals') {
         atomicWrite(dstFile, mergeTelemetryTotals(srcObj, dstObj));
-      } else if (key === 'usageDaily') {
+      } else {
         const r = mergeUsageDaily(srcObj, dstObj);
         atomicWrite(dstFile, r.out);
         detail = { filled: r.filled, skipped: r.skipped };
@@ -756,8 +789,59 @@ async function applyImportInner(sourceDir, selection = {}, hooks = {}) {
     }
   }
 
-  // ── 4. 落 manifest ──
-  try { atomicWrite(path.join(backupDir, 'manifest.json'), manifest); } catch { /* ignore */ }
+  // stickers-hidden.json 是本机软删除习惯，跨实例合并会隐藏对方的条目，语义不成立；后续单独处理。
+  // StickerManager.entries 是构造时加载的常驻缓存，写盘不会自动生效；由调用方注入 hook 刷新。
+  for (const category of MERGE_CATEGORIES) {
+    if (!selection[category]) continue;
+    const fileName = category === 'reminders' ? REMINDERS_FILE : STICKERS_FILE;
+    const sourceFile = path.join(abs, fileName);
+    const targetFile = path.join(DATA_DIR, fileName);
+    const detail = { ok: false, added: 0, total: 0, skipped: 0 };
+    report[category] = detail;
+    try {
+      const raw = readJson(sourceFile);
+      let sourceEntries = category === 'reminders' ? raw?.reminders : raw;
+      if (!Array.isArray(sourceEntries)) {
+        if (category === 'reminders') throw new Error('源文件不存在、损坏或结构无效');
+        logger.warn('[migrate] 表情源文件不存在、损坏或结构无效，按空数组处理');
+        sourceEntries = [];
+      }
+      const targetRaw = readJson(targetFile);
+      let targetEntries = category === 'reminders' ? targetRaw?.reminders : targetRaw;
+      if (category === 'stickers' && fs.existsSync(targetFile) && !Array.isArray(targetEntries)) {
+        logger.warn('[migrate] 表情目标文件损坏或结构无效，按空数组处理（写入前备份原文件）');
+        targetEntries = [];
+      }
+      if (fs.existsSync(targetFile) && !Array.isArray(targetEntries)) throw new Error('目标文件损坏或结构无效，拒绝覆盖');
+      // 只依赖 id 最小契约；保留原条目，字段归一化交给插件运行时，避免两套规则漂移。
+      const entryId = (entry) => String(category === 'stickers' ? (entry?.id || entry?.emoji_id || entry?.resId || '') : (entry?.id || '')).trim();
+      const merged = [...(targetEntries || [])];
+      const seen = new Set(merged.map(entryId));
+      for (const entry of sourceEntries) {
+        const id = entryId(entry);
+        if (!id || seen.has(id)) { detail.skipped += 1; continue; }
+        seen.add(id);
+        merged.push(entry);
+        detail.added += 1;
+      }
+      detail.total = merged.length;
+      const bk = backupFile(backupDir, targetFile);
+      recordAction({ type: category, target: fileName, backup: bk.backup || null });
+      if (category === 'stickers') atomicWrite(targetFile, merged);
+      else atomicWrite(targetFile, { ...(targetRaw || {}), reminders: merged });
+      if (category === 'reminders') await hooks.remindersReload?.();
+      else await reloadStickers(hooks);
+      detail.ok = true;
+    } catch (error) {
+      detail.error = String(error?.message ?? error);
+      report.ok = false;
+      logger.warn('[migrate]', category, detail.error);
+    }
+  }
+
+  report.ok = report.ok && report.messages.every((item) => item.ok)
+    && report.memory?.ok !== false && Object.values(report.stats).every((item) => item.ok);
+  if (!report.ok) report.error = '部分数据导入失败，已完成的修改可使用 backupId 回滚';
   logger.info('[migrate]', `导入完成：backup=${backupId}，messages=${report.messages.filter((m) => m.ok).length}，memory=${report.memory?.added ?? 0}`);
   return report;
 }
@@ -771,6 +855,13 @@ async function applyImportInner(sourceDir, selection = {}, hooks = {}) {
  * （不失效的话，内存里的合并结果会在下次写记忆时把回滚内容覆盖回去）。
  */
 export async function rollbackImport(backupId, hooks = {}) {
+  if (importInFlight) return { ok: false, error: '已有一个导入或回滚正在进行，请等它完成' };
+  importInFlight = true;
+  try { return await rollbackImportInner(backupId, hooks); }
+  finally { importInFlight = false; }
+}
+
+async function rollbackImportInner(backupId, hooks = {}) {
   const id = String(backupId || '').trim();
   const dir = path.join(BACKUP_ROOT, id);
   const manifest = readJson(path.join(dir, 'manifest.json'), null);
@@ -785,6 +876,8 @@ export async function rollbackImport(backupId, hooks = {}) {
   //   回滚看起来成功、实际被内存缓存悄悄撤销。
   const msgChats = new Set();
   const memChats = new Set();
+  let remindersTouched = false;
+  let stickersTouched = false;
   let restored = 0, removed = 0, failed = 0;
 
   for (const a of manifest.actions) {
@@ -794,7 +887,8 @@ export async function rollbackImport(backupId, hooks = {}) {
         const src = path.join(dir, a.backup);
         if (!fs.existsSync(src)) { failed += 1; continue; }
         fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.copyFileSync(src, target);
+        // 原文件即使损坏也须逐字节还原；原子写的底层同样接受 Buffer。
+        atomicWriteText(target, fs.readFileSync(src));
         restored += 1;
       } else {
         if (fs.existsSync(target)) {
@@ -812,6 +906,8 @@ export async function rollbackImport(backupId, hooks = {}) {
           }
         }
       }
+      if (a.type === 'stickers') stickersTouched = true;
+      if (a.type === 'reminders') remindersTouched = true;
       if (a.type === 'messages' && a.chatKey) msgChats.add(a.chatKey);
       if (a.type === 'memory' && a.chatKey) memChats.add(a.chatKey);
     } catch {
@@ -832,6 +928,18 @@ export async function rollbackImport(backupId, hooks = {}) {
     }
   }
 
+  if (remindersTouched) {
+    try { await hooks.remindersReload?.(); } catch (error) {
+      failed += 1;
+      logger.warn('[migrate] 提醒重新加载失败:', error?.message ?? error);
+    }
+  }
+  if (stickersTouched) {
+    try { await reloadStickers(hooks); } catch (error) {
+      failed += 1;
+      logger.warn('[migrate] 表情重新加载失败:', error?.message ?? error);
+    }
+  }
   const touchedChats = [...new Set([...msgChats, ...memChats])];
   logger.info('[migrate]', `回滚 ${id}：恢复 ${restored}，删除 ${removed}，失败 ${failed}`);
   return { ok: failed === 0, backupId: id, restored, removed, failed, touchedChats };

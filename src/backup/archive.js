@@ -6,8 +6,8 @@
 // 数据类别与打包/解包都复用 bundle.js / zip-build.js / zip-install.js，
 // 不另起一套分类或压缩实现。
 //
-// 包里永远没有 config.json 与 plugin-data/：这两处由 DATA_CATEGORIES 的
-// 白名单决定 —— 只有明确列出的类别才会进包。
+// 普通备份只含类别白名单；包含密钥时额外加入 config.json 并强制加密。
+// plugin-data/ 始终排除。
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -16,6 +16,7 @@ import { DATA_CATEGORIES } from '../bundle.js';
 import { buildZip } from '../zip-build.js';
 import { parseZip } from '../zip-install.js';
 import { logger } from '../logger.js';
+import { encryptPayload } from './crypto.js';
 
 export const BACKUP_FORMAT = 'qq-agent-backup';
 export const BACKUP_VERSION = 1;
@@ -30,6 +31,26 @@ const BACKUP_MAX_FILE_BYTES = 64 * 1024 * 1024;
 const BACKUP_MAX_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const WALK_MAX_DEPTH = 10;
 const MANIFEST_NAME = 'manifest.json';
+const EXCLUDED_DATA_DIRS = new Set(['plugin-data', 'logs', 'cache', '.cache', 'node_modules', '.git']);
+const EXCLUDED_DATA_FILE = /^(?:config\.json|backup-crypto\.salt)$|\.(?:lock|salt|tmp|bak)$/i;
+
+function readBackupFile(name, file) {
+  const stat = fs.lstatSync(file);
+  const dataRoot = fs.realpathSync(DATA_DIR);
+  const expected = path.resolve(dataRoot, path.relative(DATA_DIR, file));
+  if (stat.isSymbolicLink() || path.relative(expected, fs.realpathSync(file))) {
+    throw new Error('备份源包含符号链接或目录联接，拒绝读取可能含凭据的文件');
+  }
+  const data = fs.readFileSync(file);
+  if (name !== 'data/config.json') return data;
+  let config;
+  try { config = JSON.parse(data.toString('utf8').replace(/^\uFEFF/, '')); }
+  catch { throw new Error('包含密钥的备份要求 config.json 是有效 JSON'); }
+  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('config.json 必须是配置对象');
+  // 每个目标会收到同一份包；不把其他目标的凭据与地址横向复制过去。
+  delete config.backup;
+  return Buffer.from(JSON.stringify(config));
+}
 
 /** 可备份的数据类别（只读视图，防止调用方改坏 bundle.js 的定义）。 */
 export function listBackupCategories() {
@@ -57,16 +78,30 @@ export function normalizeCategories(input) {
 function walkFiles(root) {
   const out = [];
   let total = 0;
+  let excluded = 0;
+  try {
+    if (fs.lstatSync(root).isSymbolicLink()) throw new Error('备份类别目录不能是符号链接或目录联接');
+  } catch (error) {
+    if (error.code === 'ENOENT') return out;
+    throw error;
+  }
   const walk = (dir, depth) => {
-    if (depth > WALK_MAX_DEPTH) return;
+    if (depth > WALK_MAX_DEPTH) throw new Error('备份目录层级超过上限，拒绝生成不完整备份');
     let ents = [];
-    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (error) {
+      if (error.code === 'ENOENT' && depth === 0) return;
+      throw error;
+    }
     for (const e of ents) {
       const abs = path.join(dir, e.name);
+      if (e.isSymbolicLink() || EXCLUDED_DATA_FILE.test(e.name) || (e.isDirectory() && EXCLUDED_DATA_DIRS.has(e.name.toLowerCase()))) {
+        excluded += 1;
+        continue;
+      }
       if (e.isDirectory()) { walk(abs, depth + 1); continue; }
       if (!e.isFile()) continue;
       let st = null;
-      try { st = fs.statSync(abs); } catch { continue; }
+      st = fs.statSync(abs);
       // 超限必须报错而不是静默跳过：少几个文件的"成功备份"比失败更危险，
       // 用户会以为存档完整。
       if (out.length >= BACKUP_MAX_FILES) {
@@ -83,6 +118,7 @@ function walkFiles(root) {
     }
   };
   walk(root, 0);
+  if (excluded) logger.warn('backup', `按安全边界排除 ${excluded} 个凭据、运行态或链接条目`);
   return out;
 }
 
@@ -108,33 +144,49 @@ export function computePayloadSha256(entries) {
   return h.digest('hex');
 }
 
-/** 备份文件名与目标内 key。时间戳到分钟，与规格里的 key 形态一致。 */
+/** 延续旧 key 的本地时间口径；提高精度并加随机后缀，避免覆盖已有包。 */
 export function backupKeyFor(date = new Date()) {
   const p = (n) => String(n).padStart(2, '0');
   const name = `backup-${date.getFullYear()}${p(date.getMonth() + 1)}${p(date.getDate())}`
-    + `-${p(date.getHours())}${p(date.getMinutes())}${BACKUP_EXT}`;
+    + `-${p(date.getHours())}${p(date.getMinutes())}${p(date.getSeconds())}${String(date.getMilliseconds()).padStart(3, '0')}-${crypto.randomBytes(4).toString('hex')}${BACKUP_EXT}`;
   return { name, key: BACKUP_KEY_PREFIX + name };
 }
 
 /** 目标里的条目是本次功能的备份文件吗（保留策略只清理自己的文件）。 */
 export function isBackupKey(key) {
   const k = String(key || '');
-  return k.startsWith(BACKUP_KEY_PREFIX) && k.endsWith(BACKUP_EXT);
+  return /^qq-agent\/backup-\d{8}-\d{4}(?:\d{5}-[a-f0-9]{8})?\.qqab$/.test(k);
 }
 
 /**
  * 构建备份包。
  *
  * @param {{categories?: string[]|Record<string,boolean>, appVersion?: string,
- *          instanceId?: string, now?: Date}} opts
- * @returns {{ok:true, key:string, name:string, buffer:Buffer, manifest:object, bytes:number}
- *          | {ok:false, error:string}}
+ *          instanceId?: string, now?: Date, includeSecrets?: boolean, encrypt?: boolean}} opts
+ * @param {{encryptPayload?: Function}} deps 仅供测试注入加密失败，不改变强制加密规则
+ * @returns {{ok:true, key:string, name:string, buffer:Buffer, manifest:object, bytes:number, skippedCategories:Array<{key:string,label:string,reason:string}>}
+ *          | {ok:false, error:string, skippedCategories:Array<{key:string,label:string,reason:string}>}}
  */
-export function buildBackup({ categories = [], appVersion = '', instanceId = '', now = new Date() } = {}) {
+export function buildBackup({ categories = [], appVersion = '', instanceId = '', now = new Date(), includeSecrets = false, encrypt = false } = {}, { encryptPayload: encryptData = encryptPayload } = {}) {
+  // includeSecrets 不允许通过 encrypt=false 绕过加密，更不能失败后降级明文。
+  const encrypted = includeSecrets === true || encrypt === true;
   const cats = normalizeCategories(categories);
-  if (!cats.length) return { ok: false, error: '没有选中任何数据类别' };
+  const skippedCategories = [];
+  if (!cats.length) return { ok: false, error: '没有选中任何数据类别', skippedCategories };
 
   const entries = [];
+  let totalBytes = 0;
+  const appendFile = (name, file) => {
+    const size = fs.statSync(file).size;
+    if (size > BACKUP_MAX_FILE_BYTES) throw new Error(`单个文件超过备份上限：${name}`);
+    if (entries.length >= BACKUP_MAX_FILES - 1) throw new Error('文件数量超过备份上限');
+    if (totalBytes + size > BACKUP_MAX_TOTAL_BYTES) throw new Error('备份总量超过上限');
+    const data = readBackupFile(name, file);
+    if (data.length > BACKUP_MAX_FILE_BYTES || totalBytes + data.length > BACKUP_MAX_TOTAL_BYTES) throw new Error('备份数据超过大小上限');
+    totalBytes += data.length;
+    entries.push({ name, data });
+    return data.length;
+  };
   const manifestCategories = [];
   try {
     for (const key of cats) {
@@ -143,51 +195,74 @@ export function buildBackup({ categories = [], appVersion = '', instanceId = '',
       let bytes = 0;
       for (const d of cat.dirs) {
         for (const f of walkFiles(path.join(DATA_DIR, d))) {
-          entries.push({ name: `data/${d}/${f.rel}`, data: fs.readFileSync(f.abs) });
+          if (f.bytes === 0) continue;
+          const size = appendFile(`data/${d}/${f.rel}`, f.abs);
           files += 1;
-          bytes += f.bytes;
+          bytes += size;
         }
       }
       for (const f of cat.files) {
         const abs = path.join(DATA_DIR, f);
         let st = null;
-        try { st = fs.statSync(abs); } catch { continue; }
-        if (!st.isFile()) continue;
-        entries.push({ name: `data/${f}`, data: fs.readFileSync(abs) });
+        try { st = fs.statSync(abs); } catch (error) {
+          if (error.code === 'ENOENT') continue;
+          throw error;
+        }
+        if (!st.isFile() || st.size === 0) continue;
+        const size = appendFile(`data/${f}`, abs);
         files += 1;
-        bytes += st.size;
+        bytes += size;
       }
       if (files) manifestCategories.push({ key, label: cat.label, files, bytes });
+      else skippedCategories.push({ key, label: cat.label, reason: `本机还没有${cat.label}` });
+    }
+    if (includeSecrets === true && !entries.some((e) => e.name === 'data/config.json')) {
+      const file = path.join(DATA_DIR, 'config.json');
+      if (fs.existsSync(file)) {
+        appendFile('data/config.json', file);
+      }
     }
   } catch (error) {
-    return { ok: false, error: String(error?.message ?? error) };
+    return { ok: false, error: String(error?.message ?? error), skippedCategories };
   }
   if (!entries.length) {
-    return { ok: false, error: '选中的数据类别都是空的，没有可备份的文件' };
+    return { ok: false, error: '选中的类别目前都没有数据（可能是刚安装或还没产生聊天记录），没有可备份的内容', skippedCategories };
   }
 
+  let payload = entries;
+  try {
+    if (encrypted) payload = [{ name: 'payload.enc', data: encryptData(buildZip(entries)) }];
+  } catch (error) {
+    return { ok: false, error: `备份加密失败：${error?.message ?? error}`, skippedCategories };
+  }
   const manifest = {
     format: BACKUP_FORMAT,
     version: BACKUP_VERSION,
     createdAt: now.toISOString(),
     appVersion: String(appVersion || ''),
     instanceId: String(instanceId || ''),
-    // B1 只做明文包；勾选「包含密钥」时的整包加密由 B2 的 crypto.js 补齐。
-    encrypted: false,
+    encrypted,
     categories: manifestCategories,
-    sha256: computePayloadSha256(entries),
+    // 加密包哈希 payload.enc 的原始字节；明文包沿用排序条目集合摘要。
+    // parseBackup 验证两种摘要；解密时 AES-GCM 另行验证真实性。
+    sha256: encrypted ? crypto.createHash('sha256').update(payload[0].data).digest('hex') : computePayloadSha256(entries),
     files: entries
       .map((e) => ({ path: e.name, bytes: e.data.length }))
       .sort((a, b) => a.path.localeCompare(b.path))
   };
 
+  const manifestText = JSON.stringify(manifest, null, 2);
+  if (payload.reduce((sum, entry) => sum + entry.data.length, Buffer.byteLength(manifestText)) > BACKUP_MAX_TOTAL_BYTES) {
+    return { ok: false, error: '备份总量（含清单）超过上限', skippedCategories };
+  }
   const zip = buildZip([
-    { name: MANIFEST_NAME, data: JSON.stringify(manifest, null, 2) },
-    ...entries
+    { name: MANIFEST_NAME, data: manifestText },
+    ...payload
   ]);
   if (zip.length > BACKUP_MAX_ARCHIVE_BYTES) {
     return {
       ok: false,
+      skippedCategories,
       error: `备份包体积 ${(zip.length / 1048576).toFixed(1)}MB 超过上限 `
         + `${Math.round(BACKUP_MAX_ARCHIVE_BYTES / 1048576)}MB，请减少备份类别`
     };
@@ -195,7 +270,7 @@ export function buildBackup({ categories = [], appVersion = '', instanceId = '',
 
   const { name, key } = backupKeyFor(now);
   logger.info('backup', `构建备份包：${name}（${manifestCategories.length} 类 / ${entries.length} 个文件 / ${(zip.length / 1024).toFixed(0)}KB）`);
-  return { ok: true, key, name, buffer: zip, manifest, bytes: zip.length };
+  return { ok: true, key, name, buffer: zip, manifest, bytes: zip.length, skippedCategories };
 }
 
 /**
@@ -204,7 +279,7 @@ export function buildBackup({ categories = [], appVersion = '', instanceId = '',
  *
  * @param {Buffer} buffer
  * @param {{verify?: boolean}} opts verify=false 仅供已校验过的内部调用方
- * @returns {{ok:true, manifest:object, entries:Array<{name:string,data:Buffer}>, files:number, bytes:number}
+ * @returns {{ok:true, manifest:object, entries:Array<{name:string,data:Buffer}>, files:number, bytes:number, ciphertext?:Buffer, code?:string}
  *          | {ok:false, error:string, code?:string}}
  */
 export function parseBackup(buffer, { verify = true } = {}) {
@@ -234,9 +309,15 @@ export function parseBackup(buffer, { verify = true } = {}) {
     return { ok: false, error: `备份包格式版本 ${manifest.version} 比本机支持的 ${BACKUP_VERSION} 新，请升级应用后再恢复` };
   }
   if (manifest.encrypted === true) {
-    // 加密载荷的格式由 B2 定义；这里明确拒绝而不是尝试按明文解析，
-    // 否则会得到"sha256 不匹配"这种误导性的错误。
-    return { ok: false, code: 'encrypted', error: '这是加密备份包，本版本尚未提供解密支持' };
+    const payload = entries.filter((e) => e.name !== MANIFEST_NAME);
+    if (entries.length !== 2 || payload.length !== 1 || payload[0].name !== 'payload.enc') {
+      return { ok: false, error: '加密备份包必须只包含 manifest.json 与 payload.enc' };
+    }
+    const ciphertext = payload[0].data;
+    if (verify && manifest.sha256 !== crypto.createHash('sha256').update(ciphertext).digest('hex')) {
+      return { ok: false, error: '备份包已损坏、被篡改，或来自另一台机器（sha256 不匹配）' };
+    }
+    return { ok: true, code: 'encrypted', manifest, ciphertext, entries: [], files: 0, bytes: ciphertext.length };
   }
 
   const payload = entries.filter((e) => e.name !== MANIFEST_NAME);
@@ -280,6 +361,7 @@ export function extractEntries(entries, destDir) {
 export function extractBackup(buffer, destDir, { verify = true } = {}) {
   const parsed = parseBackup(buffer, { verify });
   if (!parsed.ok) return parsed;
+  if (parsed.manifest.encrypted === true) return { ok: false, code: 'encrypted', error: '加密备份包请通过恢复入口解密' };
   const out = extractEntries(parsed.entries, destDir);
   if (!out.ok) return out;
   return { ...out, manifest: parsed.manifest };

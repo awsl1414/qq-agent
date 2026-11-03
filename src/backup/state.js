@@ -20,6 +20,7 @@ export const BACKUP_STATE_VERSION = 1;
 export const BACKUP_STATE_FILE = path.join(DATA_DIR, 'backup-state.json');
 /** 历史只保留最近多少条：界面最多展示一屏，多了只是白白撑大配置文件。 */
 export const MAX_HISTORY_RUNS = 50;
+const activeRuns = new Map();
 
 function emptyState() {
   return {
@@ -95,6 +96,14 @@ export function readState() {
     .map(normalizeRun)
     .filter(Boolean)
     .slice(0, MAX_HISTORY_RUNS);
+  // 只有本进程登记的记录才可能仍在运行；崩溃遗留的 null 必须显示为中断。
+  for (const run of history) {
+    if (run.ok === null && !activeRuns.has(run.id)) {
+      run.ok = false;
+      run.finishedAt = Number(parsed.updatedAt) || run.startedAt;
+      run.error = '上次备份在完成前中断，目标结果未知';
+    }
+  }
   return {
     version: BACKUP_STATE_VERSION,
     updatedAt: Number(parsed.updatedAt) || 0,
@@ -117,6 +126,7 @@ export function writeState(state) {
 export function markRunStarted(opts = {}) {
   const state = readState();
   const run = makeRun(opts);
+  activeRuns.set(run.id, run);
   state.history = [run, ...state.history].slice(0, MAX_HISTORY_RUNS);
   try {
     writeState(state);
@@ -142,7 +152,8 @@ export function markRunFinished(runId, { ok = false, targets = [], error = '' } 
     error: error ? String(error) : ''
   };
   if (idx >= 0) state.history[idx] = normalizeRun({ ...state.history[idx], ...patch });
-  else state.history.unshift(normalizeRun({ ...makeRun(), id: String(runId), ...patch }));
+  else state.history.unshift(normalizeRun({ ...(activeRuns.get(runId) || makeRun()), id: String(runId), ...patch }));
+  activeRuns.delete(runId);
   try {
     writeState(state);
   } catch (writeError) {

@@ -63,7 +63,7 @@ test('构建 → 解析往返：清单、内容、文件数一致', () => {
     now: new Date('2026-11-03T03:00:00Z')
   });
   assert.equal(built.ok, true, built.error);
-  assert.match(built.name, /^backup-\d{8}-\d{4}\.qqab$/);
+  assert.match(built.name, /^backup-\d{8}-\d{9}-[a-f0-9]{8}\.qqab$/);
   assert.equal(built.key, `qq-agent/${built.name}`);
   assert.equal(built.manifest.encrypted, false);
   assert.deepEqual(built.manifest.categories.map((c) => c.key), ['memory', 'messages', 'reminders']);
@@ -133,27 +133,25 @@ test('空类别 / 空数据：明确报错而不是产出空包', () => {
   assert.match(archive.buildBackup({ categories: [] }).error, /没有选中/);
 });
 
-test('适配器工厂：local 已实现，webdav/s3 预置但抛 not-implemented', async () => {
+test('适配器工厂：local/webdav/s3 均已实现，未知类型报错', async () => {
   const local = targets.createTarget({ type: 'local', dir: TMP });
   assert.equal(local.type, 'local');
   for (const m of ['test', 'list', 'put', 'get', 'remove']) {
     assert.equal(typeof local[m], 'function', `local 缺少 ${m}`);
   }
 
+  // webdav / s3 的工厂在各自文件里实现，这里只验证工厂接线与接口同构；
+  // 具体协议行为由 backup-webdav / backup-s3 两个测试文件覆盖。
   for (const type of ['webdav', 's3']) {
     const t = targets.createTarget({ type });
     assert.equal(t.type, type);
-    for (const m of ['list', 'put', 'get', 'remove']) {
-      await assert.rejects(() => t[m]('k'), (e) => e.code === 'not-implemented', `${type}.${m} 应报 not-implemented`);
+    for (const m of ['test', 'list', 'put', 'get', 'remove']) {
+      assert.equal(typeof t[m], 'function', `${type} 缺少 ${m}`);
     }
-    // test() 契约不抛错
-    const r = await t.test();
-    assert.equal(r.ok, false);
-    assert.match(r.message, /尚未实现/);
   }
   assert.throws(() => targets.createTarget({ type: 'ftp' }), /未知的备份目标类型/);
   assert.equal(targets.isTargetImplemented('local'), true);
-  assert.equal(targets.isTargetImplemented('webdav'), false);
+  assert.equal(targets.isTargetImplemented('webdav'), true);
 });
 
 test('本地目标 put/get/list/remove 往返', async () => {
@@ -218,9 +216,16 @@ test('端到端：构建 → 本地目标 → 取回 → 解包回原结构', as
   assert.equal(restored.messages.length, 2);
 });
 
-test('文件名与 key：时间戳到分钟，isBackupKey 只认本功能命名', () => {  const { name, key } = archive.backupKeyFor(new Date(2026, 10, 3, 3, 0));
-  assert.equal(name, 'backup-20261103-0300.qqab');
-  assert.equal(key, 'qq-agent/backup-20261103-0300.qqab');
+test('文件名与 key：高精度排序且不覆盖，isBackupKey 兼容旧命名', () => {
+  const date = new Date(2026, 10, 3, 3, 0);
+  const { name, key } = archive.backupKeyFor(date);
+  assert.match(name, /^backup-20261103-030000000-[a-f0-9]{8}\.qqab$/);
+  assert.ok(key > 'qq-agent/backup-20261103-0300.qqab');
+  assert.equal(key, `qq-agent/${name}`);
+  assert.notEqual(archive.backupKeyFor(date).key, key);
+  assert.equal(archive.isBackupKey('qq-agent/backup-20261103-0300.qqab'), true);
+  assert.equal(archive.isBackupKey('qq-agent/personal.qqab'), false);
+  assert.equal(archive.isBackupKey('qq-agent/sub/backup-20261103-0300.qqab'), false);
   assert.equal(archive.isBackupKey(key), true);
   assert.equal(archive.isBackupKey('qq-agent/other.zip'), false);
   assert.equal(archive.isBackupKey('backup-20261103-0300.qqab'), false, '缺少前缀的不算本功能文件');

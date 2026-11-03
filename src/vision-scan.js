@@ -126,10 +126,18 @@ export async function scanModelsVision({ providers, emit = null, limit = 3, time
     if (!pending.size) return;
     const patch = {};
     for (const [key, v] of pending) patch[key] = v;
-    pending.clear();
     updateConfig({ modelVision: patch });
+    pending.clear();
   };
-  const flushTimer = setInterval(flushPending, 2000);
+  let flushError = null;
+  const flushTimer = setInterval(() => {
+    // 防御磁盘满、权限变化等外部 I/O 故障：定时器没有请求层的异常边界，
+    // 必须把失败交还给下面被 await 的扫描任务，不能抛成 uncaughtException。
+    try { flushPending(); } catch (error) {
+      flushError = error;
+      clearInterval(flushTimer);
+    }
+  }, 2000);
   flushTimer.unref?.();   // 别拖住进程退出
 
   const runTask = async (task) => {
@@ -168,6 +176,7 @@ export async function scanModelsVision({ providers, emit = null, limit = 3, time
     await Promise.all(workers);
   } finally {
     clearInterval(flushTimer);
+    if (flushError) throw flushError;
     flushPending();   // 收尾：剩余结果一次写盘，确保不丢
   }
   return { total, results: { ...builtinVisionResults(providers || []), ...visionResults() } };

@@ -41,6 +41,7 @@ function renderSettingsSidebar() {
     // ffmpeg 不随安装包分发，改为这里按需下载。
     // 放「能力与工具」之后：它决定的正是"机器人能处理哪些媒体"。
     ['media', '媒体工具', 'M4 6h11v12H4z M15 10l5-3v10l-5-3z'],
+    ['backup', '备份与恢复', 'M4 4h16v16H4z M8 4v6h8V4 M8 16h8'],
     ['app', '外观与数据', 'M3 5h18v14H3z M3 9h18']
   ];
   // ── 快捷开关（设置左栏底部，全部映射真实字段）──
@@ -208,7 +209,10 @@ function renderSettingsSidebar() {
     // 没有这道守卫，state.settingsSection 会被写成 undefined，整页渲染崩掉。
     if (!el.dataset.section) return;
     el.addEventListener('click', () => {
-      if (el.dataset.section === state.settingsSection) return;
+      if (el.dataset.section === state.settingsSection) {
+        if (state.settingsSection === 'backup') $('#backup-section-title')?.scrollIntoView({ block: 'start' });
+        return;
+      }
       // 切区块 = 整页表单重建：先把防抖窗口内挂起的保存发出，
       // 否则刚输入的内容直接被重渲染吹掉（与切页签同一条防线）。
       flushSettingsSaves();
@@ -232,6 +236,7 @@ function renderSettingsSidebar() {
       // ③ 撤掉"保存返回后再补一次重建"的待重绘，否则 20ms 内两次全量 innerHTML
       //    换血（第二次还会再播一遍动画），又闪一下。
       settingsGuard.needRerender = false;
+      if (state.settingsSection === 'backup') $('#backup-section-title')?.scrollIntoView({ block: 'start' });
     });
   });
 }
@@ -450,11 +455,13 @@ function renderSettingsSection(c) {
     onebot: () => renderOnebotSection(c),
     app: () => renderDesktopSection(c),
     tools: () => renderToolsSection(c),
+    backup: () => renderBackupSection(),
     media: () => renderMediaSection(c)
   };
   const render = sections[sec] || sections.api;
   const raw = render();
   // ⚠️「工具与技能」的 h3 嵌在 .module-split-left 里（不是顶层），字符串切分会切碎标签 → 跳过。
+  if (sec === 'backup') return '<section class="set-card">' + raw + '</section>';
   return sec === 'tools' ? raw : settingsCards(raw);
 }
 
@@ -3393,4 +3400,9 @@ async function refreshPromptPreview(overrides = null) {
   $$('.prompt-preview-content').forEach((pre) => {
     pre.textContent = renderPromptPreviewText();
   });
+}
+
+// 备份表单由专用接口保存，凭据字段不参与通用设置自动保存。
+function renderBackupSection() {
+  return '<h3 id="backup-section-title">备份与恢复</h3><div id="backup-panel" aria-live="polite">正在读取备份配置…</div>';
 }
