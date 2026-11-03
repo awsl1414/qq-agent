@@ -14,6 +14,11 @@
 #
 # 为什么是 windows-latest：打包目标是 Windows（NSIS 安装包 + win-unpacked），
 # electron-builder 的 Windows 目标必须在 Windows 上构建。
+#
+# 另外两个作业（macos-latest / ubuntu-latest）做同一件事，只是换平台：
+# electron-builder 的 mac 目标只能在 macOS 上出（需要 hdiutil / codesign），
+# Linux 目标需要 fpm / AppImage 工具链。三个作业互不依赖，任何一个失败不影响另外两个 ——
+# 平台专属的配置错误应该在那一个平台上暴露，而不是让整条 CI 停下来。
 
 name: CI
 
@@ -79,3 +84,93 @@ jobs:
     # 若改为自建运行器或频繁超时，取消下面两行注释即可。
     # env:
     #   ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+  # macOS 作业与 Windows 作业平行，不 depends_on：
+  # 平台专属配置（icns、Info.plist 字段、ad-hoc 签名）坏了应该只让这个作业红，
+  # 而不是连 Windows 的结果一起被跳过。
+  test-and-build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 校验 VERSION / package.json / CHANGELOG 一致
+        run: pnpm run verify:version
+
+      - name: 运行测试
+        run: pnpm test
+
+      # 显式传 --mac：CI 里同时存在三个平台，不能靠「当前操作系统」推断
+      # 该校验哪一份图标。
+      - name: 构建前校验
+        run: node scripts/prepack-check.mjs --mac
+
+      # 只解包、不出 dmg：PR 阶段要验证的是「配置能产出可运行的 .app」，
+      # 生成 dmg 还要多跑一遍 hdiutil，每次 PR 都付这份时间不划算。
+      # CI 里没有签名证书，identity: "-" 会走 ad-hoc —— 正好验证这条路。
+      - name: 构建（仅解包目录）
+        run: pnpm run build:mac:dir
+
+      # 解包构建也能暴露 Info.plist 写错这类问题，成本只有一条 plutil。
+      # 不写死 dist/mac-arm64：macos-latest 的架构会随 GitHub 的镜像更替变化，
+      # 而 run-builder 是按 electron-builder 的默认架构出包的。找 .app 即可。
+      - name: 校验 Info.plist 版本字段
+        run: |
+          app=$(find dist -maxdepth 2 -name '*.app' -type d | head -n 1)
+          test -n "$app" || { echo "::error::没找到 .app 产物"; exit 1; }
+          plutil -p "$app/Contents/Info.plist" \
+            | grep -q "\"CFBundleShortVersionString\" => \"$(cat VERSION)\""
+          plutil -p "$app/Contents/Info.plist" \
+            | grep -q "\"CFBundleVersion\" => \"$(cat VERSION)\""
+          plutil -p "$app/Contents/Info.plist" \
+            | grep -q '"CFBundleIconFile" => "icon.icns"'
+
+  # Linux 目标只能在 Linux 上出：AppImage 需要 appimagetool，deb 需要 fpm，
+  # 两者都由 electron-builder 在构建时按平台下载，darwin 上跑不起来。
+  test-and-build-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 校验 VERSION / package.json / CHANGELOG 一致
+        run: pnpm run verify:version
+
+      - name: 运行测试
+        run: pnpm test
+
+      - name: 构建前校验
+        run: node scripts/prepack-check.mjs --linux
+
+      # AppImage 的运行时依赖 fuse 在 ubuntu-latest 上默认不装，但 build:dir
+      # 只解包、不生成 AppImage，不需要它 —— 出 AppImage 在 release.yml 里。
+      - name: 构建（仅解包目录）
+        run: pnpm run build:linux:dir

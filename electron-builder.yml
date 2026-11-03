@@ -79,6 +79,87 @@ win:
       arch:
         - x64
 
+mac:
+  # icon.icns 由 assets/icon.png（256×256）放大生成，见 assets/README-icons.md。
+  # 256 撑不起 512@2x 档，1024 那层是插值出来的，高分屏下会偏软 —— 有更高分辨率的
+  # 源图后应当重新生成，而不是继续沿用这份。
+  icon: assets/icon.icns
+  category: public.app-category.productivity
+  # 两种架构都出：Intel Mac 仍在使用，universal 包体积翻倍且需要额外的 lipo 合并步骤，
+  # 对「装完就能用」的桌面工具没有收益。artifactName 带 ${arch}，两份产物不会互相覆盖。
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
+      arch:
+        - arm64
+        - x64
+  # ad-hoc 签名。这不是可选项：arm64 上未签名的二进制会被内核直接 SIGKILL（killed: 9），
+  # 应用根本起不来。ad-hoc 不依赖任何证书，用户下载即可运行，不构成分发门槛。
+  #
+  # 用 "-" 而不是留空：留空时 electron-builder 只去 keychain 里找 Developer ID，
+  # 找不到就完全跳过签名 —— 在这台没有证书的机器上正好产出跑不起来的包。
+  # 持有真实证书时改用 CSC_LINK / CSC_KEY_PASSWORD 环境变量覆盖本项（见 scripts/run-builder.mjs）。
+  identity: "-"
+  # 必须与 ad-hoc 一起关掉：加固运行时会启用库校验，而 Electron 框架里的预签名组件
+  # 属于别的 Team ID，ad-hoc 签名的包会在启动时被拒。我们不做 App Store 上架，
+  # 加固运行时没有任何收益。
+  hardenedRuntime: false
+  # 公证需要 Apple 开发者凭据与联网上传，本项目不提供签名证书，明确关掉
+  # 而不是依赖「没配环境变量就自动跳过」的隐式行为。
+  notarize: false
+  gatekeeperAssess: false
+
+dmg:
+  # 拖拽式安装界面：左侧应用、右侧 Applications
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+linux:
+  # 目录里是 16/32/48/64/128/256/512/1024 的 PNG，全部由 assets/icon.png（256×256）
+  # 放大得到。512 与 1024 两档是插值，高分屏下会偏软，源图更新后要重新生成。
+  icon: assets/icons
+  category: Network
+  synopsis: QQ 群 AI 机器人（桌面版）
+  description: >-
+    事件驱动的无状态 QQ 群聊机器人：接任意 OpenAI 兼容 API，
+    带会话式图形控制台、长期记忆、表情包与壁纸，所有配置在界面里完成。
+  # fpm 要求 maintainer 与 homepage：缺任一都会让 deb 构建直接失败。
+  maintainer: logan <3030994569@qq.com>
+  # 只出 x64：CI 运行器是 x64，交叉构建 arm64 需要额外的 fpm 目标支持，
+  # 而目前没有 arm64 Linux 用户反馈。加一条 arch 即可扩展。
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  # AppImage 的 desktop entry 里显示的启动名（productName 是 qq-agent）
+  executableName: qq-agent
+  # 与桌面环境的分类对应；Network 在 GNOME/KDE 菜单里归到「互联网」
+  desktop:
+    entry:
+      Name: QQ Agent
+      Comment: QQ 群 AI 机器人
+
+deb:
+  # deb 包名不能用大写或空格，与 productName 分开写
+  packageName: qq-agent
+  priority: optional
+  # 依赖由 electron-builder 按 Electron 运行时自动补齐（libgtk-3-0 / libnotify4 等），
+  # 这里只补 AppImage 不需要、deb 安装后启动才暴露的库：libfuse2 只在 AppImage 需要，
+  # 故不列；托盘依赖 libayatana-appindicator3 在部分发行版非默认安装。
+  recommends:
+    - libayatana-appindicator3-1
+
 nsis:
   oneClick: false
   # 见文件头：安装目录与数据目录都要可写，不能进 Program Files

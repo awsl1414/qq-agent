@@ -3,8 +3,12 @@
 # 只上传 artifact，**不**自动创建 GitHub Release、不自动推送任何东西 ——
 # 发布是对外可见的操作，必须由人确认后手动执行。
 #
-# 与 ci.yml 的区别：这里跑完整 `pnpm run build`（NSIS 安装包 + 免安装 zip），
-# 因此要下载 NSIS 与 winCodeSign，首次运行耗时明显更长，见文件末尾的风险说明。
+# 与 ci.yml 的区别：这里跑完整构建（Windows NSIS + zip、macOS dmg + zip、
+# Linux AppImage + deb），因此要下载 NSIS / winCodeSign / dmgbuild / appimagetool / fpm，
+# 首次运行耗时明显更长，见文件末尾的风险说明。
+#
+# 三个作业互不依赖、各自上传独立的 artifact（名字里带平台），
+# 因为同一个 artifact 名后上传的会覆盖先上传的，而三个平台的产物扩展名有重叠（都有 .zip）。
 
 name: Release
 
@@ -87,7 +91,8 @@ jobs:
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: qq-agent-${{ steps.pkg.outputs.version }}
+          # 平台后缀是必需的：三个作业的产物都含 .zip，同名 artifact 会互相覆盖
+          name: qq-agent-${{ steps.pkg.outputs.version }}-windows
           path: |
             dist/*.exe
             dist/*.zip
@@ -99,3 +104,132 @@ jobs:
     # 若改为自建运行器或频繁超时，取消下面两行注释即可。
     # env:
     #   ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+  build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 校验版本号与 CHANGELOG 一致
+        run: pnpm run verify:version
+
+      - name: 读取 package.json 版本
+        id: pkg
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # 标签是用户看到的发布标识，必须与 package.json 的版本一致（同 Windows 作业）。
+      # 标签值经 env 传入而不是内插进脚本体，理由见 Windows 作业的同名步骤。
+      - name: 校验标签与 package.json 版本一致
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          PKG_VERSION: ${{ steps.pkg.outputs.version }}
+        run: |
+          tag="${TAG_NAME#v}"
+          if [ "$tag" != "$PKG_VERSION" ]; then
+            echo "::error::标签 v$tag 与 package.json 的版本 $PKG_VERSION 不一致"
+            exit 1
+          fi
+          echo "标签与版本一致：$PKG_VERSION"
+
+      - name: 运行测试
+        run: pnpm test
+
+      # 不配 CSC_LINK 时走 electron-builder.yml 里的 identity: "-"（ad-hoc）：
+      # arm64 上未签名二进制会被内核直接杀掉，ad-hoc 是能跑起来的最低要求。
+      # 配了证书（CSC_LINK / CSC_KEY_PASSWORD）时，electron-builder 会用证书覆盖
+      # ad-hoc，产物可直接分发；但因为没有公证凭据，Gatekeeper 仍会提示「无法验证」。
+      - name: 构建安装包
+        run: pnpm run build:mac
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: qq-agent-${{ steps.pkg.outputs.version }}-macos
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          if-no-files-found: error
+
+  build-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 校验版本号与 CHANGELOG 一致
+        run: pnpm run verify:version
+
+      - name: 读取 package.json 版本
+        id: pkg
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: 校验标签与 package.json 版本一致
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+          PKG_VERSION: ${{ steps.pkg.outputs.version }}
+        run: |
+          tag="${TAG_NAME#v}"
+          if [ "$tag" != "$PKG_VERSION" ]; then
+            echo "::error::标签 v$tag 与 package.json 的版本 $PKG_VERSION 不一致"
+            exit 1
+          fi
+          echo "标签与版本一致：$PKG_VERSION"
+
+      - name: 运行测试
+        run: pnpm test
+
+      # fpm（deb 打包器）依赖 ruby 与 rpm 工具链，GitHub 托管镜像默认没有，
+      # 由 electron-builder 自动下载；这里只补 AppImage 需要的 FUSE 运行时，
+      # 否则 appimagetool 在生成 AppImage 时会因为找不到 libfuse.so.2 失败。
+      #
+      # 包名随发行版变：24.04 起 libfuse2 改名为 libfuse2t64（time_t 64 位迁移），
+      # 而 libfuse2 在 noble 里是只做依赖转发的空壳包。直接写 libfuse2 在
+      # ubuntu-latest 升级到 24.04 后会装到空壳、缺真正提供 libfuse.so.2 的库；
+      # 用两行带 `|| true` 的写法把两种名字都试一遍，哪个装上都不影响另一个。
+      - name: 安装 AppImage 依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse2t64 || sudo apt-get install -y libfuse2
+
+      - name: 构建安装包
+        run: pnpm run build:linux
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: qq-agent-${{ steps.pkg.outputs.version }}-linux
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+          if-no-files-found: error
