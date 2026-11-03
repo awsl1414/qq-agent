@@ -803,6 +803,17 @@ const ICON_ICO_PATH = path.resolve(__dirname, '..', 'assets', 'icon.ico');
 const ICON_PATH = (process.platform === 'win32' && fs.existsSync(ICON_ICO_PATH))
   ? ICON_ICO_PATH
   : ICON_PNG_PATH;
+// macOS 菜单栏托盘图标：单色 template image，16pt 画布，配 @2x 供 Retina。
+// 不能直接拿 icon.png（256×256）当托盘图标：macOS 的 NSStatusItem 按图片的
+// **点**尺寸原样绘制，不套用系统的小图标度量，256 像素在 1x 下就是 256pt，
+// 于是一个图标撑满整条菜单栏。Windows 不同，Shell_NotifyIcon 会按
+// SM_CXSMICON 把任意尺寸缩放到托盘槽位，所以同一份 PNG 在 Windows 上看不出问题。
+// 另外彩色图标在深色菜单栏里不会反色，template 机制（只看 alpha，由系统染色）
+// 才能让深浅色菜单栏都正常显示。
+// 只写 trayTemplate.png 一个路径：nativeImage.createFromPath 会按 macOS 约定
+// 自动把同目录的 trayTemplate@2x.png 挂成 2x 表示，点尺寸仍是 16pt。
+const TRAY_ICON_PT = 16;
+const TRAY_ICON_PATH = path.resolve(__dirname, '..', 'assets', 'trayTemplate.png');
 // 无边框窗口的窗口控制桥（preload.cjs 而不是 .js，见该文件顶部说明）
 const PRELOAD_PATH = path.resolve(__dirname, 'preload.cjs');
 // 悬浮小窗自绘菜单的极窄桥（见 electron/widget-preload.cjs 顶部的安全边界）：
@@ -1015,9 +1026,30 @@ function buildTrayMenu() {
   ]);
 }
 
+/**
+ * 托盘图标按平台取不同资源。
+ *
+ * macOS：必须用菜单栏专用的 template image（16pt 画布 + @2x）。彩色大图不会
+ * 被系统缩小，也不会跟随菜单栏深浅色反色，两个问题都只能靠 template 机制解决。
+ * Windows / Linux：沿用 ICON_PATH（Windows 走 icon.ico），行为保持不变。
+ */
+function resolveTrayIcon() {
+  if (process.platform !== 'darwin') return nativeImage.createFromPath(ICON_PATH);
+  const template = nativeImage.createFromPath(TRAY_ICON_PATH);
+  // 防御而非修复：图标文件缺失时 createFromPath 返回空图，托盘会变成一块
+  // 空白。这里退回到缩小后的彩色图标——尺寸正确、颜色不反色，但至少可见。
+  // 正常安装包里 assets/** 一定被带上，这条分支不该被走到。
+  if (template.isEmpty()) {
+    return nativeImage.createFromPath(ICON_PATH).resize({ width: TRAY_ICON_PT, height: TRAY_ICON_PT });
+  }
+  // 文件名带 Template 时 Electron 会自动标记，这里显式再设一次：
+  // 说明意图，且不依赖文件名约定（将来改名不会静默失去反色）。
+  template.setTemplateImage(true);
+  return template;
+}
+
 function createTray() {
-  const icon = nativeImage.createFromPath(ICON_PATH);
-  tray = new Tray(icon);
+  tray = new Tray(resolveTrayIcon());
   tray.setToolTip(describeInstance());
   // 先设一次，保证"右键一定有菜单"（这是原来就验证过的机制，不换）。
   trayMenuRef = buildTrayMenu();
