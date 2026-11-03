@@ -404,7 +404,7 @@ export const providers = {
 
 见 [skill-system.md 第 6 节](skill-system.md#6-安全边界两层别混淆)。要点：
 
-- 内置模块靠 `builtin-modules.json` 的逐文件 sha1 指纹豁免。
+- 内置模块靠 `builtin-modules.json` 的逐文件 sha1 指纹豁免：文本 CRLF 归一化为 LF，含 NUL 的文件保持原样，生成与校验共用 `moduleFileSha1`；缺少有效 `files` 时不豁免。
 - 第三方模块若触碰高危能力，默认拒绝加载，需在 `config.trustedPlugins`
   里登记它的**目录名**（不是清单 id，因为清单 id 是第三方自己能写的，目录名不是）。
 - 扫描被截断（>500 文件 / >12 层）→ fail-closed 拒绝。

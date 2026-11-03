@@ -37,7 +37,7 @@ paths:
 
 修改 `plugins/`、`skills/` 下的内置扩展文件后，必须同步更新 `builtin-modules.json` 中对应条目，包括新增与删除文件。否则指纹失配会让扩展回落到能力扫描，可能被拒载。
 
-按 `doc/extend_development/skill-system.md` 第 6 节重算：相对路径为键，文件字节的 `sha1` 前 16 位为值。顺序是：完成扩展改动 → 更新对应基线 → 运行测试；不改无关扩展的指纹。
+按 `doc/extend_development/skill-system.md` 第 6 节重算：相对路径为键，统一使用 `src/plugin-loader.js` 的 `moduleFileSha1` 计算 SHA-1 前 16 位；文本先将 CRLF 归一化为 LF，含 NUL 字节的二进制文件保持原样。仅换行变化不需要重算基线。顺序是：完成扩展改动 → 更新对应基线 → 运行测试；不改无关扩展的指纹。
 
 ## 3. 发送链路
 

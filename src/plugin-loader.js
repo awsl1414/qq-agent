@@ -62,7 +62,7 @@ export function setOnebotClient(client) {
 //
 // 插件是 `await import()` 直接进主进程执行的，与主进程共享同一个 `process`。
 // createSkillApi 的 permissions 只拦得住 fetch：fs / child_process 是插件自己
-// import 的，权限层根本碰不到。所以「装一个插件」实际等于「把整机交给它」。
+// import 的，权限层根本碰不到。扩展共享宿主权限，仍受宿主账号与 OS 权限约束。
 //
 // 这里做的不是隔离（那需要 worker_threads / 子进程 + JSON-RPC，工程量大），
 // 而是把信任边界显式化：
@@ -70,7 +70,7 @@ export function setOnebotClient(client) {
 //   - 第三方模块（市场 zip / forge 生成 / 本地导入 / 自定义 roots）若触碰
 //     进程/网络栈/凭据，默认拒绝加载并给出可操作提示，必须在
 //     config.trustedPlugins 里显式登记 id 才放行。
-// 于是「装插件即交出整机」从默认行为变成了知情选择。
+// 因此必须让用户知情选择是否允许第三方扩展使用这些能力。
 //
 // 判据用「能力」而不是「某段字符串」：字符串黑名单追不上 require('f'+'s')、
 // fs['readFileSync'] 这类等价写法，而 import 目标是无法等价改写的。
@@ -153,6 +153,16 @@ function walkModuleFiles(dir, root = dir, out = [], depth = 0) {
 }
 
 /**
+ * 内置模块文件指纹：文本 CRLF 归一化为 LF 后取 SHA-1 前 16 位。
+ * 避免检出或打包时的换行差异让内置模块失去豁免；含 NUL 的文件按二进制原样计算。
+ * latin1 只作逐字节映射，避免 UTF-8 解码替换无效字节而掩盖真实内容变化。
+ */
+export function moduleFileSha1(buf) {
+  const content = buf.includes(0) ? buf : Buffer.from(buf.toString('latin1').replace(/\r\n/g, '\n'), 'latin1');
+  return crypto.createHash('sha1').update(content).digest('hex').slice(0, 16);
+}
+
+/**
  * 重算某个内置模块的基线指纹并写回 builtin-modules.json。
  *
  * 为什么需要它：应用内两条用户确认过的改动路径会改内置模块的文件：
@@ -166,8 +176,8 @@ function walkModuleFiles(dir, root = dir, out = [], depth = 0) {
  * （trustedPlugins），自动进基线等于把信任边界悄悄放宽；这里的判据是
  * "目录名已经在内置清单里"，新名字天然不满足。
  *
- * 口径与 .workbuddy/tools/refresh-builtin-baseline.mjs 一致：
- * 整目录逐文件 sha1 前 16 位、跳过 node_modules 与隐藏项、深度上限 8。
+ * 与校验端共用 moduleFileSha1：文本归一化换行，二进制保持原样。
+ * 整目录逐文件计算、跳过 node_modules 与隐藏项、深度上限 8。
  * @returns {{ok:boolean, updated?:boolean, files?:number, skipped?:string, reason?:string}}
  */
 export function refreshBuiltinEntry(dirName, { appRoot = APP_ROOT } = {}) {
@@ -187,7 +197,7 @@ export function refreshBuiltinEntry(dirName, { appRoot = APP_ROOT } = {}) {
   const files = {};
   for (const rel of walkModuleFiles(modDir)) {
     try {
-      files[rel] = crypto.createHash('sha1').update(fs.readFileSync(path.join(modDir, rel))).digest('hex').slice(0, 16);
+      files[rel] = moduleFileSha1(fs.readFileSync(path.join(modDir, rel)));
     } catch { /* 读不了的文件不记账：下次重扫会因"基线缺文件"失败，方向是安全的 */ }
   }
   // 比较不依赖键的顺序（walk 顺序在两个进程里可能不同，但集合相同就不该重写文件）
@@ -231,30 +241,41 @@ export function refreshBuiltinEntry(dirName, { appRoot = APP_ROOT } = {}) {
  *
  * 代价：改了内置模块的代码就得重算基线（`builtin-modules.json` 的 `_comment` 里写了）。
  * 这正是想要的，内置代码改动应当是一次有意识的"声明它仍然可信"。
+ * @returns {{matches:boolean, mismatches:Array<{path:string, type:string}>, lineEndingOnly:string[]}}
  */
-function builtinContentMatches(dirName, entryPath) {
-  const rec = builtinBaseline().get(dirName);
-  if (!rec) return false;
-  // 兼容旧基线（只记入口指纹的 v1）：退化成只比入口，至少不比现在更宽
-  if (!rec.files || typeof rec.files !== 'object') {
-    if (!rec.entrySha1) return true;
-    try {
-      return crypto.createHash('sha1').update(fs.readFileSync(entryPath)).digest('hex').slice(0, 16) === rec.entrySha1;
-    } catch { return false; }
+export function builtinContentMatches(rec, entryPath) {
+  const mismatches = [];
+  const lineEndingOnly = [];
+  if (!rec?.files || typeof rec.files !== 'object' || Array.isArray(rec.files)) {
+    return { matches: false, mismatches: [{ path: 'builtin-modules.json', type: 'invalid-baseline' }], lineEndingOnly };
   }
   const dir = path.dirname(path.resolve(entryPath));
-  const sha1 = (p) => { try { return crypto.createHash('sha1').update(fs.readFileSync(p)).digest('hex').slice(0, 16); } catch { return ''; } };
 
   // ① 基线里的每个文件都要在、且指纹一致
   for (const [rel, want] of Object.entries(rec.files)) {
-    if (sha1(path.join(dir, rel)) !== want) return false;
+    let buf;
+    try { buf = fs.readFileSync(path.join(dir, rel)); }
+    catch (error) {
+      mismatches.push({ path: rel, type: error.code === 'ENOENT' ? 'missing' : 'unreadable' });
+      continue;
+    }
+    if (moduleFileSha1(buf) !== want) mismatches.push({ path: rel, type: 'content' });
+    else if (!buf.includes(0) && buf.includes('\r\n')) lineEndingOnly.push(rel);
   }
   // ② 不能有基线之外的可执行文件
   const known = new Set(Object.keys(rec.files));
   const extras = listExecutables(dir).filter((rel) => !known.has(rel));
-  if (extras.length) return false;
-  return true;
+  for (const rel of extras) mismatches.push({ path: rel, type: 'extra-executable' });
+  return { matches: mismatches.length === 0, mismatches, lineEndingOnly };
 }
+
+const FINGERPRINT_MISMATCH_LABELS = {
+  'invalid-baseline': '缺少有效的 files 基线',
+  missing: '文件缺失',
+  unreadable: '文件无法读取',
+  content: '内容指纹不一致',
+  'extra-executable': '基线之外的可执行文件'
+};
 
 /** 列出目录下所有 .js/.mjs/.cjs（相对路径），跳过 node_modules 与隐藏项。 */
 function listExecutables(dir, root = dir, out = [], depth = 0) {
@@ -334,15 +355,23 @@ export function checkPluginTrust(id, entryPath) {
   // 目录名同样是磁盘上真实的一级目录名，第三方装进来时会带自己的目录名，
   // 想冒充就得占掉内置模块的名字（那会与已安装的内置模块冲突）。
   const dirName = path.basename(path.dirname(path.resolve(entryPath)));
-  // 目录名在基线里且入口内容指纹与基线一致 → 放行。
-  // 指纹不符说明有人占了这个目录名顶替内置模块（见 builtinContentMatches 注释），
+  // 目录名在基线里且整目录内容指纹与基线一致 → 放行。
+  // 指纹不符可能是升级、手工改动或占名顶替（见 builtinContentMatches 注释），
   // 这时不能享受豁免，走下面的能力扫描。
   // `nameLooksBuiltin` 留给下面的文案：区分"第三方模块"与"被改动过的内置模块"，
   // 后者多半是 harness → 升级扩展 / 自动修复 的正常产物，提示不该写成抓到马。
   const nameLooksBuiltin = builtinModuleIds().has(dirName);
-  if (nameLooksBuiltin && builtinContentMatches(dirName, entryPath)) {
+  const fingerprint = nameLooksBuiltin ? builtinContentMatches(builtinBaseline().get(dirName), entryPath) : null;
+  if (fingerprint?.matches) {
     return { ok: true };
   }
+  const builtinNote = fingerprint
+    ? `内置模块「${id}」的以下文件与随包基线不一致：`
+      + fingerprint.mismatches.map((item) => `${item.path}（${FINGERPRINT_MISMATCH_LABELS[item.type]}）`).join('、') + '。'
+      + (fingerprint.lineEndingOnly.length
+        ? `另有 ${fingerprint.lineEndingOnly.join('、')} 仅换行差异，已归一化且不影响校验。` : '')
+      + '该模块失去内置指纹豁免，继续进行能力扫描。'
+    : '';
 
   // 已登记为可信 → 放行（用户知情选择）。
   // 只按目录名匹配。早期同时认清单 id，而 id 是写在第三方自己那份
@@ -372,7 +401,7 @@ export function checkPluginTrust(id, entryPath) {
   if (truncated) {
     return {
       ok: false,
-      reason: `模块「${id}」的文件太多或嵌套太深，无法完成安全扫描（已扫描上限仍未见底）。`
+      reason: builtinNote + `模块「${id}」的文件太多或嵌套太深，无法完成安全扫描（已扫描上限仍未见底）。`
         + '为了不放过暗藏的危险代码，这类模块默认拒绝加载。'
         + `若确认可信，请在 config.trustedPlugins 里加入 "${dirName}"。`
     };
@@ -388,20 +417,11 @@ export function checkPluginTrust(id, entryPath) {
   }
   if (!bad.length) return { ok: true };
 
-  // 内置模块被改动（升级 / 修复 / 手工改）→ 指纹与随包基线不一致，会落到这个分支。
-  // 这多半是应用内自己人的正常操作，文案必须说清楚，不能写成"疑似恶意"。
-  const builtinNote = nameLooksBuiltin
-    ? '⚠️ 注意：这个目录名在「随包分发的内置模块」清单里，但文件内容与随包基线不一致 —— '
-      + '通常意味着它被升级 / 修复 / 手工改过（harness → 升级扩展 / 自动修复 就会走到这里，'
-      + '升级与修复的落地现在会自动重算基线，出现这条多半是手工改的）。'
-      + '如果这次改动是你确认过的，点「信任并继续」即可。'
-    : '';
-
   return {
     ok: false,
-    reason: `模块「${id}」触碰了高危能力：${bad.join('、')}。`
-      + '扩展与主进程同进程运行，导入这些模块等于获得本机全部权限。'
-      + builtinNote
+    reason: builtinNote
+      + `模块「${id}」的能力扫描命中：${bad.join('、')}。`
+      + '扩展与宿主主进程共享权限，仍受宿主账号和操作系统权限约束。'
       + `若确认可信，请在 config.trustedPlugins 里加入它的目录名（这里填 "${dirName}"）。`
   };
 }

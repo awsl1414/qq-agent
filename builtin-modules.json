@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "_comment": "随应用分发的内置模块基线（整目录逐文件 sha1，隐藏项与 .forge-origin.json 除外）。第三方安装的模块不在此列 → 走 plugin-loader.js 的 checkPluginTrust 能力闸。⚠️ 改了 resources/app/plugins|skills 下任何文件后必须重算本文件（按 sha1(字节).slice(0,16) 逐文件重写）。",
+  "_comment": "随应用分发的内置模块基线（整目录逐文件 sha1，隐藏项与 .forge-origin.json 除外）。第三方安装的模块不在此列 → 走 plugin-loader.js 的 checkPluginTrust 能力闸。⚠️ 改了 resources/app/plugins|skills 下文件内容后必须重算对应条目（统一用 plugin-loader.js 的 moduleFileSha1：文本 CRLF 归一化为 LF，含 NUL 的二进制保持原样，取 SHA-1 前 16 位；仅换行变化无需重算）。",
   "modules": [
     {
       "id": "account-pool",

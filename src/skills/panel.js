@@ -42,7 +42,7 @@
 // （那本来就是它自己的东西），但插件不该把别人的机密往 plugin-data 里塞。
 //
 // ⚠️ 改了 plugins/** 或 skills/** 下任何内置模块，都要重算 builtin-modules.json 指纹
-//    （.workbuddy/tools/refresh-builtin-baseline.mjs），否则插件会被当第三方扫、被拒加载。
+//    （src/plugin-loader.js 的 refreshBuiltinEntry），否则插件会被当第三方扫、被拒加载。
 
 /** 只读挂载的路由前缀。前端与插件都从这里取，不要硬编码字面量。 */
 export const PANEL_ROUTE_PREFIX = '/plugin-panel';
