@@ -51,8 +51,12 @@ const SKIP_FILE = new Set(['.forge-origin.json', 'Thumbs.db', '.DS_Store']);
 /**
  * 可打包的数据类别。
  * dirs 走目录递归；files 是 data 根下的单文件（不存在就跳过，不算错误）。
+ *
+ * 导出给 src/backup/archive.js 用：备份与整包必须共用同一份分类定义，
+ * 否则新增一个数据类别时其中一条路径会静默漏装（包看着成功、内容却少一块）。
+ * 只加读取方，不改现有导出与行为。
  */
-const DATA_CATEGORIES = [
+export const DATA_CATEGORIES = [
   {
     key: 'messages', label: '会话存档', dirs: ['messages'], files: [],
     desc: '聊天记录本体（真相源）。接收端按消息 id 合并去重，或整会话覆盖。'

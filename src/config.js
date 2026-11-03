@@ -473,6 +473,46 @@ export const DEFAULT_CONFIG = {
     // 需要外部浏览器读密钥时，配 server.token 并带 x-console-token，而不是打开这个开关。
     allowBrowserKeyRead: false
   },
+  // ── 数据备份与恢复 ────────────────────────────────────────────────────
+  // 把实例数据（会话存档 / 群友印象 / 用量 / 提醒 / 表情配置）打包成 .qqab，
+  // 推到本地目录 / WebDAV / S3 兼容存储，并可从备份恢复。
+  //
+  // 硬边界：config.json 与 plugin-data/ 默认永不进包（见 DATA_CATEGORIES 白名单）。
+  // 勾选 includeSecrets 时整包必须 AES-256-GCM 加密才允许上传（加密实现见
+  // backup/crypto.js）；凭据密文（webdav.credentials / s3.secretAccessKeyCipher）
+  // 只进本文件，不得出现在日志、API 响应或备份包里。
+  //
+  // 目标是数组：同一轮备份构建一份包，写给所有启用的目标，便于"本地留一份 +
+  // 云上留一份"。id 由界面生成，用于历史记录与恢复时定位。
+  backup: {
+    enabled: false,
+    intervalHours: 24,          // 间隔式触发，随应用运行；不引入 cron
+    retention: 7,               // 每个目标保留最近几个备份包
+    includeSecrets: false,      // 默认关闭：含密钥必须整包加密，且界面二次确认
+    targets: [
+      {
+        id: 't1',
+        name: '',
+        type: 'local',            // 'local' | 'webdav' | 's3'
+        enabled: false,
+        // local
+        dir: '',
+        // webdav
+        url: '',
+        username: '',
+        credentials: '',          // 密文（机器绑定密钥派生，见 backup/crypto.js）
+        // s3
+        endpoint: '',
+        region: 'us-east-1',
+        bucket: '',
+        accessKeyId: '',
+        secretAccessKeyCipher: '',// 密文
+        forcePathStyle: true,
+        // 通用：只备份勾选的类别
+        categories: ['messages', 'memory', 'usage', 'reminders', 'stickers']
+      }
+    ]
+  },
   // ── 桌面悬浮小窗 ──────────────────────────────────────────────────────
   // 设置 → 界面与应用 → 桌面端打开后，桌面上出现一张无边框小卡片，显示今日用量 /
   // 缓存命中率 / 机器人连接状态。数据零新增：页面每 refreshMs 轮询一次
