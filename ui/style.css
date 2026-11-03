@@ -1840,9 +1840,19 @@ tr.chat-del-selected td { background: color-mix(in srgb, var(--red) 10%, transpa
    左列 flex-basis 只有 200px，「名称 · 127.0.0.1:11434」拼一行在窄屏下会折行，
    所以拆成两行。次行沿用 11px + --muted 的既有惯例，选中态不跟着变粗。 */
 .mm-prov-name { overflow-wrap: anywhere; }
+/* 「（当前）」紧跟在名称后面，不换行、不抢宽度；字号与端点同档，弱化处理。 */
+.mm-prov-current { margin-left: 4px; font-size: 11px; font-weight: 400; color: var(--muted); white-space: nowrap; }
 .mm-prov-host { margin-top: 1px; font-size: 11px; font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
 .mm-prov.active .mm-prov-host { color: var(--muted); }
 .mm-model { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 7px; cursor: pointer; font-size: 13px; }
+/* 选中态原先只在 JS 里内联 box-shadow，跟其它列表项（.mm-prov.active 用
+   color + font-weight）不是一套写法。收敛成 class，颜色走令牌。 */
+.mm-model.active { color: var(--accent); font-weight: 600; box-shadow: var(--inset-edge); }
+/* 单选框/复选框在整行可点的 label 里会被 .field 的输入框规则误伤吗？
+   不会 —— 那些规则只列了 text/password/number/time。这里补一条只做
+   垂直对齐与禁止压缩，保证长模型名截断时勾选框不被压扁。 */
+.mm-model input[type=radio],
+.mm-model input[type=checkbox] { flex-shrink: 0; accent-color: var(--accent); margin: 0; }
 .mm-provider-bar { display: flex; gap: 8px; padding: 4px 0 10px; border-bottom: 1px solid var(--edge); margin-bottom: 8px; }
 .mm-model:hover { background: var(--hover); }
 .mm-model .mm-check { color: var(--accent); width: 16px; }
@@ -1861,7 +1871,13 @@ tr.chat-del-selected td { background: color-mix(in srgb, var(--red) 10%, transpa
 /* 标签行数不同的 field（如 HTTP 令牌标签折两行）各自从顶部排，
    控件高度靠下面的固定高度对齐，否则缩放/换行时四个输入框底边参差 */
 .field-row .field { align-self: flex-start; }
-.field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+/* 字段标题。必须是直接子选择器：
+   `.field` 里也有 <label class="mm-model"> 这种"整行可点的选项"，
+   它们自己要用 display:flex 排单选框与文字。用后代选择器时本规则
+   特异性相等且位置更靠后，会把那些选项的 flex 覆盖成 block ——
+   单选框与文字退化成块级堆叠，既丢了垂直居中，也丢了 8px 间距。
+   标题型 label 在这份代码里一律是 .field 的直接子元素（116 处）。 */
+.field > label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
 /* 输入框：凹下，"这里可以往里写"的物理隐喻 */
 /* 单行输入框固定 34px：内容框高度随字体渲染/系统缩放漂移是
    "缩放后输入框不齐"的根因，锁死高度后任何缩放下都等高。 */
@@ -3350,6 +3366,8 @@ input.sw[data-pending] { cursor: progress; }
 .ma-body.single .model-modal-right { border-left: none; }
 .ma-body.dual .model-modal-left { width: 190px; }
 .mm-model-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 模型 id 作为名称的次要信息排在后面：同样允许收缩，但不抢名称的宽度。 */
+.mm-model-id { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .mm-model input[type=checkbox] { flex-shrink: 0; accent-color: var(--accent); }
 
 /* ── 峰谷拆分 ── */

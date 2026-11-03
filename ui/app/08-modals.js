@@ -981,12 +981,17 @@ function openModelConfigModal() {
     } else {
       const names = p.modelNames || {};
       const modelList = (p.models || []).length
-        ? (p.models || []).map((m) => `
-          <div class="mm-model ${m === pickedModel ? 'active' : ''}" data-model="${esc(m)}"${m === pickedModel ? ' style="box-shadow:var(--inset-edge)"' : ''}>
+        ? (p.models || []).map((m) => {
+          // 名称与 id 分开渲染：模型名可能很长（`qwen/qwen3-max-preview`），
+          // 不给名称留 flex:1 + 省略号的话，右侧 id 会被挤出容器而不是截断。
+          const label = names[m] || m;
+          return `
+          <div class="mm-model${m === pickedModel ? ' active' : ''}" data-model="${esc(m)}">
             <span class="mm-check">${m === pickedModel ? '✓' : ''}</span>
-            <span>${esc(names[m] || m)}</span>
-            ${(names[m] || m) !== m ? `<span class="muted" style="font-size:11px">${esc(m)}</span>` : ''}
-          </div>`).join('')
+            <span class="mm-model-text">${esc(label)}</span>
+            ${label !== m ? `<span class="muted mm-model-id">${esc(m)}</span>` : ''}
+          </div>`;
+        }).join('')
         : '<div class="muted" style="padding:10px">这个服务商下还没有模型。到「管理服务商」里点「拉取模型列表」或手动添加。</div>';
       right.innerHTML = `
         <div class="field"><label>服务商</label>
@@ -1688,7 +1693,7 @@ function openModelManageModal() {
       </div>
       ${providers.map((p) => `
         <div class="mm-prov ${p.id === activePid ? 'active' : ''}" data-pid="${esc(p.id)}">
-          ${providerRowHtml(p)}${p.id === cfgProvider ? '<span class="muted" style="font-size:11px">（当前）</span>' : ''}
+          ${providerRowHtml(p, p.id === cfgProvider)}
         </div>`).join('') || '<div class="muted" style="padding:10px;font-size:12px">还没有提供商。<br />点上方「＋ 添加提供商」，只填 Base URL + API Key 也行 —— 添加后就能「拉取模型列表」。</div>'}`;
     left.querySelectorAll('.mm-prov').forEach((el) => {
       el.addEventListener('click', () => { activePid = el.dataset.pid; renderLeft(); renderRight(); });
@@ -1758,12 +1763,15 @@ function openModelManageModal() {
           <button class="btn btn-small btn-danger" id="mg-del-model">删除模型</button>
         </div>
         <div style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:8px">
-          ${(p.models || []).map((m) => `
-            <label class="mm-model" style="cursor:pointer">
+          ${(p.models || []).map((m) => {
+            const label = names[m] || m;
+            return `
+            <label class="mm-model">
               <input type="radio" name="mg-model" value="${esc(m)}" />
-              <span style="flex:1">${esc(names[m] || m)}</span>
-              ${(names[m] || m) !== m ? `<span class="muted" style="font-size:11px">${esc(m)}</span>` : ''}
-            </label>`).join('') || '<div class="muted" style="padding:10px">该提供商下没有模型，点「拉取模型列表」。</div>'}
+              <span class="mm-model-text">${esc(label)}</span>
+              ${label !== m ? `<span class="muted mm-model-id">${esc(m)}</span>` : ''}
+            </label>`;
+          }).join('') || '<div class="muted" style="padding:10px">该提供商下没有模型，点「拉取模型列表」。</div>'}
         </div></div>`;
 
     /* ── 保存名称 ────────────────────────────────────────────────────

@@ -874,13 +874,19 @@ function providerLabelOf(p) {
  * 为什么分两行而不是拼成一个字符串：左列只有 200px 宽，`名称 · 127.0.0.1:11434`
  * 这类长串在窄屏下会折行或截断，两行结构更稳，也更容易扫读。
  * 名称与端点相同时（老数据名称就是域名）只出一行——两行重复内容没有信息量。
+ *
+ * @param {object}  p
+ * @param {boolean} [current] 是否当前生效的服务商。标记放在**名称那行末尾**，
+ *   而不是跟在整块 HTML 之后：后者会落到第二行下面自成一行，看起来像
+ *   「（当前）」属于端点。调用方只需传这个布尔值，不必自己拼标记。
  */
-function providerRowHtml(p) {
+function providerRowHtml(p, current = false) {
   const host = providerEndpointHost(p);
   const name = String((p && p.displayName) ?? '').trim();
   const main = name || host || String((p && p.id) ?? '');
   const showHost = host && host !== main;
-  return `<div class="mm-prov-name">${esc(main)}</div>${showHost ? `<div class="mm-prov-host">${esc(host)}</div>` : ''}`;
+  const badge = current ? '<span class="mm-prov-current">（当前）</span>' : '';
+  return `<div class="mm-prov-name">${esc(main)}${badge}</div>${showHost ? `<div class="mm-prov-host">${esc(host)}</div>` : ''}`;
 }
 
 const STATUS_LABEL = { waiting: '等待中', done: '已发言', noreply: '未回复', running: '运行中', error: '出错', aborted: '中止' };
