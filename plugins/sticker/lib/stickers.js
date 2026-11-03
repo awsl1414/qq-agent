@@ -24,8 +24,8 @@ export function normalizeStickerEntry(raw) {
     resId: String(entry.resId || entry.emoji_id || id).trim(),
     url: String(entry.url || '').trim(),
     // 本地转存的真实路径（file:///）。以前这个字段只活在内存里、没进
-    // normalizeStickerEntry，所以 saveStickerStore → loadStickerStore 一轮就没了 ——
-    // 于是下一轮同步又得重新下载。现在落盘，D2（本地缓存被远端 url 覆盖）才有得救。
+    // normalizeStickerEntry，所以 saveStickerStore → loadStickerStore 一轮就没了，
+    // 于是下一轮同步又得重新下载。现在落盘，本地缓存被远端 url 覆盖才有得救。
     localFile: String(entry.localFile ?? '').trim(),
     md5: String(entry.md5 || '').trim().toUpperCase(),
     desc: String(entry.desc ?? '').trim(),
@@ -62,22 +62,22 @@ export function saveStickerStore(entries, file = STICKER_FILE) {
 
 // ── 隐藏名单（软删除）────────────────────────────────────────────────────────
 //
-// 为什么"删除"必须是软删除（R130）：
-//   QQ 收藏是**源**，`stickers.json` 只是它的镜像。同步每 60 秒跑一次，
-//   `mergeStickerLibrary` 会把远端还存在的表情原样加回来 —— 所以从数组里
+// 为什么"删除"必须是软删除：
+//   QQ 收藏是源，`stickers.json` 只是它的镜像。同步每 60 秒跑一次，
+//   `mergeStickerLibrary` 会把远端还存在的表情原样加回来，所以从数组里
 //   物理删掉一个 qq 源条目，它 ≤60 秒后必定复活，变成一个"删了又自己回来"的
-//   玄学 bug。正确做法是**留着条目、只把它从"可见集合"里摘出去**。
+//   玄学 bug。正确做法是留着条目、只把它从"可见集合"里摘出去。
 //
 //   附带两个好处：① 删除可逆（`restore` 只是把 id 从名单里划掉）；
 //   ② 误删不会连带丢掉备注、标签、使用次数和本地图片。
 //
 // 为什么单独一个文件、不塞进 stickers.json：
-//   stickers.json 是**数组**，没有放元数据的位置；改成对象会动到
+//   stickers.json 是数组，没有放元数据的位置；改成对象会动到
 //   `loadStickerStore` 的 `Array.isArray` 判断，波及面太大。独立文件
 //   还方便以后跟导出/导入（备份）一起打包带走。
 //
 // 为什么不用 api.storage：storage 语义上是"给页面看的数据"，且已经被
-//   查看器快照占用；隐藏名单是**库数据**，跟 stickers.json 同类，该放一起。
+//   查看器快照占用；隐藏名单是库数据，跟 stickers.json 同类，该放一起。
 
 /**
  * @param {string} [file]
@@ -118,8 +118,8 @@ export function isHidden(entry, hidden) {
  * 取"可见"的那部分库。所有消费点（提示词 / list 工具 / 查看器快照 / 发送）
  * 都必须走这里，否则隐藏就只是半吊子。
  *
- * ⚠️ 注意传进来的 entries 是**完整库**（含隐藏项）—— 隐藏名单单独维护，
- *    库本身不动，这样"取消隐藏"才能把备注/标签/使用次数原样带回来。
+ * 注意传进来的 entries 是完整库（含隐藏项）：隐藏名单单独维护，
+ * 库本身不动，这样"取消隐藏"才能把备注/标签/使用次数原样带回来。
  */
 export function visibleEntries(entries, hidden) {
   const list = (Array.isArray(entries) ? entries : []).map(normalizeStickerEntry).filter(Boolean);
@@ -128,23 +128,23 @@ export function visibleEntries(entries, hidden) {
 }
 
 /**
- * 这次拉取结果是不是"完整的一份"—— 即**可以据此剪枝**。
+ * 这次拉取结果是不是"完整的一份"，即可以据此剪枝。
  *
- * 为什么必须有这个判据（2026-10-15 R129 修）：
- *   `fetch_custom_face_detail` 返回的是**前 N 条**，N = 我们请求的 count。
+ * 为什么必须有这个判据：
+ *   `fetch_custom_face_detail` 返回的是前 N 条，N = 我们请求的 count。
  *   旧实现拿这个列表当"全部收藏"直接剪枝：
  *
  *       out.filter((e) => e.source !== 'qq' || fetchedIds.has(e.id))
  *
  *   于是只要用户收藏数 > 请求的 count，第 count+1 张之后的表情每次同步都会被
- *   当"已经不在收藏里了"删掉 —— 连带备注、标签、使用次数一起永久丢失。
- *   而默认 count = promptMaxStickers(10) × 10 = **100**，所以超过 100 张的用户
+ *   当"已经不在收藏里了"删掉，连带备注、标签、使用次数一起永久丢失。
+ *   而默认 count = promptMaxStickers(10) × 10 = 100，所以超过 100 张的用户
  *   每次同步都在稳定丢数据（查看器页面会如实显示"只剩 100 张"）。
  *
- *   判据：**没拿满**（got < asked）才能证明服务端已经把收藏给完了。
+ *   判据：没拿满（got < asked）才能证明服务端已经把收藏给完了。
  *   拿满 count 条说明后面还有，此时"不在列表里"只等于"没翻到"，不等于"被删了"。
  *
- *   空结果单独判、且**一律不剪**：`[]` 既可能是"用户真的清空了收藏"，也可能是
+ *   空结果单独判、且一律不剪：`[]` 既可能是"用户真的清空了收藏"，也可能是
  *   瞬时抖动（协议端超时/降级返回空数组，而 `Array.isArray([])` 会把它当成功）。
  *   后者被当成完整列表 = 一次性抹掉整个本地库。代价不对称，所以宁可留残留。
  *
@@ -163,9 +163,9 @@ export function isStickerFetchComplete(fetchedCount, requestedCount) {
 /**
  * 合并远端收藏与本地库。
  *
- * ⚠️ 剪枝**默认关闭**（`opts.prune !== true` 就只合并不删除）。
- *    这个默认值是刻意的：本函数被误用一次的代价是用户永久丢失表情库，
- *    所以"删除"必须由调用方显式、且基于 isStickerFetchComplete 的证据来要求。
+ * 剪枝默认关闭（`opts.prune !== true` 就只合并不删除）。
+ * 这个默认值是刻意的：本函数被误用一次的代价是用户永久丢失表情库，
+ * 所以"删除"必须由调用方显式、且基于 isStickerFetchComplete 的证据来要求。
  *
  * @param {Array} existing 本地库
  * @param {Array} fetched  协议端返回的收藏（可能是被截断的一页）
@@ -232,12 +232,12 @@ export function findSticker(entries, ref) {
 }
 
 /**
- * **精确**查找：只认 id / resId / md5 的完整相等，不走 url 子串兜底。
+ * 精确查找：只认 id / resId / md5 的完整相等，不走 url 子串兜底。
  *
- * 为什么要有两个版本（R130 修）：
+ * 为什么要有两个版本：
  *   `findSticker` 的 url 兜底是 `includes` 双向匹配，本来是给"模型手抄了半截
- *   url"兜底的，放在**查询**上无伤大雅。但把它用在**破坏性操作**上就会出事：
- *   传一个不存在的 id，只要它恰好是某个表情 url 的子串，就会命中那张表情 ——
+ *   url"兜底的，放在查询上无伤大雅。但把它用在破坏性操作上就会出事：
+ *   传一个不存在的 id，只要它恰好是某个表情 url 的子串，就会命中那张表情，
  *   实测 `hide('abcdef123')` 能把 url 里含 `abcdef123` 的表情删掉。
  *   所以 hide / unhide / 删除前的存在性校验一律走这里。
  */
@@ -278,23 +278,23 @@ export function formatStickerList(entries, query = '', limit = 48, opts = {}) {
  *
  * 为什么不直接把 stickers.json 交给页面：页面跑在设置弹窗的 iframe 里，它只有
  * `/plugin-panel/<id>/@data/`（= `plugin-data/<id>/`）这一条只读通道，读不到
- * `<DATA_DIR>/stickers.json`。而 `api.storage` 本来就是插件已有的能力 ——
+ * `<DATA_DIR>/stickers.json`。而 `api.storage` 本来就是插件已有的能力，
  * 把页面要的数据写进去、页面 fetch 出来即可，宿主不需要为此新增任何接口。
  *
- * ⚠️ 两条硬约束：
- *   ① storage 有 **1MB 上限**（src/plugin-loader.js 的 SKILL_STORAGE_MAX_BYTES）
- *      → 只带页面真正要用的字段，绝不内联图片（100 张 base64 就爆了）；
- *   ② 每次收藏同步后都会重写 → 这里必须是纯函数、别做 IO。
+ * 两条硬约束：
+ *   ① storage 有 1MB 上限（src/plugin-loader.js 的 SKILL_STORAGE_MAX_BYTES），
+ *      只带页面真正要用的字段，绝不内联图片（100 张 base64 就爆了）；
+ *   ② 每次收藏同步后都会重写，这里必须是纯函数、别做 IO。
  *
  * `img` 交给页面自己解析：http(s) 原样用；空串 = 显示不了，画占位。
- * 什么情况会是空串：`file:///` 形态。那是"发送前临时转存"的中间态 ——
+ * 什么情况会是空串：`file:///` 形态。那是"发送前临时转存"的中间态，
  * 下一次收藏同步就会被远端地址覆盖（见 mergeStickerLibrary 的 `item.url ||`），
  * 而且浏览器也读不了 file:///，所以不假装能显示。
  */
 export function buildViewSnapshot(entries, meta = {}) {
-  // ⚠️ 这里**保留**被隐藏的条目（打 `hidden: true` 标记），不做过滤。
-  //    跟提示词/list 工具相反，是刻意的：查看器是唯一能让用户看到"我删过什么"
-  //    并找回 id 去取消隐藏的地方。页面侧用筛选 chip 把它们默认挡掉。
+  // 这里保留被隐藏的条目（打 `hidden: true` 标记），不做过滤。
+  // 跟提示词/list 工具相反，是刻意的：查看器是唯一能让用户看到"我删过什么"
+  // 并找回 id 去取消隐藏的地方。页面侧用筛选 chip 把它们默认挡掉。
   const list = (Array.isArray(entries) ? entries : []).map(normalizeStickerEntry).filter(Boolean);
   const hiddenSet = meta.hidden instanceof Set ? meta.hidden : null;
   // 本地转存的图浏览器读不了 file:///，靠 manager 复制一份到 plugin-data 下的
@@ -328,7 +328,7 @@ export function buildViewSnapshot(entries, meta = {}) {
     // 已隐藏条数。页头单独显示，让用户知道"库里还有 N 张被我删了、可以恢复"。
     hidden: hiddenCount,
     // 两个给页头直接用的计数，省得页面自己遍历（也保证口径与这里一致）。
-    // ⚠️ 口径要跟 total 一致：都排除已隐藏的，否则页头会出现"共 100、有备注 110"。
+    // 口径要跟 total 一致：都排除已隐藏的，否则页头会出现"共 100、有备注 110"。
     annotated: items.filter((x) => !x.hidden && (x.note || x.desc)).length,
     used: items.filter((x) => !x.hidden && x.useCount > 0).length,
     syncedAt: Number(meta.syncedAt) || 0,
@@ -399,7 +399,7 @@ export function buildStickerContext(entries, max = 10, { rotatePeriodMin = 60, n
 /**
  * 容量档：库里有几张，决定"该不该鼓励发表情"。
  *
- * 为什么需要（2026-10-21）：策略档位是用户配的固定值（默认 3 = 尽量配），
+ * 为什么需要：策略档位是用户配的固定值（默认 3 = 尽量配），
  * 而库里可能一张都没有。档位与能力脱钩会直接产出空头支票：
  *   · 0 张：模型按"爱好者"人设承诺"等我甩图"，然后无图可发（实测 3/6 被 @ 都这样）
  *   · 1 张：连续两轮发同一张（实测 21:33:33 / 21:34:33）
@@ -410,16 +410,16 @@ export function buildStickerContext(entries, max = 10, { rotatePeriodMin = 60, n
  */
 
 /**
- * 容量档的**原始档位**（不掺用户配置）：0 张 → 0，1–3 张 → 1，4–9 张 → 2，10+ 张 → 3。
+ * 容量档的原始档位（不掺用户配置）：0 张 → 0，1–3 张 → 1，4–9 张 → 2，10+ 张 → 3。
  *
- * 从 capacityLevel 拆出来（2026-10-23）：提示词段要先对原始档做降档滞回
+ * 从 capacityLevel 拆出来：提示词段要先对原始档做降档滞回
  * （smoothCapDowngrade）再与用户配置取 min，没有这个出口就只能整函数复制一份。
  *
  * @param {number|null|undefined} count 库存张数；null/undefined/非数字 = 读不到
  * @returns {number|null} 0~3；读不到返回 null（调用方按"不擅自降档"处理）
  */
 export function capacityCap(count) {
-  // ⚠️ 必须显式判 null：Number(null) === 0，会把"读不到库存"误当成"库存为 0"。
+  // 必须显式判 null：Number(null) === 0，会把"读不到库存"误当成"库存为 0"。
   if (count === null || count === undefined) return null;
   const n = Number(count);
   if (!Number.isFinite(n)) return null;
@@ -433,25 +433,25 @@ export function capacityLevel(configured, count) {
   return Math.min(want, cap);
 }
 
-// ── 提示词段滞回（2026-10-23，识图场景缓存稳定化）─────────────────────────
+// ── 提示词段滞回（识图场景缓存稳定化）──────────────────────────────────────
 //
-// 为什么需要：本插件有两段内容随**库存实时变化**翻字，而两段都压在前缀缓存的
-// 命脉位置上 ——
-//   · 【表情包策略】段进**系统提示**（promptSections）。档位每翻一次（库存越过
+// 为什么需要：本插件有两段内容随库存实时变化翻字，而两段都压在前缀缓存的
+// 命脉位置上：
+//   · 【表情包策略】段进系统提示（promptSections）。档位每翻一次（库存越过
 //     0/4/10 三个边界）整段换字，而系统提示在整条请求的最前面，其后是 tools 与
-//     全部消息 ⇒ 整条前缀击穿。实测单次 miss 8898 / 9348 tok（命中 22% / 21%），
+//     全部消息，整条前缀击穿。实测单次 miss 8898 / 9348 tok（命中 22% / 21%），
 //     两次都发生在"识图 → 收藏表情"之后几分钟内。
-//   · 【可用表情包】段插在用户提示的【过去状态】**之前**（可缓存区）。每张新表情
+//   · 【可用表情包】段插在用户提示的【过去状态】之前（可缓存区）。每张新表情
 //     让段长 +54~64B，其后整个历史窗口重算。实测一天 7 次、合计 14284B 全价，
 //     其中 6 次挤在 00:03–00:06 的收藏风暴里。
 // 用户在手机上取消收藏又收藏回来（或一次同步拿到不完整快照）会让库存瞬时跌到
 // 边界另一侧；一次收藏风暴会让列表段连翻多次。两者都不该按整条前缀的代价计费。
 //
 // 修法两个，原则都是"该变的一次不少，不该变的一次不多"：
-//   ① smoothCapDowngrade —— 策略档位**降档滞回**：升级立即生效（库变大是模型
+//   ① smoothCapDowngrade：策略档位降档滞回。升级立即生效（库变大是模型
 //      该知道的好事），降档要持续低于边界满宽限才落地（默认 10 分钟）。
 //      手机端"取消-收藏"抖动被折叠成零次翻字。
-//   ② planSectionRender —— 列表段**最小刷新间隔**：内容没变原样返回；空库↔非空
+//   ② planSectionRender：列表段最小刷新间隔。内容没变原样返回；空库↔非空
 //      翻转算紧急（行为关键，且一生只一次）立即生效；其余变化按间隔节流
 //      （默认 3 分钟），收藏风暴从 6 次翻字折叠成 1~2 次。清单本就只是
 //      "存在性提示"（完整列表模型随时可用 list_stickers 查），几分钟陈旧不伤功能。
@@ -467,7 +467,7 @@ export function capacityLevel(configured, count) {
  */
 export function smoothCapDowngrade(state, newCap, now, graceMs) {
   const cur = state && Number.isFinite(state.cap) ? state : null;
-  // 读不到库存：原样保留（连观察期一起），调用方按"用上次生效档"处理 ——
+  // 读不到库存：原样保留（连观察期一起），调用方按"用上次生效档"处理，
   // 与 capacityLevel 的"不擅自降档"同向，但比它多记住最后一次真数。
   if (newCap === null || newCap === undefined) {
     return cur || { cap: 0, pendingCap: null, pendingSince: 0 };
@@ -510,7 +510,7 @@ export function planSectionRender(prev, next, now, intervalMs, urgent = false) {
 
 /**
  * 表情策略段。level 决定频率那一行；opts.empty=true 时整段换成"现在没表情"的版本
- * （不是把频率调到最低，而是明确禁止承诺——空库时"少发一点"仍然是空头支票）。
+ * （不是把频率调到最低，而是明确禁止承诺，空库时"少发一点"仍然是空头支票）。
  */
 export function buildStickerStrategyHint(level = 1, names = {}, opts = {}) {
   const T = {
@@ -518,10 +518,10 @@ export function buildStickerStrategyHint(level = 1, names = {}, opts = {}) {
     list: names.list || 'list_stickers',
     image: names.image || 'get_sticker_image',
     text: names.text || 'send_message',
-    // 2026-10-19：策略段此前**只字未提收藏**——模型面对「帮我收藏这个表情」
-    // 只会嘴炮答应，从不调 collect_sticker（实测 60 个会话 0 次调用、库里
-    // 0 条 AI 收藏，而 send_sticker 59/60 在用——差距就是引导）。模型的行为
-    // 靠这段每轮可见的策略文本驱动，工具描述只在工具列表里，管不到触发时机。
+    // 策略段此前只字未提收藏，模型面对「帮我收藏这个表情」只会嘴炮答应，
+    // 从不调 collect_sticker（实测 60 个会话 0 次调用、库里 0 条 AI 收藏，
+    // 而 send_sticker 59/60 在用，差距就是引导）。模型的行为靠这段每轮可见的
+    // 策略文本驱动，工具描述只在工具列表里，管不到触发时机。
     collect: names.collect || 'collect_sticker'
   };
 
@@ -530,7 +530,7 @@ export function buildStickerStrategyHint(level = 1, names = {}, opts = {}) {
     return [
       '【表情包策略：暂时没有可用表情】',
       '- 你的收藏表情库现在是**空的**，没有任何一张可以发。**不要承诺发表情**（别说"等我甩图""给你配个表情"），承诺了也做不到。',
-      // P2（2026-10-22）：空库是最需要"主动收"的时刻，文案从"等指令"改成"看到就收"。
+      // 空库是最需要"主动收"的时刻，文案从"等指令"改成"看到就收"。
       `- 看到群友发的好玩的图/表情就**主动**用 ${T.collect} 收下来（填那条消息前的 #数字），不用等他说「收藏 / 存下来」；拿不准图里画的是什么时才先用 ${T.image} 看一眼。**三样一起填**：note（画的是什么、什么情绪）、tags（2~4 个短标签）、usage（什么场合用）；收藏成功的下次就能直接发。`,
       `- 纯文字回应完全没问题，正常用 ${T.text} 说话即可。`
     ].join('\n');
@@ -543,15 +543,14 @@ export function buildStickerStrategyHint(level = 1, names = {}, opts = {}) {
     '频率：回应、吐槽、接梗时优先考虑配一个贴切的表情，让对话更有活人感；别每次都用同一张。',
     '频率：你是表情包爱好者——能配表情的地方尽量配，接梗/调侃/附和时几乎都会带一张，聊天要有表情包的烟火气；注意换着用，不要连发同一张。'
   ][lvl];
-  // ⚠️ 2026-10-22 P1：频率行只管"多密"，管不到"这种句子该配"。实测近 24 小时 149 条
-  //    ≤10 字的纯反应（"确实""乐了""认了"）一条表情都没配，而这类短反应恰恰是真人最爱
-  //    配图的场景 —— 所以单独给一条硬指引，并把 10-21 的"必须同批"规则在这里复述一遍
-  //    （收尾机制 autoEndAfterSend 会吃掉第二轮，说了不做等于没做）。
-  //    仅在有效档位 ≥2 时出现：0/1 档是用户明确要"少发"，硬推会与频率行自相矛盾。
-  //    ⚠️ 2026-10-23 更正：这里原注释写"档位是稳定的配置值（不一定变），所以这一行
-  //    有/无不会跨轮抖动" —— **实测被推翻**。档位是 min(配置档, 库存档)，库存跨 4/10
-  //    边界就会翻；00:03:52 的缓存断点正好落在本行（body-lcp 附近文本 = 本句），
-  //    单次代价 7141 字全价。现在本段已标 volatile，翻字不再击穿系统提示前缀。
+  // 频率行只管"多密"，管不到"这种句子该配"。实测近 24 小时 149 条
+  // ≤10 字的纯反应（"确实""乐了""认了"）一条表情都没配，而这类短反应恰恰是
+  // 真人最爱配图的场景，所以单独给一条硬指引，并把"必须同批"规则在这里复述一遍
+  // （收尾机制 autoEndAfterSend 会吃掉第二轮，说了不做等于没做）。
+  // 仅在有效档位 ≥2 时出现：0/1 档是用户明确要"少发"，硬推会与频率行自相矛盾。
+  // 这一行有/无会随档位抖动：档位是 min(配置档, 库存档)，库存跨 4/10 边界就会翻，
+  // 实测缓存断点正好落在本行（单次代价 7141 字全价）。现在本段已标 volatile，
+  // 翻字不再击穿系统提示前缀。
   const shortReplyHint = lvl >= 2
     ? `- 短回应：≤10 字的纯反应（"确实""乐了""认了""绷不住了"这一类附和/吐槽/无语）**优先配一张表情**，就在同一次回复里同时调用 ${T.text} 和 ${T.send}，别只回一句干巴巴的文字。`
     : null;
@@ -561,15 +560,15 @@ export function buildStickerStrategyHint(level = 1, names = {}, opts = {}) {
     `- ${freqByLevel}`,
     shortReplyHint,
     `- 选择：优先用备注（desc）和你的记忆（localNote/tags）能准确对上语境的；没有备注/不确定的表情，先 ${T.image} 看图再决定，不要瞎发。`,
-    // ⚠️ 2026-10-21 修：原文写的是"想说的话先用 send_message 作为单独气泡发出，再单独发表情"，
-    //    字面鼓励了**分两轮**。而编排器在"纯发送批"之后会立即收尾（autoEndAfterSend），
-    //    第二轮根本不存在 —— 分两轮 = 表情永远发不出去（实测 1 轮同批发才成功 2/2）。
+    // 原文写的是"想说的话先用 send_message 作为单独气泡发出，再单独发表情"，
+    // 字面鼓励了分两轮。而编排器在"纯发送批"之后会立即收尾（autoEndAfterSend），
+    // 第二轮根本不存在，分两轮 = 表情永远发不出去（实测 1 轮同批发才成功 2/2）。
     `- 发送：用 ${T.send}。**要文字+表情时，在同一次回复里同时调用 ${T.text} 和 ${T.send}**（两个工具一起发），不要分成两轮——分成两轮的话第一轮发完就收尾了，表情永远发不出去。一条消息只能是一张表情，文字和表情不能混在同一个气泡里。`,
-    // ⚠️ 2026-10-22 P2：收藏从"被动响应指令"改成"看到合适的就主动收"。旧文案只在
-    //    「用户让你收藏」时才引导，实测近 24 小时群里过了 70 张图、只入库 5 张 ——
-    //    库长不大，capacityLevel() 就永远把档位压在 2（≤9 张最高 2 档），形成闭环。
-    //    看图确认降级为可选步骤（只在拿不准图意时用），note/tags/usage 三件套仍必须填全。
-    //    护栏仍是 maxCollectPerHour（10 次/小时），不写进提示词以免变成运行时变量。
+    // 收藏从"被动响应指令"改成"看到合适的就主动收"。旧文案只在
+    // 「用户让你收藏」时才引导，实测近 24 小时群里过了 70 张图、只入库 5 张，
+    // 库长不大，capacityLevel() 就永远把档位压在 2（≤9 张最高 2 档），形成闭环。
+    // 看图确认降级为可选步骤（只在拿不准图意时用），note/tags/usage 三件套仍必须填全。
+    // 护栏仍是 maxCollectPerHour（10 次/小时），不写进提示词以免变成运行时变量。
     `- 收藏：群友发了有意思的图/表情就**主动**用 ${T.collect} 收下来（填那条消息的 #数字），不用等他开口说「收藏 / 存下来 / 记住这个梗」；只有拿不准图里画的是什么、或者想不出什么场合该用时，才先用 ${T.image} 看一眼。收的时候把**三样一起填全**：note（画的是什么、什么情绪，20 字内）、tags（2~4 个短标签，如"无语/翻白眼/懒得理"——它们会进你的表情候选列表，下次挑表情就靠它）、usage（什么场合该用，如"被噎住/不想接话/敷衍"）。别见一张收一张，挑真用得上的；描述填得准，下次才挑得到、用得对，别只回一句"收了"就算。`,
     '- 不要：在严肃/正式/敏感话题硬塞表情；不要每次都用同一个；不要一条消息里塞多个表情；不要把文字和表情混在同一个气泡里。'
   ].filter(Boolean).join('\n');

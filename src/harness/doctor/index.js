@@ -1,7 +1,7 @@
-// 系统自检（self-doctor）—— Phase 1：全只读体检。
+// 系统自检（self-doctor）：Phase 1 全只读体检。
 //
-// ⚠️ 与 health-system 无关：那个是**人设**的生存状态（会饿会病），
-//    这个是**系统**的健康。两者名字必须在对话里区分开。
+// 与 health-system 无关：那个是**人设**的生存状态（会饿会病），
+// 这个是**系统**的健康。两者名字必须在对话里区分开。
 //
 // 四条检查线（全部只读，不改任何被检对象）：
 //
@@ -12,10 +12,10 @@
 //      · requires 硬依赖：声明的能力没有任何提供者 → 该扩展是死的
 //      · 能力撞车：同一能力名多个提供者（核心只取第一个，第二个默默不生效）
 //      · prompt 片段重复：同 id 或同内容的片段被重复注入（白付 token）
-//      · 缺省开启却报依赖缺失 —— 这些是"用户以为在跑，其实没跑"
+//      · 缺省开启却报依赖缺失：这些是"用户以为在跑，其实没跑"
 //
-//   A2. 加载平面（运行态，2026-10-08 新增）
-//      · 加载失败 / 重载失败沿用旧版本 —— 磁盘检查与日志都看不出的"半死"状态。
+//   A2. 加载平面（运行态）
+//      · 加载失败 / 重载失败沿用旧版本：磁盘检查与日志都看不出的"半死"状态。
 //        数据源是现役 skillManager 的 loadError / errors（见 checkLoadStatus）。
 //
 //   B. 运行平面（有状态，最后一条消息之后）
@@ -31,8 +31,8 @@
 //      · 未命中率异常高的日子
 //
 // 输出：
-//   · providers['doctor.report']  —— 给其它扩展/工具取用
-//   · 工具 self_doctor            —— 模型被问"系统有没有问题"时自查
+//   · providers['doctor.report']：给其它扩展/工具取用
+//   · 工具 self_doctor：模型被问"系统有没有问题"时自查
 //   · 日志 + 可选广播
 //
 // 红线（本项目铁律）：结果只写 QQ_AGENT_DATA_DIR/plugin-data/self-doctor/，
@@ -47,18 +47,18 @@ import { prepareTriageBatches, buildTriagePrompt, parseTriageReply, mergeVerdict
 // 拆成独立文件是为了让"取数"和"怎么判问题"分开（见该文件头注释）。
 import { recentCacheRounds, buildSentinel, sentinelText } from './cache-sentinel.js';
 import { DOCTOR_TOOLS, LIMITS as TOOL_LIMITS } from './doctor-tools.js';
-// 运行态加载状态（加载失败 / 沿用旧版本）没有第二种来源 —— 读同一进程里的
+// 运行态加载状态（加载失败 / 沿用旧版本）没有第二种来源，读同一进程里的
 // skillManager。这是**事实来源**，不是判据（判据仍保持本插件自持，见
 // checkExtensionPlane 里 MULTI_PROVIDER_CAPS 的注释）。
-// 为什么必须读它：loadSkillDir 在"已有旧实例"时失败会静默沿用旧版本（只写
-// errors 不打日志），磁盘视角与会话视角都看不出 —— 2026-10-07 conversation-memory 的现场。
+// 必须读它：loadSkillDir 在"已有旧实例"时失败会静默沿用旧版本（只写
+// errors 不打日志），磁盘视角与会话视角都看不出。
 import { skillManager } from '../../skills/manager.js';
 // 数据目录的唯一真源（与 forge / dev / cache-guard 同源）。
-// ⚠️ 原来写 `QQ_AGENT_DATA_DIR || '.'` —— 只有 electron/main.js 会设那个 env，
-//    `node src/server.js` 从不设，于是回落**进程 cwd**：在仓库根跑 headless，
-//    last-report.json / acked.json 就写进 <仓库根>/plugin-data/，仓库多出一坨未跟踪文件，
-//    而 UI 读的是 data/ 下的真目录 → 自检报告"存了但看不到"。config.js 的 DATA_DIR
-//    按模块位置锚定，不看 cwd，多实例 profile（data-2）也一并正确。
+// 不能写 `QQ_AGENT_DATA_DIR || '.'`。只有 electron/main.js 会设那个 env，
+// `node src/server.js` 从不设，于是回落**进程 cwd**。在仓库根跑 headless，
+// last-report.json / acked.json 就写进 <仓库根>/plugin-data/，仓库多出一坨未跟踪文件，
+// 而 UI 读的是 data/ 下的真目录 → 自检报告"存了但看不到"。config.js 的 DATA_DIR
+// 按模块位置锚定，不看 cwd，多实例 profile（data-2）也一并正确。
 import { DATA_DIR } from '../../config.js';
 
 const DEFAULTS = {
@@ -90,13 +90,12 @@ const store = {
 // ── 忽略清单（用户自查后确认无妨的问题）────────────────────────────────────
 //
 // 为什么需要它：体检单的每一条都是从磁盘现状**推导**出来的。用户人工核实某条是
-// 误报 / 既定设计后，界面上没有任何地方能表达"这条我知道了"—— 下次体检它原样
-// 回来，一直顶在警告位上（2026-10-23 用户实测：「会话报错」自查无问题也无法取消，
-// 会一直在）。「工具被排除」那一类有 CHOICE_CODES 做静态豁免，但覆盖不到所有
-// 情况，最终得给用户一个显式的、可撤销的「忽略」。
+// 误报 / 既定设计后，界面上没有任何地方能表达"这条我知道了"，下次体检它原样
+// 回来，一直顶在警告位上。「工具被排除」那一类有 CHOICE_CODES 做静态豁免，但
+// 覆盖不到所有情况，最终得给用户一个显式的、可撤销的「忽略」。
 //
 // 落盘：data/plugin-data/self-doctor/acked.json（铁律：只写自己的 plugin-data）。
-// key = `${area}|${id}` —— 同一条规则复现时忽略继续生效；「恢复」即删键。
+// key = `${area}|${id}`，同一条规则复现时忽略继续生效；「恢复」即删键。
 const ackStore = { acked: {} };   // key -> { area, id, title, at }
 
 function ackKeyOf(it) {
@@ -123,12 +122,12 @@ function saveAckStore() {
 
 /**
  * 把忽略清单套到一份报告上：被忽略的条目移出 issues（改放 acked），
- * counts / total / verdict 只按可见项重算 —— 忽略的意义就是让它不再顶在
+ * counts / total / verdict 只按可见项重算，忽略的意义就是让它不再顶在
  * 警告位上，连 promptSections 的「系统自检发现了问题」提示一起安静。
  *
  * 幂等且对「恢复」即时生效：候选集取 issues ∪ acked（忽略过的条目不在
  * issues 里了，只从 acked 找回它才能让恢复马上反映到缓存报告上），
- * 再按 ackStore 重新分区 —— 同一份报告反复套结果不变。
+ * 再按 ackStore 重新分区，同一份报告反复套结果不变。
  */
 function applyAckToReport(r) {
   if (!r) return r;
@@ -188,7 +187,7 @@ function listDirSafe(dir) {
 
 /**
  * 读取一个扩展目录的清单与入口，做静态契约检查。
- * 不 import 入口（避免副作用与重复注册）—— 只做文本级静态扫描。
+ * 不 import 入口（避免副作用与重复注册），只做文本级静态扫描。
  */
 function inspectExtension(dir, kind) {
   const manifestFile = path.join(dir, kind === 'plugin' ? 'plugin.json' : 'skill.json');
@@ -279,17 +278,15 @@ function checkExtensionPlane() {
 
   // 5. 能力撞车（核心只取第一个提供者）
   //
-  // ⚠️ 但有一类能力**设计上就允许多个提供者**（广播式：核心挨个问过去，谁认领谁处理，
-  //    返回 null 表示"不归我管"）。对它们报"撞车"是**纯误报** —— 而且文案本身也是错的
-  //    （manager.js 的 getCapabilityProviders 对任何能力都返回**全部** active 提供者，
-  //     "只取第一个"只在广播式之外才有意义）。
+  // 但有一类能力**设计上就允许多个提供者**（广播式：核心挨个问过去，谁认领谁处理，
+  // 返回 null 表示"不归我管"）。对它们报"撞车"是**纯误报**。而且文案本身也是错的
+  // （manager.js 的 getCapabilityProviders 对任何能力都返回**全部** active 提供者，
+  // "只取第一个"只在广播式之外才有意义）。
   //
-  //    名单的权威定义在 src/skills/manager.js 的 MULTI_PROVIDER_CAPABILITIES。
-  //    这里选择**本地复制一份**而不是 import 它 —— 与本项目既有做法略有出入
-  //    （media-download / reply-safety 等插件确实会 import src/ 下的工具模块），
-  //    但这份名单属于"会被读的那张表"：import 过来后核心一改，插件的判定标准
-  //    就跟着变了，而体检报告的可信度恰恰需要它独立于被检对象。
-  //    代价是两边要同步 —— 加新广播式能力时，这里也要加一笔。
+  // 名单的权威定义在 src/skills/manager.js 的 MULTI_PROVIDER_CAPABILITIES。
+  // 这里**本地复制一份**而不是 import 它：这份名单属于"会被读的那张表"，
+  // import 过来后核心一改，插件的判定标准就跟着变了，而体检报告的可信度
+  // 恰恰需要它独立于被检对象。代价是两边要同步，加新广播式能力时，这里也要加一笔。
   const MULTI_PROVIDER_CAPS = new Set([
     'llm.request-params',
     'llm.response',
@@ -377,10 +374,9 @@ function checkExtensionPlane() {
  *   · 首次加载失败（没有旧实例可沿用）→ 模块当前不可用，critical；
  *   · 重载失败但沿用了旧版本（stale-but-working）→ 半死状态，warning。
  *
- * ⚠️ 为什么要有这条检查（2026-10-07 的教训）：stale 分支**连日志都没有**
- *   （只写 skillManager.errors），磁盘检查看不出（文件都在、清单也合法）、
- *   日志看不出（只剩"N 失败"的计数），只能靠人肉排除法 —— 当晚的
- *   conversation-memory 就是如此。运行状态只有一处事实来源，直接读它。
+ * stale 分支**连日志都没有**（只写 skillManager.errors），磁盘检查看不出
+ * （文件都在、清单也合法）、日志看不出（只剩"N 失败"的计数），只能靠人肉排除法。
+ * 运行状态只有一处事实来源，直接读它。
  * （导出仅为了测试能直接断言；加载器不消费这个导出。）
  */
 export function checkLoadStatus() {
@@ -470,8 +466,8 @@ function checkRuntimePlane() {
     if (Number(d.rounds) >= 8) roundsTop += 1;
     if (d.status === 'noreply') noreply += 1;
     // 「禁言」类中止是既定设计，不算会话报错（详见下方 BENIGN_SESSION_ERRORS）。
-    // 曾经这里是无脑 `if (d.error) withError += 1` —— 群里被禁言一次就在体检单上
-    // 挂一条「会话报错」，而会话留档不过期，它会一直在扫描窗口里（2026-10-23 实测）。
+    // 无脑 `if (d.error) withError += 1` 的话，群里被禁言一次就在体检单上
+    // 挂一条「会话报错」，而会话留档不过期，它会一直在扫描窗口里。
     const errText = String(d.error || '');
     if (errText) {
       if (BENIGN_SESSION_ERRORS.some((re) => re.test(errText))) benignErrors += 1;
@@ -487,9 +483,9 @@ function checkRuntimePlane() {
   const dup = Math.max(2, Number(c.dupThreshold) || 3);
 
   // 归类：真实故障 vs 用户主动选择。
-  // ⚠️ code 的真实取值来自核心 getToolAvailability，实测见过：
+  // code 的真实取值来自核心 getToolAvailability，实测见过：
   //   tool-disabled / tools-disabled（复数！）/ skill-disabled / skill-unavailable
-  // 「未启用/被关闭」是用户的正常选择，只计数不报警 —— 否则体检单会被
+  // 「未启用/被关闭」是用户的正常选择，只计数不报警，否则体检单会被
   // 「你没开梗库」这类噪音淹没，真正的故障反而看不见。
   const CHOICE_CODES = new Set(['skill-disabled', 'tool-disabled', 'tools-disabled', 'skill-not-enabled', 'tool-not-enabled']);
   const realProblems = [];
@@ -543,9 +539,9 @@ function checkRuntimePlane() {
 
 // 「既定设计」的会话中止：orchestrator 在创建会话前检测到机器人被禁言，会直接
 // 中止会话、把消息标记已读（src/orchestrator.js 的禁言检测）。这类存档
-// rounds=0 / messages=0，没有任何实质工作发生过 —— 算进「会话报错」是纯误报。
+// rounds=0 / messages=0，没有任何实质工作发生过，算进「会话报错」是纯误报。
 // 而且会话留档不过期：只要它还在扫描窗口（最近 100~400 个）里，每次体检都会
-// 原样报警，用户核实后也没有任何地方能取消（2026-10-23 实测教训）。
+// 原样报警，用户核实后也没有任何地方能取消。
 const BENIGN_SESSION_ERRORS = [/禁言/];
 
 /** 模型在 finishReason 里如实报告的失败（自然语言）。 */
@@ -607,7 +603,7 @@ function runDiagnosis({ wantProject = false } = {}) {
   try { load = checkLoadStatus(); } catch (e) { errors.push(`加载状态检查失败：${e?.message || e}`); }
   try { run = checkRuntimePlane(); } catch (e) { errors.push(`运行检查失败：${e?.message || e}`); }
   try { cache = checkCachePlane(); } catch (e) { errors.push(`缓存检查失败：${e?.message || e}`); }
-  // D. 项目平面（整个代码库的静态扫描）—— 只在显式要求时跑：
+  // D. 项目平面（整个代码库的静态扫描）只在显式要求时跑：
   //    它比前三条慢一个量级（~200ms vs 几毫秒），且结果不随会话变化，
   //    没必要每次体检都重扫。UI 上有独立的「扫描项目」按钮触发。
   let project = null;
@@ -635,7 +631,7 @@ function runDiagnosis({ wantProject = false } = {}) {
   const counts = { critical: 0, warning: 0, info: 0 };
   for (const i of all) counts[i.severity] += 1;
 
-  // E. 前缀缓存哨兵（最近几轮的量表）—— 只读最近 8 轮，实测约 100ms。
+  // E. 前缀缓存哨兵（最近几轮的量表）只读最近 8 轮，实测约 100ms。
   //    完整版（含静态前缀体检）由 UI 的「哨兵分析」按钮按需触发（见
   //    providers['doctor.cache-sentinel']）：静态体检要读十几个插件的源码，
   //    放进每次体检会让启动时的自动体检白多花 200ms，而它一周也不变一次。
@@ -730,9 +726,8 @@ export function setup(api) {
   // <DATA> 根：sessions / cache-warm-prefix.json 在这一层（dataRoot 的上两级）
   dataRootDir = path.resolve(dataRoot, '..', '..');
   // app 根：本文件位于 <appRoot>/src/harness/doctor/index.js
-  // ⚠️ 必须用 fileURLToPath —— new URL().pathname 在 Windows 上会给出 /E:/... 带前导斜杠，
-  //    且中文/空格路径不会自动解码（前几轮已踩过）。
-  // 内置化后本文件位于 <appRoot>/src/harness/<mod>/index.js —— 层级比插件期深一层，
+  // 必须用 fileURLToPath，因为 new URL().pathname 在 Windows 上会给出 /E:/... 带前导斜杠，
+  // 且中文/空格路径不会自动解码。
   // 优先用宿主注入的 appRoot（见 src/harness/index.js），算错会让自检/修复指向 src/。
   appRoot = api.appRoot || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -759,7 +754,7 @@ export function setup(api) {
     }
   });
 
-  // 独立的项目扫描工具：不给 self_doctor 加参数就够，但单独一个更省 token ——
+  // 独立的项目扫描工具：不给 self_doctor 加参数就够，但单独一个更省 token。
   // 模型只想"看代码"时不必把扩展/运行/缓存三段也读进来。
   api.registerTool({
     id: 'scan_project',
@@ -821,10 +816,10 @@ export function dispose() { deactivate(); }
 // 击穿归因拿到的只是"哪一段变了"（「表情包」），要回答"哪个插件干的"就得
 // 把标题映射回 manifest.id。
 //
-// ⚠️ 不用 skillManager.getPromptSections()：那个会先过 isActive(context)，
-//    在自检的调用上下文里（没有 visionEnabled/toolsCfg）可能整批判为不活跃，
-//    映射直接空掉。直接遍历 registry 取声明与函数返回值，绕开活跃性判断 ——
-//    我们只需要"这个标题属于谁"，与它此刻是否生效无关。
+// 不用 skillManager.getPromptSections()：那个会先过 isActive(context)，
+// 在自检的调用上下文里（没有 visionEnabled/toolsCfg）可能整批判为不活跃，
+// 映射直接空掉。直接遍历 registry 取声明与函数返回值，绕开活跃性判断，
+// 我们只需要"这个标题属于谁"，与它此刻是否生效无关。
 function buildSectionOwner() {
   const out = {};
   try {
@@ -844,7 +839,7 @@ function buildSectionOwner() {
         } catch { /* 某个模块的段函数抛错，不影响其它模块的映射 */ }
       }
     }
-  } catch { /* manager 还没起（极早期调用）—— 归因会显示"未识别来源" */ }
+  } catch { /* manager 还没起（极早期调用），归因会显示"未识别来源" */ }
   return out;
 }
 
@@ -854,7 +849,7 @@ export const providers = {
     const cached = store.lastReport;
     // project=true 时必须重跑（缓存里可能没带项目段）
     if (!run && !project && cached && (Date.now() - (store.lastRunAt || 0)) < 5 * 60 * 1000) {
-      // 忽略清单可能在缓存期间变过（用户刚点了「忽略」）—— 每次返回前都重套一次，
+      // 忽略清单可能在缓存期间变过（用户刚点了「忽略」）。每次返回前都重套一次，
       // 否则 5 分钟缓存会让已忽略的条目继续显示（applyAckToReport 幂等，可重复调）。
       applyAckToReport(cached);
       return { report: cached, text: reportText(cached) };
@@ -863,11 +858,11 @@ export const providers = {
     return { report: r, text: reportText(r) };
   },
   /**
-   * 忽略 / 恢复体检单上的条目 —— 用户自查后确认某条无妨时的显式处置。
+   * 忽略 / 恢复体检单上的条目，用于用户自查后确认某条无妨时的显式处置。
    *
    * items: [{ area, id }]（字段与 report.issues 里的条目一致，UI 直接取）。
    * action: ignore（默认）| restore | restore-all。
-   * 返回 { ok, acked } —— acked 是当前清单全量，UI 直接渲染「已忽略」区。
+   * 返回 { ok, acked }，其中 acked 是当前清单全量，UI 直接渲染「已忽略」区。
    *
    * 为什么落后端而不是前端 localStorage：忽略清单要跨重启、跨设备端生效，
    * 且与报告同源同生命周期；数据只写本插件自己的 plugin-data（铁律）。
@@ -915,7 +910,7 @@ export const providers = {
    * 前缀缓存哨兵：最近几轮的量表 + 静态前缀体检 + 跨轮击穿归因。
    *
    * 为什么与 doctor.report 分开：静态体检与归因要读十几个插件的源码和上百个
-   * session 存档（实测合计 ~400ms），而它们一周也不变一次 —— 放进每次体检纯属
+   * session 存档（实测合计 ~400ms），而它们一周也不变一次。放进每次体检纯属
    * 浪费，尤其拖慢启动时的自动体检。UI 上它对应「哨兵分析」按钮，按需触发。
    */
   'doctor.cache-sentinel': ({ limit = 16, window = 0 } = {}) => {
@@ -932,19 +927,19 @@ export const providers = {
   /**
    * 取证工具集（**只读**）：供「对话排查」让诊断模型自己去读源码 / 日志 / 插件数据。
    *
-   * 本能力只**交付定义**，不执行任何读取 —— 真正执行由调用方（routes.js 的工具循环）
+   * 本能力只**交付定义**，不执行任何读取：真正执行由调用方（routes.js 的工具循环）
    * 用 executeTool 触发。这样做的好处：
    *   · 插件的沙箱（白名单 + realpath + 限额）是唯一路径解析入口，核心不必再懂路径规则；
    *   · 核心不 import 本插件，只按能力名取（关掉插件 → 对话排查自动降级为纯体检单模式）。
    *
    * 返回 { defs, ctx }：defs 是工具定义数组（含 {id,name,description,parameters,execute}），
-   * ctx 是它们需要的运行环境（appRoot = 代码根，dataRoot = data/ 根 —— 注意不是
+   * ctx 是它们需要的运行环境（appRoot = 代码根，dataRoot = data/ 根，注意不是
    * plugin-data/self-doctor，工具层要读 data/logs/ 与 data/plugin-data/）。
    */
   'doctor.tools': () => {
     // dataRoot 这里指 <DATA_DIR> 本身（含 logs/ 与 plugin-data/）。
     // setup() 里那个 dataRoot 指向 plugin-data/self-doctor/（本插件自己的落盘目录），
-    // 语义不同，不能混用 —— 由 data/ 根往回退两级得到。
+    // 语义不同，不能混用，由 data/ 根往回退两级得到。
     const dataBase = path.dirname(path.dirname(dataRoot));
     return {
       defs: DOCTOR_TOOLS,
@@ -953,7 +948,7 @@ export const providers = {
     };
   },
   /**
-   * 为"模型逐个审"准备待审批（**不调模型** —— 调模型是 routes.js 的职责，
+   * 为"模型逐个审"准备待审批（**不调模型**，调模型是 routes.js 的职责，
    * 见 /api/doctor/triage；本插件只负责扫、分组、读源码、拼 prompt）。
    *
    * 返回 { batches, stats }：
@@ -990,7 +985,7 @@ export const providers = {
   },
   /**
    * 解析模型对一批命中的回复，并合并回 `file:line:ruleId` 索引。
-   * 放在插件里（而不是 routes.js）是为了让核心保持零解析逻辑 —— 输出格式的
+   * 放在插件里（而不是 routes.js）是为了让核心保持零解析逻辑，输出格式的
    * 所有权归"定义 prompt 的那一方"，改格式时两边不会漂移。
    */
   'doctor.triage-parse': ({ batches, replies } = {}) => {
@@ -1012,25 +1007,20 @@ export const providers = {
 /**
  * 供 prompt 引用：自检状态提示。
  *
- * ⚠️ 本段必须**逐字节恒定**，只允许在"有问题 ↔ 没问题"这一维度整体切换
- *    （2026-10-01 实测教训，两处都踩过）：
+ * 本段必须**逐字节恒定**，只允许在"有问题 ↔ 没问题"这一维度整体切换：
  *
- *    ① 段内不能有随状态波动的数字。原先是「发现 N 个严重、M 个警告」，
- *       N/M 在 0/1/2 之间来回跳 —— 全天 1167 次「2 警告」+ 344 次「1 警告」，
- *       至少切换 3 次。缓存按块（block）对齐，systemPrompt 尾部改一个字符，
- *       代价不是那一个字符，而是**其后所有块全部重算**：实测单次多付 21459 字节
- *       （LCP 断在 13988 处，命中率掉到 86%）。模型要细节会自己调 self_doctor，
- *       数字写在提示词里除了制造缓存断点没有任何收益。
+ *    ① 段内不能有随状态波动的数字。原先的「发现 N 个严重、M 个警告」在 0/1/2
+ *       之间来回跳。缓存按块（block）对齐，systemPrompt 尾部改一个字符，
+ *       代价是**其后所有块全部重算**（实测单次多付 21459 字节，命中率掉到 86%）。
+ *       模型要细节会自己调 self_doctor，数字写在提示词里除了制造缓存断点没有收益。
  *
- *    ② 不能再"没问题就整段消失"。整段消失同样改变尾部字节，
- *       等价于一次全量重算（实测 729 次「段消失」变体）。
+ *    ② 不能"没问题就整段消失"。整段消失同样改变尾部字节，等价于一次全量重算。
  *       改为**恒定输出**：无问题时给一句固定中性文案，占住同样的位置。
  *
- *    ③ priority 必须保持 0（排最末）——它前面是【可用技能】里最易变的一块，
+ *    ③ priority 必须保持 0（排最末），它前面是【可用技能】里最易变的一块，
  *       排中部会把后面所有 section 的字节位置推走。
  *
- *    这样 steady state 下本段永久恒定，只有健康状态真正翻转时才变一次 ——
- *    那一天最多几次，且是语义上必要的牺牲。
+ *    这样 steady state 下本段永久恒定，只有健康状态真正翻转时才变一次。
  */
 export function promptSections() {
   try {

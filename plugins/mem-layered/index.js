@@ -1,37 +1,35 @@
 // 分层记忆（确定性型 / plugins/mem-layered/）
 //
-// ── 一句话 ────────────────────────────────────────────────────────────────
 // 一个"按会话分片、会遗忘、每轮自动想起一点旧事"的长时记忆，全部通过钩子与能力
-// 挂进宿主，**不改宿主一行代码**。
+// 挂进宿主，不改宿主一行代码。
 //
-// ── 与内置 plugins/conversation-memory 的关系 ─────────────────────────────
-// 两者**提供同名能力**（memory.search / memory.archive / memory.status /
-// memory.rebuild），因此：
+// 与内置 plugins/conversation-memory 的关系：两者提供同名能力
+// （memory.search / memory.archive / memory.status / memory.rebuild），因此：
 //   · 宿主自带的 skills/memory-recall（注册 memory_search / memory_archive /
 //     memory_status 三个工具）不需要任何改动就能用本引擎；
 //   · routes.js 的「数据移植」在导入后会调 memory.rebuild 重建索引，也直接复用。
-//   · 宿主自己的 /api/memory-files（群友印象那套）**不在本插件的职责范围内** ——
+//   · 宿主自己的 /api/memory-files（群友印象那套）不在本插件的职责范围内：
 //     那是核心 MemoryStore 的接口，插件拿不到路由注册权，硬做只会两套数据打架。
 //
-// ⚠️ 两个提供者同时启用时，"能力取第一个提供者"的结果取决于加载顺序，
-//    所以**建议在插件页把内置的会话记忆关掉**，只留一个引擎。
-//    —— 这件事不能只写在注释里等人来看：lib/conflict.js 会在启用时自检，
-//       检测到内置版还开着就主动提醒（日志 + 状态 + 私聊里的一句话）。
+// 两个提供者同时启用时，"能力取第一个提供者"的结果取决于加载顺序，
+// 所以建议在插件页把内置的会话记忆关掉，只留一个引擎。
+// 这件事不靠注释提醒：lib/conflict.js 会在启用时自检，
+// 检测到内置版还开着就主动提醒（日志 + 状态 + 私聊里的一句话）。
 //
-// ── 相对内置版的六处实质改动（都针对实测到的问题）────────────────────────
+// 相对内置版的实质改动（都针对实测到的问题）：
 //   1. 按会话分片索引（内置版单文件全量重写：实测 index.json 721KB，而它索引的
-//      15 个块加起来才 176KB —— 索引是内容的 4.1 倍）
+//      15 个块加起来才 176KB，索引是内容的 4.1 倍）
 //   2. 检索加 idf（内置版无 idf；实测 5422 个词项里 df=1 占 78%，这些最有区分度的
 //      "独苗词"与覆盖全部块的高频词同权）
 //   3. 真遗忘：命中加分 × 指数衰减 × 老块淘汰（内置版 forget() 的 soft 分支零调用，
 //      块权重恒为 1）
-//   4. 每轮自动检索注入（内置版只注入待办/跨轮/语义卡/跨群，从不注入相关旧事 ——
+//   4. 每轮自动检索注入（内置版只注入待办/跨轮/语义卡/跨群，从不注入相关旧事，
 //      "记了但想不起来"）
 //   5. 补上内置版有、但本插件原先缺的五项：待办提醒（含工具入口）、跨轮工作记忆、
 //      语义卡（写入即去噪 + 会话隔离）、跨群旁听（默认关）、成本护栏（日级+会话级）
 //   6. 效果度量：stats.json 记检索命中率、注入字节、模型主动调用次数
-//   7. 引擎冲突自检：内置版还开着就主动提醒（日志 + 状态 + 私聊一句话），
-//      免得"两套记忆同时注入、模型却查的是旧数据"这种哑巴亏（见 lib/conflict.js）
+//   7. 引擎冲突自检：内置版还开着就主动提醒，免得"两套记忆同时注入、
+//      模型却查的是旧数据"这种哑巴亏（见 lib/conflict.js）
 import path from 'node:path';
 import { DATA_DIR } from './lib/env.js';
 import { timeOfDayOf } from './lib/util.js';
@@ -70,22 +68,17 @@ const DEFAULTS = {
   autoRecallCooldownMin: 30,
   // 自动回忆的行宽（字符）。0 = 按预算自动摊到各行（默认行为）；
   // > 0 = 固定行宽，不再随预算伸缩。见 lib/inject.js 的"预算行宽联动"。
-  //
-  // ⚠️ 2026-10-16 评估过"改成定长 60"，**结论是不改**，已回滚。
-  //实测数据：旧实现段长随命中条数在 148/220/220/220 间跳（幅度 72）；
-  // 定长版在 101/183 间跳（幅度 82）—— **抖动反而更大**，
-  // 且把覆盖条数从 3~4 条砍到 2 条，还破坏了 M1/M5/M8 三项既有断言。
-  // 原实现的"行宽随 cap 摊"其实是段内自适应的最优解。
+  // 评估过改成定长 60，结论是不改：实测旧实现段长在 148/220/220/220 间跳（幅度 72），
+  // 定长版在 101/183 间跳（幅度 82），抖动反而更大，且把覆盖条数从 3~4 条砍到 2 条。
   recallRowWidth: 0,
-  // —— 全局注入封顶（2026-10-16 新增）——
-  // 七个注入段（待办/跨轮/重演/旧事/语义卡/旁听/冲突提醒）各管各的预算，
-  // 彼此零仲裁 ⇒ 每轮注入体积在 0~700+ 字符间随机漂移。这是硬上限，
-  // 0 = 不限（旧行为）。建议 400：对齐 autoRecallBudget(220)+重演(140) 的
-  // 常见组合，又能容纳一条待办。详见 clipParts() 的注释。
+  // 全局注入封顶。七个注入段（待办/跨轮/重演/旧事/语义卡/旁听/冲突提醒）各管各的
+  // 预算，彼此零仲裁，每轮注入体积会在 0~700+ 字符间随机漂移。这是硬上限，
+  // 0 = 不限。建议 400：对齐 autoRecallBudget(220)+重演(140) 的常见组合，
+  // 又能容纳一条待办。详见 clipParts() 的注释。
   injectTotalMax: 400,
   minTriggerChars: 6,
   observeTools: true,
-  // —— 附加五项（对齐内置版）——
+  // 附加五项（对齐内置版）
   pendingTodos: true,
   crossTurn: true,
   crossTurnTtlMin: 90,
@@ -103,10 +96,10 @@ const DEFAULTS = {
   dayPromptMax: 800000,
   chatPromptMax: 200000,
   minForgetScore: 0.25,
-  // —— 冲突自检（见 lib/conflict.js）——
+  // 冲突自检（见 lib/conflict.js）
   warnOnConflict: true,
   conflictWarnCooldownMin: 1440,
-  // —— 梗概墓碑 + 多线索检索 + 结果多样性（见 lib/gist.js / lib/recall.js）——
+  // 梗概墓碑 + 多线索检索 + 结果多样性（见 lib/gist.js / lib/recall.js）
   gistEnabled: true,
   gistMaxPerChat: 400,
   gistRetainDays: 1095,
@@ -116,7 +109,7 @@ const DEFAULTS = {
   diversityLambda: 0.3,
   autoRecallMinRel: 0.25,
   staleSnippetSkip: true,
-  // —— 人类记忆机制包 v1.7.0（共激活联想 · 自发恢复 · 时段情境 · 睡眠重演）——
+  // 人类记忆机制包（共激活联想 · 自发恢复 · 时段情境 · 睡眠重演）
   // 共激活联想：同轮一起被想起的块结缘，之后检索时激活向邻居扩散（Hebb）
   linkBoost: 0.15,
   linkLearn: true,
@@ -163,9 +156,9 @@ function settings() {
 
 /**
  * 懒建冲突看门狗。
- * ⚠️ 检测必须发生在 **activate 之后**（这里只在需要时建对象，真正判定在 activate 里跑）：
- *    setup() 阶段本插件自己还没注册进能力表，这时探针必然只看到内置版 —— 会把
- *    "我还没上桌"误判成"我抢不过它"。见 lib/conflict.js 的 #probeSelfFirst。
+ * 检测必须发生在 activate 之后（这里只在需要时建对象，真正判定在 activate 里跑）：
+ * setup() 阶段本插件自己还没注册进能力表，这时探针必然只看到内置版，
+ * 会把"我还没上桌"误判成"我抢不过它"。见 lib/conflict.js 的 #probeSelfFirst。
  */
 function guard() {
   if (!conflictGuard && api) conflictGuard = new ConflictGuard(api, settings);
@@ -196,8 +189,8 @@ function instance() {
     onBlock: (chatKey, block) => cards.ingest(chatKey, block?.snippets || [])
   });
   // 检索侧的两条注入：gistSearch 让墓碑参与排序；revive 让墓碑命中后能重建整块。
-  // ⚠️ 都做成函数注入而不是让 Recall 直接 import GistStore/Consolidator ——
-  //    Recall 与它们共享 store，直接互相 import 会成环。
+  // 都做成函数注入而不是让 Recall 直接 import GistStore/Consolidator：
+  // Recall 与它们共享 store，直接互相 import 会成环。
   recall = new Recall({
     store,
     settings,
@@ -206,7 +199,7 @@ function instance() {
     revive: (chatKey, g) => consolidator.reviveBlock(chatKey, g)
   });
   archive = new ArchiveReader({ messagesDir });
-  // store 一并给 Injector：睡眠重演要它挑"该复习了"的块（v1.7.0）
+  // store 一并给 Injector：睡眠重演要它挑"该复习了"的块
   injector = new Injector({ recall, settings, stats, store });
   return { store, consolidator, recall, archive, injector, stats, crossTurn, pending, cards, peek, budget, gist };
 }
@@ -256,15 +249,15 @@ function consolidate(why) {
 }
 
 /**
- * 把片段并进**最后一条 user 消息的末尾**（原地改，钩子约定允许）。
+ * 把片段并进最后一条 user 消息的末尾（原地改，钩子约定允许）。
  *
- * ⚠️ 为什么不能并进 system：system 是整条请求前缀的第一段，它尾巴一变，
- *   后面的 tools 与整条 user 全部作废（内置版踩过：真实调用第 1 次只命中
- *   2560 tok，第 2 次才 98%）。而 user 消息的**尾部**本来就是易变段，
- *   放这里不额外增加任何缓存损失。
+ * 不能并进 system：system 是整条请求前缀的第一段，它尾巴一变，
+ * 后面的 tools 与整条 user 全部作废（内置版踩过：真实调用第 1 次只命中
+ * 2560 tok，第 2 次才 98%）。而 user 消息的尾部本来就是易变段，
+ * 放这里不额外增加任何缓存损失。
  *
- * ⚠️ 也**不**退到 system：真找不到 user 消息时宁可这一轮不注入。
- *   注入是"锦上添花"，缓存全废是"真金白银"，两者不该等价交换。
+ * 也不退到 system：真找不到 user 消息时宁可这一轮不注入。
+ * 注入是"锦上添花"，缓存全废是"真金白银"，两者不该等价交换。
  */
 export function appendToLastUser(messages, text) {
   if (!Array.isArray(messages) || !text) return false;
@@ -277,9 +270,9 @@ export function appendToLastUser(messages, text) {
 }
 
 /**
- * 组装本轮要注入的全部片段，返回**一整段**文本。
+ * 组装本轮要注入的全部片段，返回一整段文本。
  *
- * 顺序是有讲究的：越靠前越"当轮就要用得上"。
+ * 顺序有讲究：越靠前越"当轮就要用得上"。
  *   待办（现在就该办）→ 跨轮（别复读）→ 旧事（上下文）→ 语义卡（常识）→ 旁听（环境）
  * 成本护栏的档位会决定后几段要不要留（见 lib/budget.js 的 LEVELS）。
  */
@@ -324,7 +317,7 @@ function buildInject({ chatKey, triggerText, personIds }) {
     } catch { /* ignore */ }
   }
 
-  // 2.5) 睡眠重演（v1.7.0）：不看你问什么，只看"哪块旧事该复习了"。
+  // 2.5) 睡眠重演：不看你问什么，只看"哪块旧事该复习了"。
   //      放在相关旧事前面：它是"突然想起"，该比"你查过的东西"更显眼一点。
   let replayChunkIds = [];
   if (f.autoRecall && s.sleepReplay !== false) {
@@ -389,34 +382,31 @@ function buildInject({ chatKey, triggerText, personIds }) {
 }
 
 /**
- * 全局注入封顶（2026-10-16缓存/漂移修复 · 对应改造①）。
+ * 全局注入封顶。
  *
- * ── 为什么要它 ────────────────────────────────────────────────────────────
  * buildInject 会拼最多 7 段（待办 / 跨轮 / 睡眠重演 / 相关旧事 / 语义卡 /
- * 跨群旁听 / 引擎冲突提醒），**每段各管自己的预算，彼此之间零仲裁**。
+ * 跨群旁听 / 引擎冲突提醒），每段各管自己的预算，彼此之间零仲裁。
  * 结果是每轮注入体积在 0 ~ 700+ 字符之间随机跳：
  *   - 有没有待办、到没到期、有没有到点的睡眠重演 → 变
  *   - 检索命中几条（cap = min(4, lines.length)）→ 变
  *   - recallRowWidth=0 时行宽按 (budget-fixed)/cap 现算 → 跟着变
  * 这是提示词体积"漂移"的直接来源。
  *
- * 现有的 budgetGuard 护栏（lib/budget.js）**管不到这件事**：它看的是
- * 日/会话累计 prompt 量（dayPromptMax=800,000 / chatPromptMax=200,000），
- * 是**事后**按天降档。而实测单日已跑 6,434,834 字符 —— 是 dayMax 的 8 倍，
- * 这条线从来没生效过，护栏形同虚设。降档粒度也远不够：一档只关掉
- * 语义卡/旁听/跨轮，核心的「相关旧事」不受影响。
+ * 现有的 budgetGuard 护栏（lib/budget.js）管不到这件事：它看的是日/会话累计
+ * prompt 量（dayPromptMax=800,000 / chatPromptMax=200,000），是事后按天降档。
+ * 而实测单日已跑 6,434,834 字符，是 dayMax 的 8 倍，这条线从来没生效过。
+ * 降档粒度也远不够：一档只关掉语义卡/旁听/跨轮，核心的「相关旧事」不受影响。
  *
- * ── 裁剪规则 ──────────────────────────────────────────────────────────────
- * 优先级（parts 的push 顺序 = 重要性顺序，越靠前越该保留）：
+ * 裁剪规则：优先级（parts 的 push 顺序 = 重要性顺序，越靠前越该保留）
  *   冲突提醒 > 待办 > 跨轮 > 睡眠重演 > 相关旧事 > 语义卡 > 跨群旁听
- * 从**最低优先级**开始整段丢弃，直到总字符数 ≤ injectTotalMax。
- * **整段丢，不做半截截断** —— 半截的记忆行会让模型读到一句没有上下文的
- * 残缺内容，比不给更糟（相关旧事那段本来就有"截断也好过丢光"的取舍，
+ * 从最低优先级开始整段丢弃，直到总字符数 ≤ injectTotalMax。
+ * 整段丢，不做半截截断：半截的记忆行会让模型读到一句没有上下文的残缺内容，
+ * 比不给更糟（相关旧事那段本来就有"截断也好过丢光"的取舍，
  * 但那是段内单条的兜底，不是段间的仲裁，两者别混）。
  *
- * ⚠️ 引擎冲突提醒**豁免**：它只有一行，说的是"你还有另一套记忆引擎开着，
- *    建议关掉"这种配置问题，不是记忆内容。裁掉它等于让一个配置错误永远
- *    无人发现。它不进 parts 的裁剪链，单独拼在最前。
+ * 引擎冲突提醒豁免：它只有一行，说的是"你还有另一套记忆引擎开着，
+ * 建议关掉"这种配置问题，不是记忆内容。裁掉它等于让一个配置错误永远无人发现。
+ * 它不进 parts 的裁剪链，单独拼在最前。
  */
 function clipParts(parts, s) {
   // 0 = 不限（保留旧行为）。默认 400：对齐 autoRecallBudget(220) + 重演(140)
@@ -445,15 +435,15 @@ function clipParts(parts, s) {
 
 /**
  * 判断某段是不是引擎冲突提醒。
- * ⚠️ 段头必须与 lib/conflict.js 的 announce() 严格一致：是 `〔记忆引擎提醒〕`
- *    （方头括号，不是【方头块】），错一个字符就匹配不上 —— 而匹配不上的
- *    后果是**悄悄被裁掉**，且没有任何日志。所以改conflict.js 段头时必须同步这里。
+ * 段头必须与 lib/conflict.js 的 announce() 严格一致：是 `〔记忆引擎提醒〕`
+ * （方头括号，不是【方头块】），错一个字符就匹配不上，
+ * 而匹配不上的后果是悄悄被裁掉，且没有任何日志。改 conflict.js 段头时必须同步这里。
  */
 function isConflictHead(text) {
   return typeof text === 'string' && text.startsWith('〔记忆引擎提醒〕');
 }
 
-/** 注册「记待办」工具 —— 没有入口的记忆功能等于没做（见 lib/pending.js 头注释）。 */
+/** 注册「记待办」工具，没有入口的记忆功能等于没做（见 lib/pending.js 头注释）。 */
 function registerTodoTool(a) {
   if (!a || typeof a.registerTool !== 'function') return;
   a.registerTool({
@@ -543,13 +533,13 @@ export function deactivate() {
   try { stats?.flush({ force: true }); } catch { /* ignore */ }
   // 墓碑是"最后一点痕迹"，关插件时务必带上盘（remember 平时只标 dirty）
   try { gist?.save({ force: true }); } catch { /* ignore */ }
-  // 成本护栏平时 20 秒才落一次盘（C7），关插件时把最后不到 20 秒的计数补上
+  // 成本护栏平时 20 秒才落一次盘，关插件时把最后不到 20 秒的计数补上
   try { budget?.flush(); } catch { /* ignore */ }
 }
 
 /**
  * 能力：宿主自带的 skills/memory-recall 与数据移植模块都按这些名字取用。
- * 一律返回 { ok, ... }，不抛错 —— 调用方是模型工具，抛错只会变成一句难懂的话。
+ * 一律返回 { ok, ... }，不抛错，调用方是模型工具，抛错只会变成一句难懂的话。
  */
 export const providers = {
   'memory.search': (args = {}) => {
@@ -561,7 +551,7 @@ export const providers = {
         chatKey: args?.chatKey || null,
         limit: Math.min(12, Math.max(1, Number(args?.limit) || 5)),
         maxSnippets: 5,
-        // 编码特异性·时段（v1.7.0）：模型主动检索也发生在"当下"，提取情境同样生效
+        // 编码特异性·时段：模型主动检索也发生在"当下"，提取情境同样生效
         tod: timeOfDayOf(Date.now())
       });
       return { ok: true, hits, mode: 'bm25+decay' };
@@ -612,9 +602,9 @@ export const providers = {
     // ── 探针短路 ──────────────────────────────────────────────────────────
     // 冲突自检要问"第一个 memory.status 提供者是不是我"，问法就是调一次
     // api.capability('memory.status', 探针)。如果先答话的是我，就走这一支：
-    // **不建实例、不读盘、不算体积**，只回一个引擎标记。
-    // ⚠️ 必须放在 instance() 之前 —— 探针是在 activate() 里跑的，那时候
-    //    还没必要把整个引擎唤醒；而且这里返回得早，也就不存在自检递归。
+    // 不建实例、不读盘、不算体积，只回一个引擎标记。
+    // 必须放在 instance() 之前：探针是在 activate() 里跑的，那时候还没必要
+    // 把整个引擎唤醒；而且这里返回得早，也就不存在自检递归。
     if (args && args[PROBE_KEY] === ENGINE_TAG) {
       return { ok: true, engine: ENGINE_TAG, probe: true };
     }
@@ -695,7 +685,7 @@ export const hooks = {
       for (const e of entries) {
         const t = String(e?.text ?? '').trim();
         if (t) texts.push(t);
-        // "在场的人"只算**别人** —— 机器人自己几乎每轮都在，
+        // "在场的人"只算别人：机器人自己几乎每轮都在，
         // 算进去会让"在场的人有交集"退化成"块里有人说过话"，多线索加权就废了。
         // （store 侧对块做同样的排除，这里是双保险。）
         if (e?.self) continue;
@@ -704,8 +694,8 @@ export const hooks = {
       }
       const key = String(ctx.sessionId || ctx.chatKey || '');
       if (!key) return;
-      // ⚠️ 写入前顺手清陈旧条目：两个钩子之间流程可能中断（本轮被别的钩子拦、
-      //    钩子抛错、LLM 未发起），条目会永久留在 Map 里 —— 慢速泄漏。
+      // 写入前顺手清陈旧条目：两个钩子之间流程可能中断（本轮被别的钩子拦、
+      // 钩子抛错、LLM 未发起），条目会永久留在 Map 里，慢速泄漏。
       if (pendingTrigger.size > 64) {
         const cutoff = Date.now() - 10 * 60000;
         for (const [k, v] of pendingTrigger) if (!v || (Number(v.at) || 0) < cutoff) pendingTrigger.delete(k);
@@ -721,8 +711,8 @@ export const hooks = {
 
   /**
    * 注入记忆片段。
-   * ⚠️ 这里**不**跑巩固：钩子有 5 秒超时，而巩固要读文件、写索引 —— 超时会被
-   *    整个跳过还可能留下半截状态。巩固交给 activate() 的定时器。
+   * 这里不跑巩固：钩子有 5 秒超时，而巩固要读文件、写索引，
+   * 超时会被整个跳过还可能留下半截状态。巩固交给 activate() 的定时器。
    */
   async 'before-llm-messages'(ctx = {}) {
     const s = settings();
@@ -741,11 +731,11 @@ export const hooks = {
           personIds: info.personIds || []
         });
       if (!text) return;
-      // 提醒的冷却只有"真的送出去了"才记账 —— 否则找不到 user 消息、
+      // 提醒的冷却只有"真的送出去了"才记账，否则找不到 user 消息、
       // appendToLastUser 返回 false 时，这一次冷却被白吃掉，主人一整天看不到提醒。
       const delivered = appendToLastUser(ctx.messages, text);
       if (delivered && announce) guard()?.markAnnounced();
-      // 被动命中 + 冷却记账：**送达之后**才做，且只记真的写进提示词的那几个块。
+      // 被动命中 + 冷却记账：送达之后才做，且只记真的写进提示词的那几个块。
       // 被动命中的计的是"模型看到过"这件事，权重/锚点一个字节都不动（见 store.markHit）。
       // 这是本插件唯一会因"自动注入"而增长的量，所以它绝不能反过来影响排序。
       if (delivered && cooldownChunkIds.length) {
@@ -755,7 +745,7 @@ export const hooks = {
           for (const id of passiveChunkIds) st.markHit(chatKey, id, { mode: 'passive' });
         } catch { /* 记账失败不影响本轮 */ }
       }
-      // 睡眠重演的记账（v1.7.0）：播出 = 一次成功的提取练习（测试效应）→ 按 full 计权，
+      // 睡眠重演的记账：播出 = 一次成功的提取练习（测试效应）→ 按 full 计权，
       // 与"被动看到"严格分开。没播出去（appendToLastUser 失败）就什么都不记。
       if (delivered && Array.isArray(replayChunkIds) && replayChunkIds.length) {
         try {
@@ -802,9 +792,9 @@ export const hooks = {
         });
       }
 
-      // 2) 成本护栏：只报**本轮增量**。
-      //    宿主 after-response 每轮都触发，而 ctx.session.usage 是运行级累计值 ——
-      //    内置版踩过这个坑（真实 791K 被记成 1285K，×1.62）。response.usage 才是
+      // 2) 成本护栏：只报本轮增量。
+      //    宿主 after-response 每轮都触发，而 ctx.session.usage 是运行级累计值，
+      //    内置版踩过这个坑（真实 791K 被记成 1285K）。response.usage 才是
       //    服务端给这一次调用的原始用量。
       if (s.budgetGuard !== false) {
         const u = ctx?.response?.usage || {};
@@ -827,7 +817,7 @@ export const hooks = {
 
   /**
    * 观测：模型到底有没有主动用记忆。
-   * 这是回答"记忆是不是白开了"的唯一数据来源 —— 内置版没有这个钩子。
+   * 这是回答"记忆是不是白开了"的唯一数据来源，内置版没有这个钩子。
    */
   async 'after-tool'(ctx = {}) {
     if (settings().observeTools === false) return;

@@ -1,4 +1,4 @@
-// 〔记忆视图 / 设置加载 / 价格表状态〕——M9 拆分第 6 段
+// 〔记忆视图 / 设置加载 / 价格表状态〕
 'use strict';
 // ── 记忆视图 ──
 async function loadMemoryView() {
@@ -33,12 +33,11 @@ async function loadMemoryView() {
 
 // 整理中的计时刷新：让"已 Ns"持续走动，并在没有活跃任务时自动停掉。
 // 整理可能持续几十秒，用户切走再切回时靠它维持可见状态。
-// r126：不再每秒整体重建列表 —— 原来 renderMemoryList() 每秒把左侧列表 DOM
-// 整个换一遍，用户正点在某个群上时节点被替换 → click 事件丢失，表现为
-// "整理期间/刚整理完记忆页点群都点不动"（2026-10-14 用户实测）。现在只有
-// 整理中的会话集合发生变化才重建一次；平时只更新计时文本。状态变化的
-// 重渲染由 SSE（consolidate-start/done/error）各自触发，收尾兜底在下面
-// active.length===0 分支里，不丢任何一次状态切换。
+// ⚠️ 不要每秒整体重建列表：renderMemoryList() 把左侧列表 DOM 整个换一遍时，
+// 用户正点在某个群上节点会被替换，click 事件丢失，表现为"整理期间/刚整理完
+// 记忆页点群都点不动"。现在只有整理中的会话集合发生变化才重建一次，平时只
+// 更新计时文本。状态变化的重渲染由 SSE（consolidate-start/done/error）各自
+// 触发，收尾兜底在下面 active.length===0 分支里。
 let consolidateTicker = null;
 let consolidateTickerSig = '';
 function startConsolidateTicker() {
@@ -104,7 +103,7 @@ function renderMemoryList() {
         <div class="session-meta"><span>更新于 ${fmtTime(f.updatedAt || 0)}</span></div>
       </div>`;
   }).join('');
-  // 2026-10-23：改事件委托（列表每次重绘都重建行，逐行绑定会产生 N 个闭包）。
+  // 事件委托（列表每次重绘都重建行，逐行绑定会产生 N 个闭包）。
   // 删除按钮的点击也在这里分流，避免它冒泡成"选中这一行"。
   if (!box.__memItemsBound) {
     box.__memItemsBound = true;
@@ -124,7 +123,7 @@ function renderMemoryList() {
     const key = btn.dataset.key;
     const name = names[key] || key;
     if (state.consolidating[key]) { qaAlert('该会话记忆正在整理中，稍后再删'); return; }
-    // ⚠️（2026-10-10 r86 修 P2）破坏性 → danger:true
+    // 破坏性操作 → danger:true
     if (!await qaConfirm({
       danger: true,
       confirmText: '删除全部记忆',
@@ -146,7 +145,7 @@ function renderMemoryList() {
 
 async function loadMemoryDetail(chatKey) {
   const detail = $('#memory-detail');
-  if (!detail) return;                       // R76：容器不存在（已切页）直接返回
+  if (!detail) return;                       // 容器不存在（已切页）直接返回
   detail.innerHTML = '<div class="empty-hint">加载中…</div>';
   try {
     const [mem, cfg] = await Promise.all([
@@ -157,17 +156,16 @@ async function loadMemoryDetail(chatKey) {
     const kind = chatKey.startsWith('group') ? 'group' : 'private';
     const chatId = chatKey.split(':')[1] || '';
     const members = Array.isArray(mem.members) ? mem.members : [];
-    // 「拉取群成员列表」按钮挪进页头按钮行（与 添加印象/整理本群记忆 同排，2026-09-21 用户要求）；
-    // 原来它单独占一行横在卡片上方，和页头那排按钮功能同级却分了两处。
+    // 「拉取群成员列表」与 添加印象/整理本群记忆 同排，功能同级不拆两处。
     const membersBtnHtml = kind === 'group'
       ? `<button class="btn btn-small" id="mem-load-members-btn" title="拉取群成员列表，可逐个编辑备注">拉取群成员</button><span id="mem-members-status" class="muted"></span>`
       : '';
     const membersHtml = kind === 'group' ? '<div id="mem-members"></div>' : '';
-    // 每个群友一张「身份证」小卡片（2026-09-21 R31 按用户要求改版）：
-    //   · 高度约为初版两倍，容纳两行文字：第一排 = QQ 昵称，第二排 = QQ 号；
-    //   · 头像自动读取 QQ 头像（q1.qlogo.cn，CSP img-src 已放行 https:）；
-    //     加载失败回退到姓名首字（⚠️ 不能用内联 onerror —— CSP script-src 'self'
-    //     会拦内联事件，必须渲染后 addEventListener 绑 error）；
+    // 每个群友一张「身份证」小卡片：
+    //   · 两行文字：第一排 QQ 昵称，第二排 QQ 号；
+    //   · 头像读 q1.qlogo.cn（CSP img-src 已放行 https:），加载失败回退到姓名首字。
+    //     ⚠️ 不能用内联 onerror（CSP script-src 'self' 会拦），必须渲染后
+    //     addEventListener 绑 error；
     //   · 底部保留最近一条印象预览；点开卡片才是完整档案（openMemoryCardModal）。
     const cards = members.map((m) => {
       const uid = String(m.userId || '');
@@ -205,7 +203,7 @@ async function loadMemoryDetail(chatKey) {
     } else if (result) {
       const ago = Math.max(0, Math.round((Date.now() - (result.at || 0)) / 1000));
       const when = ago < 60 ? `${ago}s 前` : `${Math.round(ago / 60)} 分钟前`;
-      // 有失败（含部分失败/接口失败）加警示前缀，与"内容无需改动"区分开（2026-10-16）
+      // 有失败（含部分失败/接口失败）加警示前缀，与"内容无需改动"区分开
       const warn = (result.failed || result.failed === true) ? '⚠️ ' : '';
       consolidateStatusHtml = `<span id="mem-consolidate-status" class="muted">${warn}${esc(result.note)}（${when}）</span>`;
     } else {
@@ -226,8 +224,8 @@ async function loadMemoryDetail(chatKey) {
     `;
     const loadMembersBtn = $('#mem-load-members-btn');
     if (loadMembersBtn) loadMembersBtn.addEventListener('click', () => loadGroupMembers(chatId, chatKey));
-    // 点「身份证」卡片 → 打开这个人的完整记忆（编辑/更新/删除都在弹窗里，
-    // 不再挤在标题行上 —— 列表只负责"认人"，详情负责"看内容 + 操作"）
+    // 点「身份证」卡片 → 打开这个人的完整记忆。编辑/更新/删除都在弹窗里，
+    // 列表只负责"认人"，详情负责"看内容 + 操作"。
     $$('.mem-card', detail).forEach((el) => {
       el.addEventListener('click', () => {
         const m = members.find((x) => String(x.userId) === String(el.dataset.qq));
@@ -284,14 +282,12 @@ async function loadMemoryDetail(chatKey) {
 /**
  * 点「身份证」卡片打开的完整档案：上半部是身份信息（备注名 / 群名片 / QQ 昵称 / QQ 号 /
  * 印象条数 / 更新时间），下半部是全部印象逐条列出；编辑 / 更新记忆 / 删除 都收在这里。
- * ⚠️「编辑」走"先关后开"：两个模型弹窗遮罩会同层重叠（.model-modal-overlay
- *    的层号全项目只有一处，见 style.css 0.5 段的 --z-model-modal-overlay），
- *    新旧两团糊在一起、中间那段既点得到旧关闭钮又点得到新内容（同
- *    scheduleOpenModelManage 的处理）。原文写的"+20 z-index 覆盖链 /
- *    新的在下面"经核实并不存在，勿据此推断层叠关系。
+ * ⚠️「编辑」走"先关后开"：.model-modal-overlay 的层号全项目只有一处
+ *    （style.css 0.5 段的 --z-model-modal-overlay），两个弹窗会叠在同一层，
+ *    新旧两团糊在一起。同 scheduleOpenModelManage 的处理。
  */
-/* 记忆档案弹窗的头像兜底（r34）：img 加载失败 → 藏 img、揭首字。
-   ⚠️ 必须用捕获监听 —— error 不冒泡，默认监听收不到（同 15-chat-chrome.js）。 */
+/* 记忆档案弹窗的头像兜底：img 加载失败 → 藏 img、揭首字。
+   ⚠️ 必须用捕获监听，error 不冒泡，默认监听收不到（同 15-chat-chrome.js）。 */
 function bindMemAvatarFallback(overlay) {
   $$('.mf-av-img', overlay).forEach((img) => {
     img.addEventListener('error', () => {
@@ -311,7 +307,7 @@ function openMemoryCardModal(chatKey, member) {
   const who = note || cardName || nickname || uid || '某人';
   const imps = Array.isArray(member?.impressions) ? member.impressions : [];
   const updated = Number(member?.updatedAt) || 0;
-  // 头像读真实 QQ 头像（q1.qlogo.cn，CSP img-src 已放行 https:）。
+  // 头像读 q1.qlogo.cn（CSP img-src 已放行 https:）。
   // ⚠️ 不能用内联 onerror（script-src 'self' 会拦），失败回退首字由
   //    bindMemAvatarFallback 在弹窗挂载后用捕获监听兜住。
   const canAvatar = /^\d{5,12}$/.test(uid);
@@ -320,7 +316,7 @@ function openMemoryCardModal(chatKey, member) {
     ? `<img class="mf-av-img" src="${avUrl}" alt="" referrerpolicy="no-referrer" />
        <span class="mf-av-fb" hidden>${esc(String(who).trim().slice(0, 1))}</span>`
     : `<span class="mf-av-fb">${esc(String(who).trim().slice(0, 1))}</span>`;
-  // 副行：QQ 号必显；昵称/群名片与主名重复时不重复出现（原型同款去重）。
+  // 副行：QQ 号必显；昵称/群名片与主名重复时不重复出现。
   const sub = ['QQ ' + (uid || '—')];
   if (nickname && nickname !== who) sub.push('昵称 ' + nickname);
   if (cardName && cardName !== who && cardName !== nickname) sub.push('群名片 ' + cardName);
@@ -364,7 +360,7 @@ function openMemoryCardModal(chatKey, member) {
     setTimeout(() => openMemberImpressModal(chatKey, { ...member, userId: uid, name: nickname }), 420);
   });
   overlay.querySelector('#mc-del').addEventListener('click', async () => {
-    // ⚠️（2026-10-10 r86 修 P2）破坏性 → danger:true
+    // 破坏性操作 → danger:true
     if (!await qaConfirm({
       danger: true,
       confirmText: '删除印象',
@@ -447,7 +443,7 @@ function openMemberImpressModal(chatKey, member) {
   });
   const delBtn = overlay.querySelector('#mi-del');
   if (delBtn) delBtn.addEventListener('click', async () => {
-    // ⚠️（2026-10-10 r86 修 P2）破坏性 → danger:true
+    // 破坏性操作 → danger:true
     if (!await qaConfirm({
       danger: true,
       confirmText: '删除印象',
@@ -542,18 +538,18 @@ async function openMemberNoteModal(qq, chatKey) {
   });
 }
 async function loadSettings() {
-  // ⚠️ 2026-10-16 修「切换人设不成功」：state.config 必须在**第一个请求**
-  // 就绪时立即刷新。旧实现把 7 个接口塞进一个 Promise.all（含 /api/model-prices
-  // 联网拉价格表），全部返回才更新 state.config —— 弹窗/市场刚保存完人设的
-  // 这段窗口里，任何一次自动保存（切页签 flush / 关窗 / 600ms 防抖）都会拿
-  // 旧 persona 回传、把新人设深合并掉。现在 config 单独先行（本地请求，毫秒级），
-  // 其余接口慢到无所谓：它们只喂侧栏/预览/模板列表，不参与 saveConfig 回传。
+  // ⚠️ state.config 必须在第一个请求就绪时立即刷新。把 7 个接口塞进一个
+  // Promise.all（含 /api/model-prices 联网拉价格表）再更新 state.config 的话，
+  // 弹窗/市场刚保存完人设的这段窗口里，任何一次自动保存（切页签 flush / 关窗 /
+  // 600ms 防抖）都会拿旧 persona 回传、把新人设深合并掉。
+  // 现在 config 单独先行（本地请求，毫秒级），其余接口只喂侧栏/预览/模板列表，
+  // 不参与 saveConfig 回传，慢到无所谓。
   const cfg = await api('/api/config');
   state.config = cfg;
   refreshPromptPreview(cfg);
   renderSettings();
   // 慢路径：模板/提供商/价格/工具/技能到位后再补一次渲染（只影响这些区块的显示）。
-  // 不重置 state.personaTemplates —— 先前的列表继续可用，避免"选择人设"闪现空列表。
+  // 不重置 state.personaTemplates：先前的列表继续可用，避免"选择人设"闪现空列表。
   Promise.all([
     api('/api/persona-templates').catch(() => ({ templates: [] })),
     api('/api/providers').catch(() => ({ providers: [] })),
@@ -561,7 +557,7 @@ async function loadSettings() {
     api('/api/model-prices').catch(() => ({ prices: [], current: null })),
     api('/api/tools').catch(() => ({ tools: [] })),
     // 技能状态由后端判定（loaded/enabled/available/active + reason），
-    // 前端只展示，不自己推断可用性 —— 避免出现第二套口径
+    // 前端只展示，不自己推断可用性，避免出现第二套口径。
     api('/api/skills').catch(() => ({ skills: [], summary: {} }))
   ]).then(([tplData, provData, visionData, priceData, toolsData, skillsData]) => {
     // 迟到响应守卫：用户可能已切走设置页，state.* 照常更新但不整页重渲染
@@ -572,7 +568,7 @@ async function loadSettings() {
     state.toolRegistry = toolsData.tools || [];
     state.skills = skillsData.skills || [];
     state.skillsSummary = skillsData.summary || {};
-    state.skillsReady = true;   // 扩展页据此区分"加载中"和"真的空"（2026-10-18）
+    state.skillsReady = true;   // 扩展页据此区分"加载中"和"真的空"
     state.uninstalledSkills = skillsData.uninstalled || [];
     const tpl = {};
     for (const t of tplData.templates || []) tpl[t.id] = { name: t.name, text: t.text, builtin: !!t.builtin };
@@ -606,14 +602,12 @@ function renderPriceFeedStatus() {
 /**
  * 刷新「当前模型单价」卡片。
  *
- * ── 规则（只跟开关绑定，绝不依赖保存状态）──
- *   开关开 → 展示内置官方价，输入框**只读**
- *            匹配不到就是 0，提示关掉开关自填
- *   开关关 → 输入框**可编辑**，优先该模型的自定义价，没设则用全局兜底
+ * 规则只跟开关绑定，不依赖保存状态：
+ *   开关开 → 展示内置官方价，输入框只读；匹配不到就是 0，提示关掉开关自填
+ *   开关关 → 输入框可编辑，优先该模型的自定义价，没设则用全局兜底
  *
- * 匹配判断在本地用 state.modelPrices.prices 直接算，
- * 不读 state.modelPrices.current —— 那是后端按「当时请求的模型」算的，
- * 切换模型后若不重新请求就会拿到旧值。
+ * ⚠️ 匹配在本地用 state.modelPrices.prices 算，不读 state.modelPrices.current：
+ *    后者是后端按「当时请求的模型」算的，切换模型后不重新请求就会拿到旧值。
  */
 
 /**
@@ -621,8 +615,7 @@ function renderPriceFeedStatus() {
  *
  * 前端是无模块单文件，拿不到 src/model-prices.js 的导出，所以这里实现一份
  * 与后端 matchPriceTable 完全相同的逻辑：精确 → 去前缀 → 最长前缀匹配。
- * 用本地数据算而不是读 state.modelPrices.current —— 后者是后端按
- * 「当时请求的模型」算的，切换模型后不重新请求就会拿到旧值。
+ * 同样不能用 state.modelPrices.current，原因见 refreshModelPriceCard。
  */
 function refreshModelPriceCard() {
   const modelEl = $('#pc-model');
@@ -709,9 +702,8 @@ function refreshModelPriceCard() {
  * 批量自定义价格编辑：左列选供应商 → 右列该供应商的模型 →
  * 官方表（输入/输出/缓存命中）参考列 + 自定义单价输入列。
  *
- * 曾经的候选列表是"当前模型 + 已自定义 + 用量统计里出现过的" ——
- * 没调用过的模型根本进不了名单，想提前给没用过的新模型定价都做不到。
- * 现在按供应商目录浏览，全量模型都可设定。
+ * 候选列表按供应商目录浏览，全量模型都可设定。只列"当前模型 + 已自定义 +
+ * 用量统计里出现过的"的话，没调用过的模型进不了名单，没法提前定价。
  *
  * 两个细节：
  *   1. 编辑暂存在 edits 里（input 事件实时写入），切换供应商不丢未保存的修改
@@ -859,11 +851,9 @@ function openBatchPriceModal() {
       state.config.api.modelPrices = next;
       closeModelModal(overlay);
       refreshModelPriceCard();
-      // 2026-09-19（M9 清理）：旧 #provider-action-hint 元素已随改版消失，写它会在
-      // try 里抛 TypeError 被自己的 catch 吞成"保存失败"。改写存活的 #provider-hint。
-      // 2026-10-23 修复：原来的 $('#provider-hint').textContent 没有判空 ——
-      // 设 置页不在该分区时元素不存在，会抛 TypeError 并被自己的 catch 吞成
-      // "保存失败"（与 08-modals.js 记录的是同一类事故）。走 setHintText。
+      // ⚠️ 必须走 setHintText：设置页不在该分区时元素不存在，直接写
+      //    $('#provider-hint').textContent 会抛 TypeError，又被自己的 catch
+      //    吞成"保存失败"。
       setHintText('#provider-hint', `已保存 ${Object.keys(next).length} 个模型的自定义单价。`);
     } catch (e) {
       hintEl.textContent = `保存失败：${esc(e.message)}`;
@@ -894,7 +884,7 @@ function renderHealthCard() {
     let extra = '';
     if (!c.ok) {
       if (c.fix === 'connection-tab') {
-        // 2026-10-23：原「前往启动 SnowLuma」→ 现在跳「工具 → 连接」页看状态与协议端指引。
+        // 跳「工具 → 连接」页看状态与协议端指引。
         extra = ' <button class="btn btn-small hc-fix-btn" data-target="connection">去连接页</button>';
       } else if (c.fix === 'settings-api') {
         extra = ' <button class="btn btn-small hc-fix-btn" data-target="settings-api">去填写</button>';

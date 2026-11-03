@@ -4,7 +4,7 @@
 // UI/API），读的有编排层。让每个调用方自己 enumerate providers 一遍，写法会漂移
 // （context 传不传、错误吞不吞、返回值怎么取），所以收口在这里。
 //
-// 插件没装 / 没启用时所有调用都是静默无副作用 —— 禁言判断退化为"只有查询兜底"，
+// 插件没装 / 没启用时所有调用都是静默无副作用，禁言判断退化为"只有查询兜底"，
 // 与装插件之前的行为一致。
 //
 // 相关：plugins/ban-state/index.js（状态与纯函数本体，单测直接驱动它的 internals）。
@@ -54,7 +54,7 @@ export function noteUnmuted(chatKey) {
 }
 
 /**
- * 订阅禁言状态变化（F1 缓存穿透用）。
+ * 订阅禁言状态变化（缓存穿透用）。
  * @param {(chatKey:string, muted:boolean)=>void} onChange
  * @returns {() => void} 退订函数（插件缺失时是空操作）
  */
@@ -65,7 +65,7 @@ export function onBanStateChange(onChange) {
 }
 
 /**
- * 发送被拒兜底（F4）：把一次发送失败反馈给 ban-state。
+ * 发送被拒兜底：把一次发送失败反馈给 ban-state。
  * 命中禁言签名（result=120）时插件会记录该群禁言，本函数返回 { matched:true }。
  *
  * @param {string} chatKey

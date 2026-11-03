@@ -1,27 +1,24 @@
 // 二次元随机图片数据层（移植自 MaiBot 插件 com.claw.pixiv-crawler v4.1.0，MIT）。
 //
-// 原版是 MaiBot 的 Python 插件（maibot_sdk），这里改成纯 Node 模块，供 send_setu 工具调用。
-// 刻意偏离原版的三处：
-//   1. 去掉 @Command 关键词直发路径，只保留工具入口 —— @ 检测与意图判断交给模型
-//      （原版的 _is_at_mentioned 对工具调用路径本来就恒放行，见其"方法4"）。
-//   2. 图片下载走本项目的 safeFetchBinary（SSRF 全防护：DNS 校验、IP 固定防 rebinding、
-//      每跳重校验、限量读取），而不是原版直接 httpx 拉。Referer 通过 headers 注入，
-//      DNS 校验链路不变。
+// 与原版的差异：
+//   1. 去掉 @Command 关键词直发路径，只保留工具入口，@ 检测与意图判断交给模型。
+//   2. 图片下载走本项目的 safeFetchBinary（SSRF 全防护：DNS 校验、IP 固定防
+//      rebinding、每跳重校验、限量读取），Referer 通过 headers 注入。
 //   3. 加了原版没有的两个上限：count 最多 20 张、单图最多 maxImageBytes 字节。
-//      原版允许 num=100 且无大小限制，原图直发时会把内存和 HTTP 负载放大到不可控。
+//      原版允许 num=100 且无大小限制，原图直发会把内存和 HTTP 负载放大到不可控。
 //
 // 原图直发不压缩。载荷默认走"本地临时文件 + 绝对路径"，而不是 base64 内联：
-// 实测 SnowLuma 的 HTTP 服务端对 ~3MB 的 base64 请求体直接 ECONNRESET（0.1KB 的路径请求正常 200），
-// 落盘后请求体只剩一个路径字符串。payloadMode='base64' 可切回内联（用于 SnowLuma 在另一台机器时）。
+// 实测 SnowLuma 的 HTTP 服务端对 ~3MB 的 base64 请求体直接 ECONNRESET（0.1KB 的
+// 路径请求正常 200），落盘后请求体只剩一个路径字符串。payloadMode='base64'
+// 可切回内联（用于 SnowLuma 在另一台机器时）。
 import { safeFetch } from '../../src/safe-fetch.js';
 
-// 常量与标签 Set 已提取到 setu/config.js
-// 仅导入 setu.js 直接使用的常量（其余由子模块自行导入）
+// 常量与标签 Set 在 config.js，这里只导入本文件直接使用的
 import {
   MAX_COUNT, NSFW_TRIGGER_RE, MULTI_PERSON_TAGS, MALE_CHARACTER_TAGS, HORROR_TAGS
 } from './config.js';
 
-// 过滤函数已提取到 setu/filters.js（纯函数，可独立单元测试）
+// 过滤函数在 filters.js（纯函数，可独立单元测试）
 import {
   isMultiPersonIllust, isMultiCharacterIllust, isPairingKeyword,
   buildSearchWord, hasQualityTag, isMaleCharacterIllust, isHorrorIllust,
@@ -33,13 +30,13 @@ export {
   isR18Illust, isR15Illust, isR0Only, illustScore
 };
 
-// 下载基础设施已提取到 setu/downloader.js
+// 下载基础设施在 downloader.js
 import {
   validateImageIntegrity, SetuSource, defaultSetuSource, pickBestImages, downloadImage
 } from './downloader.js';
 export { validateImageIntegrity, SetuSource, defaultSetuSource, pickBestImages };
 
-// Pixiv 搜索基础设施已提取到 setu/pixiv.js
+// Pixiv 搜索基础设施在 pixiv.js
 import {
   AUTOCOMPLETE_CACHE, cacheAutocomplete, mapKeywordToTags, resolveSearchTag,
   translateTag, lookupBooruTag, pixivCfg, hasCJK, pixivArtworkId, fetchBooruCandidates
@@ -176,8 +173,8 @@ async function fetchFreshUrls(cfg, source, sortKey, limit) {
   return collected;
 }
 
-// 关键词搜图基础设施已提取到 setu/pixiv.js（搜索缓存、429重试、标签补全、候选取图）
-// 下载基础设施已提取到 setu/downloader.js（CDN镜像、代理回退、临时文件、图片下载、去重源）
+// 关键词搜图基础设施在 pixiv.js（搜索缓存、429重试、标签补全、候选取图）
+// 下载基础设施在 downloader.js（CDN镜像、代理回退、临时文件、图片下载、去重源）
 
 /**
  * 这批触发消息里有没有点名机器人。用于"@ 才发图"门控。
@@ -206,13 +203,13 @@ export function anyEntryMentionsSelf(entries, { selfNickname, selfId, botName, s
  * 执行一次点图请求。纯逻辑，不接触发送通道。
  * 返回 { outcome: 'ok'|'cooldown'|'blocked'|'disabled'|'no-image', ... }
  *   ok:            { images: [{payload, bytes, mime}], category, label, downgraded }
- *   其余:           { message } —— 空串表示策略要求静默
+ *   其余:           { message }，空串表示策略要求静默
  */
 export async function runSetuRequest({ cfg, chatKey, requested, keyword, source = defaultSetuSource }) {
   if (!cfg || cfg.enabled === false) return { outcome: 'disabled', message: '发图功能已关闭' };
 
   // 冷却检查 + 占位必须一步完成（tryBeginSend）：并发第二发在第一发的下载窗口内
-  // 就要被挡住 —— 之前"入口查冷却、下载完才 markSent"两步分离，并发请求可穿透冷却连发。
+  // 就要被挡住。之前"入口查冷却、下载完才 markSent"两步分离，并发请求可穿透冷却连发。
   if (!source.tryBeginSend(cfg.send)) return { outcome: 'cooldown', message: '刚刚已触发发图，冷却中跳过' };
   try {
     return await runSetuRequestGuarded({ cfg, chatKey, requested, keyword, source });
@@ -262,21 +259,19 @@ async function runSetuRequestGuarded({ cfg, chatKey, requested, keyword, source 
 }
 
 /**
- * 关键词搜索 0 条时的诊断：复用 lookup_setu_tag 的查询逻辑，区分三种不同的原因。
+ * 关键词搜索 0 条时的诊断：复用 lookup_setu_tag 的查询逻辑，区分不同的原因。
  *
- * 为什么要单独做这一步 —— 原来的文案「标签映射为 X，可检查 setu.booru.tagMap」对映射命中的情况是错的：
- * tagMap 命中恰恰说明映射没错，问题在标签本身没被图库索引，照那个提示去改 tagMap 只会越改越乱。
- * 而且 0 条本身有三种原因，处理方式完全不一样，模型拿不到区分就会判断错。
- *
- * 注意：关键词搜图不做 R-18 过滤（允许未打码内容），所以「0 条」只剩两种内容层面原因
- * —— 没被收录 / 请求失败，不再有「全是未打码被过滤」这一档。
- * soloOnly 开启时还有一档：标签有内容但都是双人/多人图，被单人过滤滤掉了。
-  * femaleOnly 开启时还有一档：标签有内容但都含男性角色，被女角色过滤滤掉了。
+ * 0 条本身有多种原因，处理方式完全不一样，模型拿不到区分就会判断错。
+ * 关键词搜图不做 R-18 过滤，所以内容层面只剩「没被收录 / 请求失败」两种；
+ * soloOnly 开启时多一档「标签有内容但都是双人/多人图」，
+ * femaleOnly 开启时多一档「都含男性角色」，noHorror 同理。
+ * 不要笼统提示「可检查 setu.booru.tagMap」：tagMap 命中恰恰说明映射没错，
+ * 照那个提示去改只会越改越乱。
  */
 export async function diagnoseEmptyResult(cfg, tags, category, lookup = lookupBooruTag, soloOnly = false, femaleOnly = false) {
   const probe = await lookup(cfg, tags, category);
 
-  // ① 请求本身失败（代理没开、图库不可用）—— 不是内容问题，重试可能有救
+  // ① 请求本身失败（代理没开、图库不可用）：不是内容问题，重试可能有救
   if (probe.reason) {
     return {
       message: `「${tags}」搜索失败了（${probe.reason}），稍后再试～`,
@@ -284,7 +279,7 @@ export async function diagnoseEmptyResult(cfg, tags, category, lookup = lookupBo
     };
   }
 
-  // ② 标签确实没被索引 —— 改 tagMap 没用
+  // ② 标签确实没被索引，改 tagMap 没用
   if (!probe.found) {
     return {
       message: `「${tags}」在图库里没有内容（查了 0 条），换个关键词或确认标签拼写试试吧～`,
@@ -292,11 +287,9 @@ export async function diagnoseEmptyResult(cfg, tags, category, lookup = lookupBo
     };
   }
 
-  // ③ soloOnly 开启：有内容但都是双人/多人图
-  // 实际验证：样本里是否真的有双人/多人标签（不盲猜）
+  // ③ soloOnly 开启：有内容但都是双人/多人图。先看样本里是否真有双人/多人标签，不盲猜。
   if (soloOnly) {
-    // Bug #1 修复：删除局部 MULTI_PERSON_TAGS（遮蔽全局，且缺少 'multiple_people'/'multiple' 条目）
-    // 直接使用从 setu/config.js 导入的 MULTI_PERSON_TAGS
+    // 用 config.js 的 MULTI_PERSON_TAGS：局部副本会遮蔽它，且容易漏条目
     const multiInSample = (probe.tags || []).filter((t) => MULTI_PERSON_TAGS.has(String(t).trim().toLowerCase()));
     if (multiInSample.length > 0) {
       return {
@@ -304,7 +297,7 @@ export async function diagnoseEmptyResult(cfg, tags, category, lookup = lookupBo
         tip: `这个标签在图库里有内容，样本里确实有双人/多人标签（${multiInSample.join('、')}），被单人图过滤（soloOnly）滤掉了。可以让用户换个只画单人角色的关键词，或者明确要双人/CP 图（用 ×、&、and 等配对写法会自动豁免单人过滤）。不要改 tagMap。`
       };
     }
-    // ③ 不成立 —— 样本里没有双人/多人标签，过滤不是原因，落到④
+    // ③ 不成立：样本里没有双人/多人标签，过滤不是原因，落到④
     console.log(`[setu] 诊断：「${tags}」有内容但样本无双人标签，soloOnly 不是过滤原因`);
   }
 
@@ -318,7 +311,7 @@ export async function diagnoseEmptyResult(cfg, tags, category, lookup = lookupBo
         tip: `这个标签在图库里有内容，样本里确实有男性角色标签（${maleInSample.join('、')}），被女角色过滤（femaleOnly）滤掉了。两种可能：一是这个角色本身就是男性角色（那就只能关掉「只搜女角色」才能发出来），二是这个标签下的图大多是双人/CP 图。不要改 tagMap。`
       };
     }
-    // ④ 不成立 —— 样本里没有男性角色标签，过滤不是原因，落到④.5
+    // ④ 不成立：样本里没有男性角色标签，过滤不是原因，落到④.5
     console.log(`[setu] 诊断：「${tags}」有内容但样本无男性标签，femaleOnly 不是过滤原因`);
   }
 
@@ -350,7 +343,7 @@ export async function diagnoseEmptyResult(cfg, tags, category, lookup = lookupBo
     };
   }
 
-  // ⑥ 有内容但没发出来 —— 原因不明（去重池 / 下载失败 / 其他过滤）
+  // ⑥ 有内容但没发出来，原因不明（去重池 / 下载失败 / 其他过滤）
   return {
     message: `「${tags}」搜到的图暂时发不了（可能刚发过、下载失败、或没通过过滤），换个关键词试试～`,
     tip: '图库里有内容，但候选图没能成功发送。可能原因：去重池（刚发过）、下载失败（原图超时/防盗链）、R-18 过滤（nsfwAllowed=false 时跳过成人内容）、或没通过质量/尺寸过滤。换个关键词试试，或者等一会儿再试。不要反复重试同一个关键词。'
@@ -360,20 +353,16 @@ export async function diagnoseEmptyResult(cfg, tags, category, lookup = lookupBo
 /**
  * 关键词搜图（Pixiv 标签搜索，经 PXVE 社区代理）。
  * 与随机池路径共用 nsfwFilter / chatFilter / 冷却 / 去重。
- * nsfwAllowed=false 时过滤 R-18 / R-18G 内容（关键词搜图之前不过滤，现在统一加进来）。
+ * nsfwAllowed=false 时过滤 R-18 / R-18G 内容。
  *
  * 中文关键词原样搜索（图库支持中文标签），不做自动翻译。
- * 原样搜索 0 条时可选翻译兜底重试（translateOnEmpty=true，默认开）——
- * 冷门角色中文标签可能没收录，翻译一次日文标签还能兜住。
+ * 原样搜索 0 条时可选翻译兜底重试（translateOnEmpty=true，默认开）：
+ * 冷门角色的中文标签可能没收录，翻译一次日文标签还能兜住。
  * tagMap 作为快路径保留（命中即返回，不调接口）。
  *
- * 色图/无色图判断：关键词里没有明确色图词（色图/黄的/R-18/福利等）时，
- * 强制走 sfw——不信任模型的 category 判断，防止群里误发色图。
+ * 色图/无色图判断：关键词里没有明确色图词（色图/黄的/R-18/福利等）时强制走 sfw。
+ * 不信任模型的 category 判断，防止群里误发色图。
  */
-
-/** 关键词里是否有明确的色图请求词。只有命中这些词才允许发 nsfw。 */
-// NSFW_TRIGGER_RE 已提取到 setu/config.js
-
 async function runKeywordSearch({ cfg, source, chatKey, keyword, wanted }) {
   const booru = cfg.booru || {};
   if (booru.enabled === false) return { outcome: 'disabled', message: '关键词搜图功能已关闭' };
@@ -382,8 +371,8 @@ async function runKeywordSearch({ cfg, source, chatKey, keyword, wanted }) {
   const tags = await resolveSearchTag(cfg, keyword);
   if (!tags) return { outcome: 'no-image', message: '关键词不能为空～' };
 
-  // 色图/无色图安全兜底：关键词里没有明确色图词时，强制 sfw。
-  // 模型可能自作主张传 nsfw，但「美图」不该出黄图——这道关卡住。
+  // 色图/无色图安全兜底：关键词里没有明确色图词时强制 sfw。
+  // 模型可能自作主张传 nsfw，但「美图」不该出黄图。
   if (wanted === 'nsfw' && !NSFW_TRIGGER_RE.test(keyword)) {
     console.log(`[setu] 「${keyword}」关键词无明确色图词，强制 sfw（模型传的是 nsfw）`);
     wanted = 'sfw';
@@ -404,14 +393,13 @@ async function runKeywordSearch({ cfg, source, chatKey, keyword, wanted }) {
   const label = `关键词图（${keyword}）`;
 
   // 单人图过滤：默认只发单人图（搜「角色名」时排除双人/多人同框图）。
-  // 配对/CP 关键词（含 ×、&、+、and、cp 等）自动豁免 —— 那种请求双人图正是用户要的。
+  // 配对/CP 关键词（含 ×、&、+、and、cp 等）自动豁免，那种请求双人图正是用户要的。
   const soloOnly = booru.soloOnly !== false && !isPairingKeyword(keyword);
 
-  // 女角色过滤：默认只搜女角色（排除男性角色图）。配对/CP 关键词自动豁免 ——
-  // 那种请求本来就要 CP 图，性别过滤会过滤掉用户真正想要的。
+  // 女角色过滤：默认只搜女角色，配对/CP 关键词自动豁免。
   const femaleOnly = booru.femaleOnly !== false && !isPairingKeyword(keyword);
 
-  // 恐怖/血腥过滤：默认过滤恐怖、血腥、暴力类图片。配对/CP 关键词也过滤（这类内容不适合任何群聊场景）。
+  // 恐怖/血腥过滤：配对/CP 关键词也过滤，这类内容不适合任何群聊场景。
   const noHorror = booru.noHorror !== false;
 
   // 单角色过滤：图片含 2 个以上角色名标签时过滤。配对/CP 关键词自动豁免。
@@ -440,8 +428,7 @@ async function runKeywordSearch({ cfg, source, chatKey, keyword, wanted }) {
   }
 
   // 从质量最优的候选开始下载，失败自动换下一个（pickBestImages）。
-  // 顺带移除 deadHosts：旧实现里检查发生在发起前（恒为空）、add 在全部完成后，
-  // 从未生效过；同 host 的节点切换本来就由 downloadImage 内部的 pximgAttempts 负责。
+  // 同 host 的节点切换由 downloadImage 内部的 pximgAttempts 负责，这里不再单独维护 deadHosts。
   const picked = await pickBestImages(
     urls,
     limit,

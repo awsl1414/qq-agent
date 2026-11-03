@@ -22,8 +22,8 @@ function logsDir() {
   return path.join(DATA_DIR, 'logs');
 }
 
-/* r92（R78-4）：目录只确保一次。原实现在每条日志的落盘分支里都调一次
-   fs.mkdirSync(logsDir(), {recursive:true}) —— 那是一次真实 syscall，而日志是
+/* 目录只确保一次。原实现在每条日志的落盘分支里都调一次
+   fs.mkdirSync(logsDir(), {recursive:true})，那是一次真实 syscall，而日志是
    热路径（启动期一次能刷几百条）。目录一旦建好就不会消失，缓存一个布尔即可。 */
 let logsDirReady = false;
 function ensureLogsDir() {
@@ -44,20 +44,20 @@ function todayFile() {
   return path.join(logsDir(), name);
 }
 
-// ── 脱敏层（M3，2026-10-17）──────────────────────────────────────────────
+// ── 脱敏层 ──────────────────────────────────────────────────────────────
 //
-// 为什么必须放在**日志的唯一出口**：插件拿到的 `api.log / api.warn / api.error`
+// 为什么必须放在日志的唯一出口：插件拿到的 `api.log / api.warn / api.error`
 // 最终都汇到这里落盘 + 推 SSE，而插件完全可以把任意内容写进日志
 // （典型：`api.error(err)` 里带上完整请求 URL、响应体、配置对象）。
 // `safe-fetch.js` 的错误文案本身就含 hostname 与完整 URL，query 里常带 token；
-// 模型/插件也可能把整个 settings 打出来 —— 那是把 `data/logs/*.log` 变成凭据外泄通道。
+// 模型/插件也可能把整个 settings 打出来，那是把 `data/logs/*.log` 变成凭据外泄通道。
 //
-// 主链路 `llm.js` 只记 key 的 sha1 指纹 + 字符数、**不落 key 正文**，这块本来是对的；
-// 缺口只在 logger 这一层没有兜底，所以补在这里：**先脱敏再进内存/SSE/磁盘**，
-// 三处共用同一份已脱敏文本，不会出现"SSE 里没有但文件里有"。
+// 主链路 `llm.js` 只记 key 的 sha1 指纹 + 字符数、不落 key 正文；缺口只在 logger
+// 这一层没有兜底，所以补在这里：先脱敏再进内存/SSE/磁盘，三处共用同一份已脱敏
+// 文本，不会出现"SSE 里没有但文件里有"。
 //
 // 取舍：宁可多打几个 `***`（脱敏过头只是少几条排查线索），也绝不放过一次真实泄漏。
-// 因此匹配规则刻意宽松 —— 值只要 ≥8 个字符就吃掉，不试图判断"这看起来像不像真 key"。
+// 因此匹配规则刻意宽松：值只要 ≥8 个字符就吃掉，不试图判断"这看起来像不像真 key"。
 const REDACT_RULES = [
   // 常见厂商密钥前缀（OpenAI sk-、GitHub gh[pousr]_、AWS AKIA/ASIA、Slack xox）
   [/\bsk-[A-Za-z0-9_-]{16,}/g, 'sk-***'],
@@ -73,8 +73,8 @@ const REDACT_RULES = [
 ];
 
 // 热路径快速返回：上面每条规则都要求文本里出现 `[:=]` 或某个密钥前缀，
-// 没有这些特征就一定匹配不到 —— 省掉逐条 replace 的整串扫描。
-// （日志是热路径，启动期一次能刷几百条，见文件头 r92 注释的同类取舍。）
+// 没有这些特征就一定匹配不到，省掉逐条 replace 的整串扫描。
+// （日志是热路径，启动期一次能刷几百条，见文件头同类取舍。）
 const REDACT_HINT = /[:=]|sk-|bearer|gh[pousr]_|AKIA|ASIA|xox/i;
 
 function redact(text) {
@@ -119,7 +119,7 @@ class Logger {
   #write(level, module, args) {
     /* 重入防护：onLog 监听器里如果再调 logger.*（例如把日志转发回 logger），
        会形成 #write → 监听器 → #write 的无限递归，每条递归都给文本包一层
-       模块前缀 —— 曾经一次事故把单日日志写到 15GB（97.7% 都是重复前缀）。
+       模块前缀，曾经一次事故把单日日志写到 15GB（97.7% 都是重复前缀）。
        重入的调用直接丢弃：外层那条日志已经包含了全部信息。 */
     if (this.writing) return;
     this.writing = true;
@@ -132,9 +132,9 @@ class Logger {
 
   #writeInner(level, module, args) {
     const lv = LEVELS[level] ?? LEVELS.info;
-    // ⚠️ 脱敏放在**唯一出口**（2026-10-17 修 M3）：下面内存环形缓冲 / console 镜像 /
-    //   落盘三处共用这份已脱敏文本，不会出现"SSE 里脱敏了但文件里没有"的漏口。
-    //   详见 redact() 的注释 —— 插件日志是凭据外泄通道（错误文案含完整 URL、query 带 token）。
+    // 脱敏放在唯一出口：下面内存环形缓冲 / console 镜像 / 落盘三处共用这份
+    // 已脱敏文本，不会出现"SSE 里脱敏了但文件里没有"的漏口。
+    // 详见 redact() 的注释：插件日志是凭据外泄通道（错误文案含完整 URL、query 带 token）。
     const text = redact(args.map((a) => {
       if (a instanceof Error) return `${a.message}\n${a.stack || ''}`;
       if (typeof a === 'object' && a !== null) {
@@ -162,11 +162,10 @@ class Logger {
     // 落盘（达到最低级别才写）
     if (lv >= this.level) {
       try {
-        // r92（R78-4）：目录只确保一次 + 时间戳手工拼。
-        // 原实现在每条日志的落盘分支里都调一次 fs.mkdirSync（真实 syscall，
-        // 启动期一次刷几百条全记在主进程账上）；toLocaleTimeString('zh-CN',…)
-        // 每次调用都新建一个 Intl.DateTimeFormat（贵对象构造，比字符串拼接慢
-        // 一到两个数量级）。输出与原实现完全一致（本地时区 24 小时制零填充）。
+        // 目录只确保一次 + 时间戳手工拼。每条日志都调 fs.mkdirSync（真实
+        // syscall，启动期一次刷几百条全记在主进程账上）；toLocaleTimeString
+        // ('zh-CN',…) 每次调用都新建一个 Intl.DateTimeFormat（贵对象构造，比
+        // 字符串拼接慢一到两个数量级）。输出与它完全一致（本地时区 24 小时制零填充）。
         ensureLogsDir();
         const d = new Date(entry.ts);
         const time = `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;

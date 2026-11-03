@@ -1,11 +1,11 @@
-// ffmpeg 平台能力判定（2026-11-03 按平台分组资产时补）
+// ffmpeg 平台能力判定
 //
-// 背景：ffmpeg 的获取方式现在按平台分叉 —— Windows / Linux 可以程序内下载，
-// macOS 只能走 Homebrew。三件事最容易在改动中悄悄错掉：
+// ffmpeg 的获取方式按平台分叉：Windows / Linux 可以程序内下载，macOS 只能走
+// Homebrew。三件事最容易在改动中悄悄错掉：
 //   ① canAutoInstall 的判断与资产表不同步（mac 上露出一个必然失败的下载按钮）
 //   ② installGuideFor 的文案/命令被改坏（用户照着敲却装不上）
 //   ③ Linux 资产串了架构（x64 下到 arm64 包，或 ffmpeg/ffprobe 指向同一个包）
-// 这里只读常量与纯函数，不下载任何东西 —— 网络不稳定不该让测试变红。
+// 这里只读常量与纯函数，不下载任何东西，网络不稳定不该让测试变红。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -14,7 +14,7 @@ import path from 'node:path';
 
 const TMP = path.join(os.tmpdir(), `qqa-ffplatform-${process.pid}-${Date.now()}`);
 
-// 必须**在 import 模块之前**设好数据目录：config.js 的 DATA_DIR 是模块级常量，
+// 必须在 import 模块之前设好数据目录：config.js 的 DATA_DIR 是模块级常量，
 // 晚一步设就会指向真实 data/，测试会污染用户目录。
 process.env.QQ_AGENT_DATA_DIR = TMP;
 fs.mkdirSync(TMP, { recursive: true });

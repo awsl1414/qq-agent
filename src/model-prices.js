@@ -1,9 +1,6 @@
 // 主流模型官方价格表（用于成本核算）。
 //
-// 单位统一为：**元 / 每百万 token**（人民币）。
-// 美元价格按 1 USD ≈ 7.2 CNY 换算。
-//
-// 数据核对时间：2026-09-03（联网检索各厂商官方定价页与实时价格聚合站）
+// 单位统一为：元 / 每百万 token（人民币）。美元价格按 1 USD ≈ 7.2 CNY 换算。
 //
 // 字段：
 //   in      输入（未命中缓存）
@@ -13,14 +10,13 @@
 //   image   图片计费规则（maxTokensPerImage 等；仅视觉模型有）
 //   note    备注（口径/促销/阶梯说明）
 //
-// ── 来源分级（见每条的 src 字段）──
+// 来源分级（见每条的 src 字段）：
 //   'official' = 从厂商官方定价文档 / 价格页直接取到；人民币原价照录，未做汇率换算
 //   'derived'  = 官方页面未能直连（Cloudflare 拦截 / 地区限制），
-//                依据官方公告与可信转载折算，美元价按 1 USD ≈ 7.2 CNY 换算。
-//                这类仅供粗略参考，实际请以厂商官网为准。
+//                依据官方公告与可信转载折算。这类仅供粗略参考，以厂商官网为准。
 //
 // ⚠️ 大模型价格变动极快，且促销价、峰谷价、长短上下文价差异很大。
-//    走中转站时实际单价通常与官方不同 —— 此时请关闭「使用官方价格」并手填单价。
+//    走中转站时实际单价通常与官方不同，此时请关闭「使用官方价格」并手填单价。
 //
 // 匹配方式见 resolveOfficialPrice()：精确 → 去 provider 前缀 → 前缀匹配。
 
@@ -28,10 +24,10 @@ export const OFFICIAL_PRICES = {
   // ══ DeepSeek ══
   // 来源：官方中文文档 https://api-docs.deepseek.com/zh-cn/quick_start/pricing
   //       + https://api-docs.deepseek.com/zh-cn/guides/vision
-  //       + 2026-09-11 官方 API 全量实测（模型清单/文本/图片/工具/JSON/音频/图片token计量）
+  //       + 官方 API 全量实测（模型清单/文本/图片/工具/JSON/音频/图片 token 计量）
   // 官方直接以人民币标价，原样照录，未做汇率换算。
   //
-  // ── 2026-09-11 实测结论（文档多处滞后，以下以实测为准）──
+  // 实测结论（文档多处滞后，以实测为准）：
   // · 官方 /models 只返回两个：deepseek-flash、deepseek-v4-pro。
   //   旧名 deepseek-v4-flash / deepseek-v4-flash-vision-exp 仍可调用，但底座已下线，
   //   由 DeepSeek-V4.1-Flash 承接并按 Flash 价计费；deepseek-chat / deepseek-reasoner
@@ -39,16 +35,16 @@ export const OFFICIAL_PRICES = {
   // · 图像理解仅 Flash 支持；v4-pro 实测带图返回"无法查看图片内容，请提供文字描述"。
   // · 无音频/视频输入：input_audio 内容块直接 400（unknown variant）。
   // · 上下文 1M；输出上限 384K；并发 flash 2500 / v4-pro 500。
-  // · ⚠️ v4-pro 计划下线：北京时间 2026-09-14 12:00 后至 V4.1-Pro 上线前，
+  // · v4-pro 计划下线：北京时间 2026-09-14 12:00 后至 V4.1-Pro 上线前，
   //   deepseek-v4-pro 的请求全部路由到 V4.1-Flash，并按 Flash 价计费。
   //
-  // ── 价格（元 / 百万 token；闲时 = 高峰的一半）──
+  // 价格（元 / 百万 token；闲时 = 高峰的一半）：
   //   高峰时段：北京时间周一至周五 9:00-12:00、14:00-18:00，其余为闲时。
   //   下表 in/out/cached 取闲时价（日常多数时间的实际费率）。
   //
-  // ── 图片计费口径（已按官方文档 + 实测校准，纠正旧表中的 384 封顶错误）──
+  // 图片计费口径（按官方文档 + 实测校准）：
   //   每张图自动缩放：<约 544×544 保持长宽比放大；更大则缩到约 1300×1300 等效总像素。
-  //   单图 token 上限 **1024**（实测：420×160≈188、800×800≈432、2048²与4096²均≈1004）。
+  //   单图 token 上限 1024（实测：420×160≈188、800×800≈432、2048²与4096²均≈1004）。
   //   多图各自独立计算，无额外合并成本。detail=low 时缩到 512×512，更快更省。
   //   格式 JPEG/PNG/GIF/WebP；单请求最多 600 张；图片只能出现在 user 消息中。
   'deepseek-flash': {
@@ -85,7 +81,7 @@ export const OFFICIAL_PRICES = {
     note: '旧视觉模型名（已下线，由 V4.1-Flash 承接），按 Flash 价计费',
     src: 'official'
   },
-  // ⚠️ -0731 是日期快照，能力冻结在 07-31，不随主模型获得图片输入——勿加 image 计费
+  // ⚠️ -0731 是日期快照，能力冻结在 07-31，不随主模型获得图片输入，勿加 image 计费
   'deepseek-v4-flash-0731': { in: 1, out: 4, cached: 0.02, peak: { in: 2, out: 8, cached: 0.04 }, note: '闲时价；高峰翻倍；日期快照版，无图片输入', src: 'official' },
   // 旧别名实测均回落 Flash 档：deepseek-chat 走非思考模式，deepseek-reasoner 走思考模式
   'deepseek-chat': {
@@ -118,11 +114,11 @@ export const OFFICIAL_PRICES = {
   'deepseek-r1-0528': { in: 4.5, out: 13.5, cached: 0.15, note: '旧代，按 v4-pro 现价近似', src: 'derived' },
 
   // ══ 智谱 Z.ai / GLM ══
-  // 来源：智谱官方价格页 https://open.bigmodel.cn/pricing（2026-09-03 直取），人民币原价。
+  // 来源：智谱官方价格页 https://open.bigmodel.cn/pricing，人民币原价。
   // 缓存存储限时免费；带阶梯的取最低档（≤32K 输入）。
   'glm-5.3': { in: 8, out: 28, cached: 2, note: '1M 上下文；缓存存储限时免费', src: 'official' },
-  // 促销价（用户实测确认 2026-09-05）：输入 0.4 / 输出 1.4 / 缓存 0.115
-  // 原价 0.8/1.4/0.23 —— 输入与缓存五折，输出不打折。
+  // 促销价（用户实测确认）：输入 0.4 / 输出 1.4 / 缓存 0.115
+  // 原价 0.8/1.4/0.23，输入与缓存五折，输出不打折。
   'glm-5.3-flash': { in: 0.4, out: 1.4, cached: 0.115, note: '促销价；原价 0.8/1.4/0.23（输入与缓存五折，输出不打折）', src: 'official' },
   'glm-5.2': { in: 8, out: 28, cached: 2, note: '1M 上下文', src: 'official' },
   'glm-5.1': { in: 6, out: 24, cached: 1.3, note: '≤32K 档；>32K 为 8/28/2', src: 'official' },
@@ -151,7 +147,7 @@ export const OFFICIAL_PRICES = {
   'kimi-k2': { in: 4.32, out: 14.4, cached: 0.5, note: '旧代', src: 'derived' },
 
   // ══ MiniMax ══
-  // 来源：MiniMax 官方文档 https://platform.minimaxi.com/docs/guides/pricing-paygo（2026-09-03 直取），人民币原价。
+  // 来源：MiniMax 官方文档 https://platform.minimaxi.com/docs/guides/pricing-paygo，人民币原价。
   // M3 标注"永久五折"，下表为折后价；>512K 输入翻倍。优先服务（service_tier=priority）按标准价 1.5 倍计。
   'minimax-m3': { in: 2.1, out: 8.4, cached: 0.42, image: { mode: 'unknown', note: '支持图片输入，换算规则待补' }, note: '≤512K 五折价；>512K 为 4.2/16.8/0.84', src: 'official' },
   'minimax-m2.7': { in: 2.1, out: 8.4, cached: 0.42, note: '缓存写入 2.625', src: 'official' },
@@ -174,7 +170,7 @@ export const OFFICIAL_PRICES = {
   // ══ 阿里通义千问 ══
   // ⚠️ 阿里云百炼的价格表在需登录的「模型广场」内，公开文档只有能力清单，
   //    故以下为美元公开报价按 7.2 折算，属 derived；人民币实际价以百炼控制台为准。
-  //    当前推荐主力（官方能力清单 2026-09-03）：qwen3.8-max / qwen3.8-flash / qwen3.7-plus / qwen3.7-flash
+  //    当前推荐主力：qwen3.8-max / qwen3.8-flash / qwen3.7-plus / qwen3.7-flash
   'qwen3.8-max': { in: 14.4, out: 43.2, cached: 3.6, image: { mode: 'pixel', divisor: 1024, base: 2, maxPixels: 16000000, note: 'h×w/1024+2，上限 1600 万像素/图' }, note: '1M 上下文；旗舰档', src: 'derived' },
   'qwen3.8-max-0902': { in: 14.4, out: 43.2, cached: 3.6, image: { mode: 'pixel', divisor: 1024, base: 2, maxPixels: 16000000, note: 'h×w/1024+2，上限 1600 万像素/图' }, note: '1M 上下文', src: 'derived' },
   'qwen3.8-flash': { in: 0.94, out: 3.1, cached: 0.115, image: { mode: 'pixel', divisor: 1024, base: 2, maxPixels: 16000000, note: 'h×w/1024+2，上限 1600 万像素/图' }, note: '1M 上下文；轻量主力（$0.13/$0.43）', src: 'derived' },
@@ -195,7 +191,7 @@ export const OFFICIAL_PRICES = {
   'qwen-long': { in: 3.6, out: 14.4, cached: null, note: '10M 上下文', src: 'derived' },
 
   // ══ 腾讯混元 ══
-  // 来源：腾讯云官方文档 https://cloud.tencent.com/document/product/1729/97731（2026-06-26 更新），人民币刊例价。
+  // 来源：腾讯云官方文档 https://cloud.tencent.com/document/product/1729/97731，人民币刊例价。
   'hunyuan-a13b': { in: 0.5, out: 2, cached: null, note: '腾讯云刊例价', src: 'official' },
   'hunyuan-role-latest': { in: 2.4, out: 9.6, cached: null, note: '腾讯云刊例价', src: 'official' },
   'hunyuan-translation': { in: 1.2, out: 3.6, cached: null, note: '翻译模型', src: 'official' },
@@ -326,8 +322,8 @@ export function resolveOfficialPrice(modelId) {
 
    内置表 OFFICIAL_PRICES 保持只读、随版本发布；
    远程表由 src/price-feed.js 拉取/校验后经 setRemotePrices 注入，
-   与内置表**按模型 id 合并**（远程赢），内置表其余条目仍是兜底。
-   查价时走 EFFECTIVE_PRICES —— 合并结果在注入时重建一次，
+   与内置表按模型 id 合并（远程赢），内置表其余条目仍是兜底。
+   查价时走 EFFECTIVE_PRICES，合并结果在注入时重建一次，
    不在每次查价时临时拼（用量统计要逐条解析几百次）。
 */
 let REMOTE_OVERRIDES = {};                 // { 模型id(小写): 条目 }
@@ -358,13 +354,11 @@ export function listOfficialPrices() {
 /**
  * 峰谷分时计价（DeepSeek 自 2026-08-16 起实行，其他厂商暂无此机制）。
  *
- * 官方规则原文：
- *   高峰时段 = 北京时间周一至周五 09:00-12:00、14:00-18:00
- *   其余时间（含整个周末）为闲时
- *   闲时价 = 高峰价的一半
+ * 官方规则：高峰时段 = 北京时间周一至周五 09:00-12:00、14:00-18:00，
+ * 其余时间（含整个周末）为闲时，闲时价 = 高峰价的一半。
  *
- * 之所以要单独处理：如果全按闲时价估算，会明显低估实际支出；
- * 全按高峰价又会高估。正确做法是**按每笔调用发生的时间分别取价**。
+ * 全按闲时价估算会明显低估支出，全按高峰价又会高估，
+ * 所以要按每笔调用发生的时间分别取价。
  */
 
 // 高峰时段（北京时间）。weekday: 1=周一 … 5=周五；0/6 为周末，全天闲时。
@@ -383,7 +377,7 @@ const PEAK_TZ_OFFSET_HOURS = 8;
  */
 export function isPeakHour(at = Date.now()) {
   const d = at instanceof Date ? at : new Date(Number(at) || Date.now());
-  // ⚠️ 必须把时刻整体平移后再取 UTC 字段，不能"只平移小时、星期照抄 UTC"。
+  // 必须把时刻整体平移后再取 UTC 字段，不能"只平移小时、星期照抄 UTC"。
   // 两个曾经的 bug 都出在这里：
   //   ① 直接 % 24：JS 取模符号跟随被除数，PEAK_TZ_OFFSET_HOURS 为负时
   //      （UTC-5 等）localHour 会算出负数，所有 `localHour >= w.from` 恒 false
@@ -460,9 +454,9 @@ export function sumCostByTime(rows, price) {
 /**
  * 计算一张图片折算成多少输入 token。
  *
- * 各厂商规则差异极大 —— 有的按张封顶，有的按像素算，差可达 40 倍：
- *   - DeepSeek 视觉版：缩放到约 800×800 后**按张封顶 384 token**（与原图尺寸无关）
- *   - 千问（百炼）：**按像素** h×w/1024 + 2，上限 1600 万像素/图
+ * 各厂商规则差异极大：有的按张封顶，有的按像素算，差可达 40 倍：
+ *   - DeepSeek 视觉版：缩放后按张封顶 1024 token（与原图尺寸无关）
+ *   - 千问（百炼）：按像素 h×w/1024 + 2，上限 1600 万像素/图
  *     4096×4096 的图 → 15627 token，是 DeepSeek 的 40 倍
  *
  * @param {object} price 价格条目（取其 image 字段）
@@ -501,59 +495,33 @@ export function supportsImage(price) {
 /**
  * 模型价格的统一解析入口。
  *
- * ── 第 10 条原则：成本只与"实际调用的模型"有关，与"当前选择的模型"无关 ──
- * 历史统计里每次调用都会带上它自己的 model（网关返回的真名），
- * 逐条解析各自的价格，而不是拿当前配置里的模型去套所有调用。
+ * 成本只与实际调用的模型有关，与当前选择的模型无关：历史统计里每次调用都会
+ * 带上它自己的 model（网关返回的真名），逐条解析各自的价格。
  *
- * 优先级（从高到低）：
- *   1. 用户在「模型 API → 成本核算」为**该模型**单独设定的价格（cfg.modelPrices）
- *      —— 一旦设定就用它，与内置官方表开关无关
- *   2. 开了「使用官方价格表」且该模型 id 能在内置表中匹配到
- *   3. 全局兜底单价（cfg.priceInputPerM 等）
+ * 规则（刻意做得简单）：
+ *   开关开 → 一律走内置官方价格表，且只读
+ *            匹配不到就是单价 0（估不出成本），提示关开关自填
+ *   开关关 → 可编辑，优先该模型的自定义价，没设则用全局兜底
+ *
+ * 可编辑性只跟开关绑定：不看有没有匹配到、也不看该模型存没存过自定义价。
  *
  * @param {string} modelId 模型 id（通常是网关返回的真名）
  * @param {object} cfg 配置对象（getConfig() 的结果）
- * @returns {{
- *   in:number, out:number, cached:number,
- *   peak:?{in:number,out:number,cached:number},
- *   image:?object,
- *   source:'custom'|'official'|'manual'|'none',
- *   matched:?string, locked:boolean
- * }}
- *   - source: custom=用户自定义 / official=内置官方表 / manual=全局兜底 / none=无单价
- *   - locked: 是否因"命中内置官方表且开关打开"而不可编辑
- */
-
-/* ══════════════════════════════════════════════════════════════
-   模型单价解析
-   ══════════════════════════════════════════════════════════════
-
-   规则（刻意做得简单）：
-     开关开 → 一律走内置官方价格表，且**只读**
-              匹配不到就是单价 0（估不出成本），提示关开关自填
-     开关关 → **可编辑**，优先该模型的自定义价，没设则用全局兜底
-
-   可编辑性**只跟开关绑定**：不看有没有匹配到、也不看该模型存没存过
-   自定义价。绝不依赖保存状态。
-*/
-
-/**
- * @param {string} modelId 模型 id
- * @param {object} cfg 配置
  * @param {Array} [priceTable] 内置价格表（可选，默认用内置的 OFFICIAL_PRICES）
  * @returns {{in:number,out:number,cached:number,peak:?object,image:?object,
  *            source:'official'|'unmatched'|'custom'|'manual'|'none',
  *            matched:?string, locked:boolean}}
+ *   - source: custom=用户自定义 / official=内置官方表 / manual=全局兜底 / none=无单价
+ *   - locked: 是否因"命中内置官方表且开关打开"而不可编辑
  */
 export function resolveModelPrice(modelId, cfg, priceTable = null) {
   const id = String(modelId || '').trim();
   const api = (cfg && cfg.api) || {};
   const useOfficial = api.useOfficialPrice === true;
 
-  // ┚┄┄ 优先级 1：用户为**该模型**单独设定的价格（cfg.modelPrices）。
-  //     JSDoc 一直宣称"一旦设定就用它，与官方表开关无关"，但旧实现是
-  //     开关开启时直接 return 官方表 —— 用户自定义价静默失效，成本看板
-  //     给出错误数字（走中转站时特别常见）。现按文档口径修正：
+  // 优先级 1：用户为该模型单独设定的价格（cfg.modelPrices）。
+  //     必须排在官方表开关之前：开关开启时直接 return 官方表的话，用户自定义价
+  //     会静默失效，成本看板给出错误数字（走中转站时特别常见）。
   //     自定义价命中 > 官方表 > 全局兜底。
   const custom = (api.modelPrices || {})[id];
   const hasCustom = !!(custom && (Number(custom.in) || Number(custom.out)));
@@ -585,7 +553,7 @@ export function resolveModelPrice(modelId, cfg, priceTable = null) {
         locked: true
       };
     }
-    // 开关注定要读，但表里没有 —— 单价 0，仍然只读
+    // 开关注定要读，但表里没有，单价 0，仍然只读
     return {
       in: 0, out: 0, cached: 0,
       peak: null, image: null,
@@ -649,13 +617,13 @@ export function matchPriceTable(modelId, table) {
    渠道（vendor）
    ══════════════════════════════════════════════════════════════
 
-   同一个模型 id 走不同**渠道**时，是两个不同的商品：
+   同一个模型 id 走不同渠道时，是两个不同的商品：
        「A6API中转站：z-ai/glm-5.3-flash」
        「OpenRouter：z-ai/glm-5.3-flash」
        「本地中转：z-ai/glm-5.3-flash」
 
    这里说的渠道 = 程序内配置的 API 端点（A6API / OpenRouter / 本地中转…），
-   **不是**网关返回的下游供应商（raw.provider）—— 后者一次调用一个值、
+   不是网关返回的下游供应商（raw.provider）：后者一次调用一个值、
    多达几十种，粒度太细，也不代表用户实际采购的渠道。
 */
 
@@ -663,7 +631,7 @@ export function matchPriceTable(modelId, table) {
 export const UNKNOWN_VENDOR = '未知渠道';
 
 /**
- * 由 API 配置派生渠道名（只用于**新产生的调用**）。
+ * 由 API 配置派生渠道名（只用于新产生的调用）。
  *
  * 优先级：
  *   1. providers 里 id 匹配 api.provider → displayName（如「A6API中转站」）

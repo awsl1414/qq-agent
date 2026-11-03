@@ -1,11 +1,7 @@
 // 原生工具集（OpenAI function calling 格式）。
-// 与原版 MCP 工具的关键区别：每个工具自动绑定本次运行对应的会话（chatKey），
-// 不再需要 key/token 参数 —— 模型物理上无法把消息发到别的群/私聊，安全性反而更强。
-//
-// 工具命名去掉了 qq_ 前缀（更短，省 token）。
-//
-// 重构说明：所有工具通过 registerTool() 注册到 tool-registry.js，
-// 支持在设置页按卡片勾选启用/禁用。
+// 每个工具自动绑定本次运行对应的会话（chatKey），不再需要 key/token 参数，
+// 模型物理上无法把消息发到别的群/私聊。工具命名去掉了 qq_ 前缀（更短，省 token）。
+// 所有工具通过 registerTool() 注册到 tool-registry.js，设置页可按卡片勾选启用/禁用。
 import { getConfig } from './config.js';
 import { isAtMe } from './prompt.js';
 import { logger } from './logger.js';
@@ -36,7 +32,7 @@ export async function downloadImageAsDataUrl(url, timeoutMs = 30000) {
   // GIF 在这里分岔（规则矩阵见 resolveGifRoute）：
   //   vision+video 都开 → 转 mp4 按 video 部件发（llm.js 自动切视频专用模型）；
   //   只开 vision      → GIF 按图片原样发（读不了的模型由 llm.js 的"图片被拒"
-  //                      降级路径换首帧重试 —— 见 image-compat 的 llm.retry-advisor）；
+  //                      降级路径换首帧重试，见 image-compat 的 llm.retry-advisor）；
   //   vision 没开      → 看图工具整体不可用，不会被调到。
   if (isGifBuffer(buffer) && currentGifRoute() === 'video') {
     const video = await gifToVideoDataUrl(buffer);
@@ -116,7 +112,7 @@ export async function collectImageResults(ctx, media, midKey, { max = 8 } = {}) 
     try {
       // **入库缓存优先**：QQ 图片链接几分钟就过期（官方错误体 "download url has
       // expired"，实测入库 48 秒后就已经 400）。入库那一刻后台已经把图下载到本地，
-      // 这里直接读；没有缓存（旧消息/下载失败）才走 url —— 那时多半也已经过期。
+      // 这里直接读；没有缓存（旧消息/下载失败）才走 url，那时多半也已经过期。
       const cached = lookupCachedImage(ctx.chatKey, midKey, i);
       if (cached) {
         results.push({
@@ -131,10 +127,9 @@ export async function collectImageResults(ctx, media, midKey, { max = 8 } = {}) 
       } else if (m.file) {
         // 仅本地落盘、无 url（远端直链已过期）的图片：直接读本地字节回传，
         // 否则会漏掉"图床直链过期但本地还有"的情况。
-        // ⚠️（2026-10-16 外部审查 #15）m.file 是**消息段转述**的字段，原实现
-        //    直接 readFileSync（还专门支持 file:// 解码）—— 等于"消息里写什么
-        //    路径就读什么文件"，群里一条构造消息段就能让机器人读本地任意文件
-        //    并经 base64 外发。现在先过白名单：只放行我们自己写下的缓存文件
+        // ⚠️ m.file 是**消息段转述**的字段，直接 readFileSync 等于"消息里写什么
+        //    路径就读什么文件"，群里一条构造消息段就能让机器人读本地任意文件并经
+        //    base64 外发。所以先过白名单：只放行我们自己写下的缓存文件
         //    （归属 + realpath + 命名规则三道，见 media-path.js）。
         const gate = resolveCachedMediaPath(m.file, { kind: 'image' });
         if (!gate.ok) {
@@ -161,10 +156,9 @@ export async function collectImageResults(ctx, media, midKey, { max = 8 } = {}) 
 /**
  * read_forward 的统一返回：转发文本 + **转发里的图片一起回传**。
  *
- * 2026-10-21 实测：以前只回 `images: N` 这个数字，模型看到正文里一排 `[图片]`
- * 却没有任何可看的东西，只能跟用户说"图看不到"。转发里的图本来就在 `ex.media` 里
- * （入库时也下过缓存），没道理不一起给它。
- * 一次最多回 4 张 —— 转发里塞十几张图会把上下文直接撑爆。
+ * 只回 `images: N` 这个数字时，模型看到正文里一排 `[图片]` 却没有任何可看的
+ * 东西，只能跟用户说"图看不到"。转发里的图本来就在 `ex.media` 里（入库时也
+ * 下过缓存），没道理不一起给它。一次最多回 4 张，十几张会把上下文撑爆。
  */
 export async function forwardResult(ctx, midKey, text, media, note = '') {
   const imgs = (media || []).filter((m) => m.kind === 'image');
@@ -222,14 +216,7 @@ function imageParts(text, dataUrls) {
 }
 
 /**
- * 构建绑定一次运行的工具集。
- * ctx: {
- *   chatKey, kind, chatId, selfId, selfNickname, botName,
- *   onebot, store, memory, sender, session,
- *   emit  (事件上报给 UI/日志)
- * }
- *
- * 重构后：工具定义注册到 tool-registry，这里从 registry 读取并过滤。
+ * 构建绑定一次运行的工具集。工具定义注册到 tool-registry，这里从 registry 读取。
  */
 export function buildToolDefs() {
   // 确保所有工具已注册（幂等）
@@ -244,8 +231,7 @@ let pluginToolsLoaded = false;
 function loadPluginTools() {
   if (pluginToolsLoaded) return;
   pluginToolsLoaded = true;
-  // 插件工具已在 app.js 启动时通过 loadPlugins() 注册到 registry
-  // 这里只需要确保 registry 里有它们
+  // 插件工具已在 app.js 启动时通过 loadPlugins() 注册到 registry，这里只需确保 registry 里有它们
 }
 
 /** 注册所有内置工具到 registry。 */
@@ -279,9 +265,8 @@ function registerAllTools() {
         ctx.emit('session-update', ctx.session.id);
         const note = ['已发送。不要输出"已发送"类汇报，继续思考下一步或直接结束。'];
         if (result.failed.length) {
-          // 禁言签名（2026-10-22 F4）：失败原因是"被禁言"时，重试不可能成功 ——
-          // 每重试一轮就是一整份 prompt（实测单请求 body 涨到 1.9MB）。
-          // 明确告诉模型这是终态，停止重试、直接结束本轮。
+          // 失败原因是"被禁言"时，重试不可能成功，每重试一轮就是一整份 prompt
+          // （实测单请求 body 涨到 1.9MB）。明确告诉模型这是终态，停止重试。
           const banFailed = result.failed.filter((f) => f.muteRejection).length;
           if (banFailed > 0) {
             note.push(`（${banFailed} 条发送失败：机器人当前在本群被禁言，消息不可能送达。请勿重试发送，直接结束本轮；如需说明，简短告知"当前被禁言无法发言"即可。）`);
@@ -290,11 +275,11 @@ function registerAllTools() {
           }
         }
         // failed 必须带出去：用量账本（plugin-usage）按 toolCall.failed 统计失败，
-        // 否则"部分失败"在控制台永远是 0 错误（体检 F8：QQ 侧 result=241 被静默吞掉）。
+        // 否则"部分失败"在控制台永远是 0 错误。
         return ok({ sent: realSent.length, failed: result.failed.length, messageIds: realSent.map((s) => s.messageId).filter(Boolean), note: note.join('') });
       } catch (error) {
-        // 禁言终态错误（F4）：全败且签名是禁言（sender 已标记该群禁言状态）。
-        // 作为终态返回：模型收到后应停止重试发送 —— 重试除了烧 token 没有任何意义。
+        // 禁言终态错误：全败且签名是禁言（sender 已标记该群禁言状态）。
+        // 作为终态返回：模型收到后应停止重试发送，重试除了烧 token 没有任何意义。
         if (error?.muteRejection) {
           return err('发送失败：机器人当前在本群被禁言，消息不可能送达（已记录禁言状态）。请勿重试发送，直接结束本轮；如需说明，简短告知"当前被禁言无法发言"即可。');
         }
@@ -313,15 +298,15 @@ function registerAllTools() {
       const base = '把消息发送到另一个群/私聊（不在当前会话里说，而是去别处说）。适用于：有人明确让你转告某人/某群、你主动去私聊某人。';
       return cross
         ? `${base}先用 get_chats 查可用的 chatKey，再传 targetChatKey（形如 group:123 / private:456）。只在有明确理由时使用，不要骚扰别人。`
-        // 2026-10-20 修：原文案叫用户去找一个叫「允许跨会话发送」的勾选框 ——
-        // 界面上没有这个名字。跨会话发送就是 send_to 这张工具卡自己的开关
-        // （ui/app/06-settings-render.js 里 isSendTo 分支直接映射 tools.crossChatSend）。
+        // 跨会话发送就是 send_to 这张工具卡自己的开关
+        // （ui/app/06-settings-render.js 里 isSendTo 分支直接映射 tools.crossChatSend），
+        // 界面上没有单独的「允许跨会话发送」勾选框，文案别指向不存在的入口。
         : `${base}（当前未开启：管理员可在 设置 → 工具与技能 →「💬 消息发送」分类里打开 send_to 的开关。）`;
     })(),
     category: 'messaging',
     icon: '📨',
     // 工具级可用性：开关关闭时整组工具不可见（getToolAvailability 的第 5 层），
-    // 比描述提示更硬 —— 模型连试的机会都没有。
+    // 比描述提示更硬：模型连试的机会都没有。
     defaultEnabled: true,
     parameters: {
       type: 'object',
@@ -348,8 +333,8 @@ function registerAllTools() {
         const allow = getConfig().allow || {};
         const allowList = (tKind === 'group' ? allow.groups : allow.private) || [];
         // ⚠️ group / private 对称：空名单都必须显式开 allowAllWhenEmpty 才允许全放行，
-        // 否则默认拒绝。原 private 分支写成 `allowList.length === 0`（无条件放行），
-        // 等于"只配了 allow.groups 就能给任意私聊发消息"，是越权口子。
+        // 否则默认拒绝。private 分支若无条件放行，等于"只配了 allow.groups 就能给
+        // 任意私聊发消息"，是越权口子。
         const allowedAll = allowList.length === 0 && getConfig().allowAllWhenEmpty === true;
         if (!(allowList.map(String).includes(tId) || allowedAll)) {
           return err(`目标 ${wantTarget} 不在白名单内，不能发送。`);
@@ -449,8 +434,8 @@ function registerAllTools() {
       try {
         const entry = ctx.store.findByMid(ctx.chatKey, args.messageId);
         if (!entry) {
-          // 2026-10-21：引用块里会带「被引用那条」的 #数字，它可能已经滑出本会话的存档
-          // 窗口（或压根没被白名单收进来）。这种 id 不该判死刑 —— 直接问协议端：
+          // 引用块里会带「被引用那条」的 #数字，它可能已经滑出本会话的存档窗口
+          // （或压根没被白名单收进来）。这种 id 不该判死刑，直接问协议端：
           // 是转发就展开给出去，不是就明说，别让模型在「找不到」和「不是转发」之间瞎猜。
           try {
             const msg = await ctx.onebot.getMsg(args.messageId);
@@ -470,10 +455,10 @@ function registerAllTools() {
         if (String(entry.text || '').startsWith('[合并转发 共')) {
           return await forwardResult(ctx, entry.mid, entry.text, entry.media, '存档里已是展开版');
         }
-        // 只有「整条消息就是一条合并转发」才展开得动 —— 占位符必须落在正文开头。
-        // 2026-10-21 实测的坑：引用块里也会出现「[合并转发聊天记录]」（被引用的那条是转发），
-        // 模型看见就调本工具，但手上只有**外层消息**的 mid，展开必然失败。不先挡一下的话，
-        // 用户看到的是「展开失败：OneBot get_forward_msg 失败：retcode=100」，完全指不到真原因。
+        // 只有「整条消息就是一条合并转发」才展开得动，占位符必须落在正文开头。
+        // 引用块里也会出现「[合并转发聊天记录]」（被引用的那条是转发），模型看见就调
+        // 本工具，但手上只有**外层消息**的 mid，展开必然失败。不先挡一下的话，用户
+        // 看到的是「展开失败：OneBot get_forward_msg 失败：retcode=100」，指不到真原因。
         if (!/^\[(合并转发|转发消息)/.test(String(entry.text || ''))) {
           const peek = String(entry.text || '').replace(/\s+/g, ' ').slice(0, 40);
           return err(`#${entry.mid} 本身不是合并转发（正文：${peek || '空'}），没有可展开的内容。只有整条消息是一条转发时才能展开；引用里的转发需要引用的是那条转发本身。`);
@@ -490,8 +475,8 @@ function registerAllTools() {
         return await forwardResult(ctx, entry.mid, ex.text, fresh.media, '');
       } catch (error) {
         const msg = String(error?.message ?? error);
-        // 2026-10-21：优先用 onebot.call 挂上的结构化 retcode，字符串匹配只作兜底 ——
-        // 协议端 wording 一改，正则就会静默失效，而这类"拉不到内容"的判断最怕静默。
+        // 优先用 onebot.call 挂上的结构化 retcode，字符串匹配只作兜底：
+        // 协议端 wording 一改正则就会静默失效，而这类"拉不到内容"的判断最怕静默。
         const retcode = error?.retcode ?? (/(?:^|\D)retcode=(\d+)/.exec(msg)?.[1] ? Number(/(?:^|\D)retcode=(\d+)/.exec(msg)[1]) : null);
         if (retcode === 100 || /payload is empty/i.test(msg)) {
           // 这一类**重试没有意义**：不是参数错、也不是判据错，是协议端手上没有这份长消息。
@@ -597,7 +582,7 @@ function registerAllTools() {
       try {
         const entry = ctx.store.findByMid(ctx.chatKey, args.messageId);
         if (!entry) return err(`当前会话找不到消息 ${args.messageId}。${midHint(ctx)}`);
-        // 缓存键要和入库侧（image-cache.js 用 event.message_id）对上 —— 容错掉模型可能带来的 '#'
+        // 缓存键要和入库侧（image-cache.js 用 event.message_id）对上，容错掉模型可能带来的 '#'
         const midKey = String(args.messageId).replace(/^#/, '');
         const { results, failed } = await collectImageResults(ctx, entry.media, midKey);
         if (!results.length && !failed.length) return ok(`消息 ${args.messageId} 没有可查看的图片`);
@@ -757,7 +742,7 @@ function registerAllTools() {
     async execute(ctx, args) {
       try {
         // 浏览锁定开启时逐跳校验白名单（与 send_image/search_images 同一口径；
-        // 曾经漏传导致锁定形同虚设）
+        // 漏传 browseLocked 会让锁定形同虚设）
         const result = await webFetch(String(args.url ?? ''), { browseLocked: browseLockState().enabled });
         const body = String(result.body || '');
         return ok({
@@ -787,12 +772,12 @@ function registerAllTools() {
       required: ['summary']
     },
     async execute(ctx, args) {
-      // ── 被点名时不许用 finish 跳过回应（2026-10-19 反馈修复）──────────────
+      // ── 被点名时不许用 finish 跳过回应 ──────────────────────────────────
       // 现象：群友 @ 机器人并发图，模型连续看了几张图后直接 finish("不发送")，
-      // 群里什么都没收到，用户以为"机器人坏了/没调用发言工具"。
+      // 群里什么都没收到，用户以为"机器人坏了"。
       // 依据：【回应义务】写明"被 @/点名/引用提问必须回应，哪怕只回一个字"，
       // 但那是纯提示词约束，模型会无视，所以要在这里补一道代码闸。
-      // 只拦第一次：第二次放行 —— 防止模型硬顶导致无限重试，每次重试都要重付 prefill。
+      // 只拦第一次：第二次放行，防止模型硬顶导致无限重试，每次重试都要重付 prefill。
       try {
         const summoned = (ctx.session.trigger || []).some((e) => isAtMe(String(e?.text ?? ''), {
           selfNickname: ctx.selfNickname, botName: ctx.botName, selfId: ctx.selfId
@@ -801,8 +786,7 @@ function registerAllTools() {
           ctx.session.finishGuardHit = true;
           // ⚠️ 不写 session.finishReason：那是"本次会话为什么结束"的说明。
           //   拦截后模型通常还会补发消息，写成"被点名但未回应"会让 UI 显示
-          //   "未回应"而实际已经回了（2026-10-21 体检发现的误导）。
-          //   拦截本身落日志，便于统计命中率。
+          //   "未回应"而实际已经回了。拦截本身落日志，便于统计命中率。
           logger.warn('finish-guard', `被 @/点名但想直接结束，已拦截一次并要求先回应（${ctx.chatKey || ''}）`);
           return err('这一轮有人 @你 或 点名你。按【回应义务】必须先调用 send_message 回应（哪怕只回一个字），不能直接结束。');
         }
@@ -933,15 +917,13 @@ function registerAllTools() {
 
   // ── 发网图（send_image / search_images）────────────────────────────────
   //
-  // 补的是一个明显缺口：此前机器人只能发 QQ 收藏的表情（send_sticker），
-  // **无法主动发一张网上找的图**。
+  // 此前机器人只能发 QQ 收藏的表情（send_sticker），**无法主动发一张网上找的图**。
   //
   // 三道闸门（缺一不可）：
-  //   1. 总开关 —— security.imageSend.enabled 默认开启（2026-10-23 起，原先默认
-  //      关闭、要求显式打开）；只有用户显式存了 false 才拒绝。
+  //   1. 总开关：security.imageSend.enabled 默认开启，只有用户显式存了 false 才拒绝。
   //      老配置里已显式存过 false 的，deepMerge 会保留其选择，不会被默认值覆盖。
-  //   2. 预览闸门 —— requirePreview 时先 send_image(url, preview=true) 看一眼，才能真发
-  //   3. 字节校验 —— 魔数确认是真图（防"图片链接其实是防盗链网页"），
+  //   2. 预览闸门：requirePreview 时先 send_image(url, preview=true) 看一眼，才能真发
+  //   3. 字节校验：魔数确认是真图（防"图片链接其实是防盗链网页"），
   //      下载走 safe-fetch（SSRF 防护 + 限量 + 浏览锁定）
   registerTool({
     id: 'send_image',
@@ -965,12 +947,9 @@ function registerAllTools() {
       try {
         const cfg = getConfig();
         const opt = cfg.security?.imageSend || {};
-        // 2026-10-23 起默认开启：仅"显式关掉"（enabled === false）才拒绝；
-        // undefined（从未设置、走默认值 true）视为放行。
+        // 默认开启：仅"显式关掉"（enabled === false）才拒绝，undefined 视为放行。
         if (opt.enabled === false) {
-          // 2026-10-20 修：原文案指向「聊天设置 → 发网图」—— 界面上从来没有这个入口
-          // （属于"文档先于实现"的遗留），用户照提示去找只会更困惑。
-          // 现指向真实路径：设置 → 聊天 →「📨 信息发送配置」弹窗里的勾选框。
+          // 文案必须指向界面上真实存在的路径：设置 → 聊天 →「📨 信息发送配置」弹窗里的勾选框。
           return err('发网图功能未开启。这是安全总开关（security.imageSend.enabled），'
             + '与「工具与技能」里的 send_image 开关不是一回事：'
             + '请在 设置 → 聊天 →「📨 信息发送配置」里勾选「允许机器人发送网图」。');
@@ -1034,7 +1013,7 @@ function registerAllTools() {
           st.previews += 1;
           if (!st.previewed.includes(url)) st.previewed.push(url);
           // 问图片格式兼容 Skill：这种格式能不能喂给当前模型。
-          // webp/avif 在部分本地视觉接口会直接 400，那会把整轮打挂 ——
+          // webp/avif 在部分本地视觉接口会直接 400，那会把整轮打挂，
           // 比"这轮看不到图"严重得多，所以改成字节校验后让模型自己决定发不发。
           let supported = true;
           try {
@@ -1053,7 +1032,7 @@ function registerAllTools() {
 
         // 传 url 而不是只传 base64：OneBot 的 image 段原生支持 http 直链，让**协议端
         // 自己去下载**，body 从 MB 级降到几十字节。而 base64 内联走 HTTP body 时，
-        // 5MB 的图（本工具 maxBytesMB 默认值）base64 后 6.7MB，很容易撞上发送超时 ——
+        // 5MB 的图（本工具 maxBytesMB 默认值）base64 后 6.7MB，很容易撞上发送超时，
         // 这正是"图画出来了但发不出去"的同一个根因。
         // `url` 是刚经 safe-fetch 校验并成功下载过的地址，交给协议端取是安全的。
         // 保留 dataUrl 作为回退：协议端取不到时（防盗链 / 协议端在别的机器）自动改用 base64。
@@ -1095,9 +1074,9 @@ function registerAllTools() {
     async execute(ctx, args) {
       try {
         const cfg = getConfig();
-        // 与 send_image 同一个总开关、同一套默认开启语义（2026-10-23）
+        // 与 send_image 同一个总开关、同一套默认开启语义
         if (cfg.security?.imageSend?.enabled === false) {
-          // 同上（2026-10-20）：搜图与发图共用同一个总开关，文案必须说清这一点，
+          // 搜图与发图共用同一个总开关，文案必须说清这一点，
           // 否则用户会以为"联网搜索开关都开着，搜图却是坏的"。
           return err('搜图功能未开启。搜图与发网图共用同一个安全总开关（security.imageSend.enabled）：'
             + '请在 设置 → 聊天 →「📨 信息发送配置」里勾选「允许机器人发送网图」。');
@@ -1157,9 +1136,8 @@ function registerAllTools() {
         const info = await ctx.videoReader.probe(videoMedia, { count: Number(args.frames) || 0 });
 
         // 元信息（不含画面）单独作为文本返回。
-        // ⚠️ 必须把画面字段剥掉再序列化：
-        //    以前是把 frameDataUrl（base64 图片）直接塞进这个 JSON 字符串，
-        //    结果整张图被当成**文本**送进上下文 —— 模型既看不到图，
+        // ⚠️ 必须把画面字段剥掉再序列化：把 frameDataUrl（base64 图片）塞进这个
+        //    JSON 字符串，整张图会被当成**文本**送进上下文，模型既看不到图，
         //    又要为几十万 token 的 base64 付钱。画面一律走下面的 parts。
         const metaOut = {
           messageId: entry.mid,
@@ -1232,34 +1210,28 @@ function parseAtTime(raw) {
   return null;
 }
 
-/** 转成 OpenAI tools 参数格式。 */
-// ── required 为什么必须保留（2026-10-13，群友实测 400 事故）──────────────
+// ── required 为什么必须保留 ──────────────────────────────────────────────
 //
-// 症状：群友环境（DeepSeek 系 OpenAI 兼容端点）里**所有带 tools 的请求**稳定返回
-//     400 Invalid schema for function 'check_holiday': null is not of type 'array'
+// 症状：DeepSeek 系 OpenAI 兼容端点（Go 实现）里，**所有带 tools 的请求**稳定返回
+//     400 Invalid schema for function '…': null is not of type 'array'。
 //
-// 排查结论（可复现，不是推测）：
-//   · check_holiday 的定义里**根本没有 required 这个键**，序列化的 JSON 里也没有 null；
-//   · 但服务端是 Go 实现：字段缺失 → unmarshal 进 struct 后是 **nil slice** →
-//     再按 JSON Schema 校验时它就变成了 null → 报「null is not of type array」。
-//     **也就是说"缺 required"与"required: null"在这类端点上完全等价，一律 400。**
-//   · 报错只报**第一个**违规函数（按 tools 数组顺序），所以永远看到同一个名字 ——
-//     修掉一两个工具没用，必须全量保证。
+// 原因是 Go 端把缺失字段 unmarshal 成 nil slice，再按 JSON Schema 校验时就变成 null。
+// **"缺 required"与"required: null"在这类端点上完全等价，一律 400。**
+// 报错只报 tools 数组里的**第一个**违规函数，所以修掉一两个工具没用，必须全量保证。
 //
-// 于是这里的行为反转：旧实现为了省 ~30 字符/工具**主动删掉** required: []，
-// 在那个端点上等于亲手制造 400。改为一律保留（88 个工具约 +1.2K 字符，
-// 相对 ~60K 的请求体是 2%，换掉整批 400 —— 这笔账很清楚）。
+// 于是这里的行为反转：省 ~30 字符/工具去主动删掉 required: []，在那个端点上
+// 等于亲手制造 400。改为一律保留，多出来的字符相对整份请求体是零头。
 
 /** 这些槽位必须是数组；写成 null 时该约束直接删掉（语义上等于"没有这条约束"）。 */
 const NULL_ARRAY_SLOTS = new Set(['enum', 'anyOf', 'oneOf', 'allOf', 'prefixItems', 'examples']);
 
 /**
- * 规范化 schema：清掉可能被端点判定非法的形态（2026-10-13，群友环境真实 API 实测）。
- *   · required: null / 非数组 —— 统一成数组（缺失的由 normalizeParameters 在顶层补）
- *   · enum/anyOf/oneOf/… 为 null —— 整键删除
- *   · properties: {} —— **保留**。实测证据：只补 required 时，API 换报
- *     list_reminders: null is not of type "object" —— 这类端点对 properties
- *     同样是"缺失 == null"，删空 properties 等于换一个字段继续 400。
+ * 规范化 schema：清掉可能被端点判定非法的形态。
+ *   · required: null / 非数组：统一成数组（缺失的由 normalizeParameters 在顶层补）
+ *   · enum/anyOf/oneOf/… 为 null：整键删除
+ *   · properties: {} 保留。只补 required 时，这类端点会换报
+ *     list_reminders: null is not of type "object"：它们对 properties 同样是
+ *     "缺失 == null"，删空 properties 等于换一个字段继续 400。
  * 递归处理嵌套 items/oneOf 等；顺序稳定，不影响前缀缓存的逐字节一致性。
  */
 function slimSchema(node) {
@@ -1270,7 +1242,7 @@ function slimSchema(node) {
     if (v === null && NULL_ARRAY_SLOTS.has(k)) continue;
     // required 一律保留（见上方注释）；null / 非数组兜成空数组。
     if (k === 'required') { out[k] = Array.isArray(v) ? v.map(slimSchema) : []; continue; }
-    // properties 一律保留（含空对象）—— 理由见上，实测删了会换报 "not of type object"。
+    // properties 一律保留（含空对象），理由见上，删了会换报 "not of type object"。
     out[k] = slimSchema(v);
   }
   return out;
@@ -1278,7 +1250,7 @@ function slimSchema(node) {
 
 /**
  * 把工具的 parameters 兜成「任何 OpenAI 兼容端点都接受」的最小合法形态。
- * 插件/扩展注册的工具可以任意写（甚至 parameters: null），这里统一收口 ——
+ * 插件/扩展注册的工具可以任意写（甚至 parameters: null），这里统一收口，
  * 一处兜底覆盖全部来源，不必逐个插件去改。
  */
 function normalizeParameters(p) {
@@ -1291,26 +1263,23 @@ function normalizeParameters(p) {
 }
 
 /**
- * 工具分区排序（2026-10-12，前缀缓存优化）。
+ * 工具分区排序（前缀缓存优化）。
  *
- * 背景：tools 数组体积约 9k tok，位于请求体靠前位置（system 之后、messages 之前）。
- * 前缀缓存要求逐字节一致 —— 一旦数组里任意一个工具被增删，**它后面所有工具的位置
- * 全部后移**，缓存从变化点整段击穿（实测：加载 1 个扩展 → 紧随的会话缓存从 98%
- * 跌到 13%，cached 只剩 2688）。
+ * tools 数组体积约 9k tok，位于请求体靠前位置（system 之后、messages 之前）。
+ * 前缀缓存要求逐字节一致：数组里任意一个工具被增删，**它后面所有工具的位置全部
+ * 后移**，缓存从变化点整段击穿（实测加载 1 个扩展 → 紧随的会话缓存从 98% 跌到 13%）。
  *
  * 分区规则（稳定 → 易变）：
- *   ① 核心区：内置工具（tools.js 静态注册，skillId 为 null）。它们随版本发布而变，
+ *   ① 核心区：内置工具（tools.js 静态注册，skillId 为 null）。随版本发布而变，
  *      运行期**永不变化** → 这部分前缀永久命中（token 大头）。
  *   ② 扩展区：插件/skill 注册的工具（带 skillId）。会随热重载增减，
  *      但**按固定规则排序**（skillId 字典序 → 工具 id 码点序）。
  *
- * 这样扩展增减只影响扩展区（尾部），核心区不再被击穿。
- * ⚠️ 排序必须是**全序且确定**的：同一组工具不论注册先后（异步加载顺序会漂移），
- *    排出来的字节必须完全一致 —— 否则每次重扫都抖动，等于没排。
+ * 这样扩展增减只影响扩展区（尾部），核心区不再被击穿。扩展绝不与内置工具混排：
+ * 混排会让新扩展把它后面的内置工具全部推走，核心区缓存照样断。
  *
- * 「新扩展会自动进入扩展区并保持位置可预测」—— 这是用户确认的设计意图：
- *    扩展等同"系统的一部分"，但绝不与内置工具混排（混排会让新扩展把它后面的
- *    内置工具全部推走，核心区缓存照样断）。
+ * ⚠️ 排序必须是**全序且确定**的：同一组工具不论注册先后（异步加载顺序会漂移），
+ *    排出来的字节必须完全一致，否则每次重扫都抖动，等于没排。
  */
 function toolSortKey(d) {
   const isBuiltin = !d.skillId;                       // 内置：tools.js 注册，skillId=null
@@ -1344,11 +1313,11 @@ export async function executeTool(defs, ctx, name, argsJson) {
   // id 优先（英文 function name 才是唯一键），显示名仅作兜底；
   // 避免两个工具中文名相同时被 find 误解析到第一个。
   let def = defs.find((d) => d.id === name) || defs.find((d) => d.name === name);
-  // 第三档兜底（2026-10-19）：插件工具注册后的 id 带 `<skillId>__` 前缀，而提示词/模型
-  // 输出偶尔只给裸名（如 `collect_sticker`）。精确匹配失败时做一次**唯一**后缀匹配：
+  // 第三档兜底：插件工具注册后的 id 带 `<skillId>__` 前缀，而提示词/模型输出偶尔
+  // 只给裸名（如 `collect_sticker`）。精确匹配失败时做一次**唯一**后缀匹配：
   //   `sticker__collect_sticker` 的裸名就是 `collect_sticker`。
   // 只在恰好命中一个时才解析（多个同名工具宁可报错，也不能调错对象）。
-  // 命中时留一条警告 —— 这是提示词里工具名写错的信号，别让它继续静默。
+  // 命中时留一条警告：这是提示词里工具名写错的信号，别让它继续静默。
   if (!def && typeof name === 'string' && !name.includes('__')) {
     const hits = defs.filter((d) => String(d.id || '').endsWith(`__${name}`));
     if (hits.length === 1) {
@@ -1362,11 +1331,11 @@ export async function executeTool(defs, ctx, name, argsJson) {
   try {
     args = typeof raw === 'string' ? JSON.parse(raw) : raw;
   } catch {
-    // 2026-10-18：send_message 的参数写坏不能直接判死。
-    // 实测会话里出现过 `{"messages": 行 那你鼓吧 我等着听}` —— 模型想发消息、
-    // 但把正文当成未加引号的 JSON 值塞进去了。严格解析失败 → 整轮作废 →
-    // 群友什么都没收到，用户看到的就是"机器人思考了但没回话"。
-    // 只对发送类工具做**保守**修复（修不回来照旧报错），避免凭空发错内容。
+    // send_message 的参数写坏不能直接判死。实测会话里出现过
+    // `{"messages": 行 那你鼓吧 我等着听}`：模型想发消息，但把正文当成未加引号的
+    // JSON 值塞进去了。严格解析失败 → 整轮作废 → 群友什么都没收到，用户看到的就是
+    // "机器人思考了但没回话"。只对发送类工具做**保守**修复（修不回来照旧报错），
+    // 避免凭空发错内容。
     const repaired = name === 'send_message' ? repairSendMessageArgs(String(raw)) : null;
     if (repaired) {
       args = repaired;
@@ -1382,10 +1351,9 @@ export async function executeTool(defs, ctx, name, argsJson) {
 }
 
 /**
- * send_message 参数 JSON 的宽松修复（2026-10-18）。
+ * send_message 参数 JSON 的宽松修复。
  *
- * 现场（真实会话）：模型把一整句话当成 JSON 值塞进去 ——
- *   {"messages": 行 那你鼓吧 我等着听}
+ * 现场：模型把一整句话当成 JSON 值塞进去：{"messages": 行 那你鼓吧 我等着听}
  * 严格 JSON.parse 直接抛错 → 整轮作废 → 看似"思考后不说话"。
  *
  * 只做两种**不会发错内容**的修复：

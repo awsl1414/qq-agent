@@ -1,24 +1,22 @@
 // ── 前缀缓存哨兵（self-doctor 的数据源）────────────────────────────────────
 //
-// 为什么单独一个文件：doctor/index.js 已经有 800+ 行，而这块是**纯取数 + 纯
-// 静态分析**，不碰 issues 的判定策略。放一起会让"体检结论怎么定"和"数据从哪
-// 来"纠缠，改一个总要担心另一个。
+// 拆成独立文件：这块是**纯取数 + 纯静态分析**，不碰 issues 的判定策略。
+// 放一起会让"体检结论怎么定"和"数据从哪来"纠缠，改一个总要担心另一个。
 //
 // 三件事：
-//   ① recentCacheRounds —— 最近几轮各自的 命中 / 未命中 / 输出 token（量表）
-//   ② prefixStaticAudit —— 哪些模块往稳定区注入了会变的内容、有没有标 volatile
-//   ③ buildSentinel     —— 把两者揉成一份可渲染、可交给模型分析的结构
+//   ① recentCacheRounds：最近几轮各自的 命中 / 未命中 / 输出 token（量表）
+//   ② prefixStaticAudit：哪些模块往稳定区注入了会变的内容、有没有标 volatile
+//   ③ buildSentinel：把两者揉成一份可渲染、可交给模型分析的结构
 //
 // 全部只读：只读 sessions / cache-warm-prefix / plugin-data，不写盘、不发请求。
 
 import fs from 'node:fs';
 import path from 'node:path';
-// 跨轮击穿归因（"哪个模块的哪一段把前缀打断了"）。与 here 的分工见该文件头注释：
+// 跨轮击穿归因（"哪个模块的哪一段把前缀打断了"）。与这里的分工见该文件头注释。
 // 这里算"掉了多少"，那里算"谁干的"。
 import { attributeBreaks, attributionText as renderAttribution } from './cache-attribution.js';
 
-// 读文件上限：sessions 目录实测 100 个文件、读 40 个约 300ms。
-// 量表只需要"最近几轮"，24 个足够看出趋势，且把体检耗时压在 200ms 内。
+// 读文件上限：量表只需要"最近几轮"，24 个足够看出趋势，且把体检耗时压在 200ms 内。
 const ROUND_SCAN_MAX = 24;
 
 /** 按修改时间取最新的 N 个文件（不解析内容，只 stat）。 */
@@ -40,7 +38,7 @@ function readJson(p) {
 /**
  * 最近几轮的 token 构成。
  *
- * 「轮」= 一次触发（一个 session），不是一次 LLM 调用 —— 一轮里模型可能因为
+ * 「轮」= 一次触发（一个 session），不是一次 LLM 调用：一轮里模型可能因为
  * 工具循环调用多次（usage.calls），那是内部细节，用户看到的是"这轮花了多少"。
  *
  * @returns {{ rounds: Array, totals: object, scanned: number, missing: boolean }}
@@ -91,7 +89,7 @@ export function recentCacheRounds(dataDir, { limit = 16 } = {}) {
     reasoning: sum('reasoning'),
     rate: prompt ? cached / prompt : 0,
     // 未命中占了多少输入成本：命中按 1/50 计价，所以这里算"成本占比"而不是
-    // token 占比 —— 这才是用户真正关心的那个数（4% 的 token 常占 68% 的钱）。
+    // token 占比：这才是用户真正关心的那个数（4% 的 token 常占 68% 的钱）。
     missCostShare: prompt
       ? (sum('miss') * 1) / (sum('miss') * 1 + cached * 0.02)
       : 0
@@ -105,9 +103,9 @@ export function recentCacheRounds(dataDir, { limit = 16 } = {}) {
 //   · 标了 `volatile: true` → 框架会把它挪到 user 末尾，翻字只污染自己
 //   · 没标但内容随运行变化 → 在系统提示里，每变一次整条前缀重算
 //
-// ⚠️ 这是**启发式**，会误报。实测 video-frames 读的是配置里的帧数（只在用户改
-//    设置时变），曾被 regex 的 .length/count 判成"持续抖动"。
-//    所以这里只输出"疑似"，最终判据永远是 cache-guard 的 drift 记录（事实）。
+// 这是**启发式**，会误报：读配置里的帧数的模块（只在用户改设置时变）也会被
+// regex 的 .length/count 判成"持续抖动"。所以这里只输出"疑似"，最终判据
+// 永远是 cache-guard 的 drift 记录（事实）。
 
 const MUTATOR_HINTS = [
   { re: /Date\.now|new Date\(/, label: '时间' },
@@ -146,10 +144,9 @@ function auditOne(dir, id, meta) {
  * @returns {{ sections: Array, suspect: number, untouched: number }}
  */
 export function prefixStaticAudit(appRoot) {
-  // ⚠️ core 放前面：harness 化之后 plugins/ 里仍可能留着同名旧目录
-  //    （本机实测 self-doctor / self-fix / extension-forge / dev-orders 四个都在），
-  //    两者同 id 会让体检把它们算成两个"会翻字的模块"，数字虚高一倍。
-  //    以 core 为准（它才是实际注册的那份），plugins 里的同名残留跳过。
+  // core 放前面，因为 harness 化之后 plugins/ 里仍可能留着同名旧目录，
+  // 两者同 id 会让体检把它们算成两个"会翻字的模块"，数字虚高一倍。
+  // 以 core 为准（它才是实际注册的那份），plugins 里的同名残留跳过。
   const roots = [
     { dir: path.join(appRoot, 'src', 'harness'), kind: 'core' },
     { dir: path.join(appRoot, 'plugins'), kind: 'plugin' }
@@ -195,14 +192,13 @@ export function buildSentinel({ dataDir, appRoot, limit = 16, window = 0, sectio
   const rounds = recentCacheRounds(dataDir, { limit });
   const statics = prefixStaticAudit(appRoot);
 
-  // 归因窗口比量表大得多：本机 98 个会话里只有 2 次系统提示变化，且都在几小时前，
-  // 只对比最近 16 轮会得出"没有插件击穿"的假结论（实测踩过）。
+  // 归因窗口比量表大得多，因为系统提示的变化通常稀疏且发生在几小时前，
+  // 只对比最近 16 轮会得出"没有插件击穿"的假结论。
   // window 不传 → 交给归因模块用它的默认上限（尽量往前看）。
   // 模块展示名：归因里写 "sticker" 不如写 "表情系统" 好读。
-  // ⚠️ 不能只从静态体检派生 —— 它只收录**导出 promptSections 函数**的模块，
-  //    而 speaker-identity 故意不导出（段由 manifest 声明，2026-09-20 修），
-  //    会漏。这里直接扫三个根的 manifest 拿 id→name，与 buildSectionOwner
-  //    （读 registry，含技能）的口径对齐。
+  // 不能只从静态体检派生，它只收录**导出 promptSections 函数**的模块，
+  // 而有些模块故意不导出（段由 manifest 声明），会漏。这里直接扫三个根的
+  // manifest 拿 id→name，与 buildSectionOwner（读 registry，含技能）的口径对齐。
   const moduleNames = {};
   for (const root of ['plugins', 'src/harness', 'skills']) {
     try {
@@ -296,7 +292,7 @@ export function sentinelText(s) {
     lines.push('');
     lines.push('静态体检：没有被判为"持续翻字"的提示词段。');
   }
-  // 归因段：这是"谁干的"那一半，必须在文本版里也出现 —— 模型被问
+  // 归因段。这是"谁干的"那一半，必须在文本版里也出现，模型被问
   // "哪个插件导致击穿"时，靠的就是这几行。
   if (s.attribution) {
     lines.push('', renderAttribution(s.attribution));

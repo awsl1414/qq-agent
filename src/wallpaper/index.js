@@ -1,4 +1,4 @@
-// 内置壁纸模块（src/wallpaper/）—— 2026-10-23 由「QQ-Agent壁纸套件-交接包」内置化。
+// 内置壁纸模块（src/wallpaper/），2026-10-23 由「QQ-Agent壁纸套件-交接包」内置化。
 //
 // 原形态是 4 个独立插件/技能（plugins/wallpaper、plugins/wallpaper-theme、
 // skills/wallpaper-chat、skills/wallpaper-engine），按用户要求「不进插件，直接
@@ -7,7 +7,7 @@
 // （manifest.kind='core'，注册见 src/harness/index.js 的 MODULES）。
 //
 // 四个部分（彼此独立，可单独删文件 + 从下面摘掉对应 import/providers）：
-//   core.js        壁纸库/文件伺服/状态镜像/动态导入 —— 7 个能力，控制台「壁纸」页的后端
+//   core.js        壁纸库/文件伺服/状态镜像/动态导入，7 个能力，控制台「壁纸」页的后端
 //   theme.js       主题跟随：每隔几秒读小红车当前壁纸 → 复制预览进 data/ui/ → 写 config.ui.bgImage
 //   chat.js        「壁纸管家」：QQ 聊天里换/调/关/查**控制台**壁纸（白名单门禁）
 //   engine.js      「小红车」：QQ 聊天里换/控**桌面**壁纸（WE -control 通道）
@@ -40,7 +40,7 @@ export const providers = {
 // 固定 **1358 tok**：提示词 1021 字符 ≈ 406 tok（`▸ 壁纸管家` + `▸ 小红车壁纸`）
 // + 8 个工具定义 ≈ 952 tok。而这两段的内容与工具 description 高度重复
 // （engine.js 每个工具描述里都写了"用户说换个壁纸时调用"），实测 7 天 56 次
-// 调用中聊天侧工具调用 **0 次**（白名单还没配，功能本来就是锁的）—— 纯占位。
+// 调用中聊天侧工具调用 **0 次**（白名单还没配，功能本来就是锁的），纯占位。
 //
 // 所以默认：只留 core + theme（控制台侧），chat/engine 的工具**不注册**、
 // 提示词段**不注入**。要恢复"群里换壁纸"，控制台「壁纸」页底部勾选
@@ -55,12 +55,12 @@ let llmExposed = false;
 export function llmToolsEnabled() { return llmExposed; }
 
 /**
- * 初始化四部分。每部分单独 try——harness 的 registrar 对 setup 抛错是整模块判死的，
+ * 初始化四部分。每部分单独 try，harness 的 registrar 对 setup 抛错是整模块判死的，
  * 一部分炸掉不该让整个壁纸模块注册失败（比如某天 lib/ 缺文件，至少另外三部分还能用）。
  *
  * ⚠️ 关闭对话侧时**仍然执行** chat/engine 的 setup：它们在这里绑 config 与
  *    capability（engine 的 `wallpaper.apply` 能力照常可用，只是模型看不到工具）。
- *    只把 registerTool 换成空实现 —— 工具不落地到注册表，就永远不会进 tools 数组。
+ *    只把 registerTool 换成空实现，工具不落地到注册表，就永远不会进 tools 数组。
  */
 export function setup(api) {
   let flag = false;
@@ -72,7 +72,7 @@ export function setup(api) {
   for (const [name, mod, target] of parts) {
     try {
       const r = mod.setup?.(target);
-      // chat.js 的 setup 是 async（体内全同步，promise 立即落定）—— 兜底接住拒绝
+      // chat.js 的 setup 是 async（体内全同步，promise 立即落定），兜底接住拒绝
       if (r && typeof r.catch === 'function') {
         r.catch((e) => api.error?.(`[wallpaper] ${name} 初始化失败：${e?.message ?? e}`));
       }
@@ -92,7 +92,7 @@ export function dispose() { theme.dispose?.(); }
  * 由 skills/manager.js 的 getPromptSections 收集）。
  *
  * ⚠️ 默认返回**空数组**：壁纸是控制台功能，不是对话能力（详见上面 llmExposed 的注释）。
- *    只有 config.skills.wallpaper.llmControl === true 时才注入这两段 —— 也就是说
+ *    只有 config.skills.wallpaper.llmControl === true 时才注入这两段，也就是说
  *    "要让模型看见"，必须和工具注册同时打开，不能只开一半（只有段没有工具时，
  *    模型会被告知"你会换壁纸"却调不到函数，容易嘴上答应）。
  *

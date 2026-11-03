@@ -1,4 +1,4 @@
-// 插件界面契约 —— 一个模块怎么把「自己的页面」放进控制台。
+// 插件界面契约，一个模块怎么把「自己的页面」放进控制台。
 //
 // ── 一句话 ────────────────────────────────────────────────────────────────
 // 在 plugin.json / skill.json 的 configSchema 里写一条：
@@ -16,26 +16,26 @@
 // 页面 fetch 相对路径 `../@data/storage.json` 拿到。
 //
 // ── 为什么要有这个文件 ────────────────────────────────────────────────────
-// 这条通道的三段 —— 后端静态服务（src/app.js）、前端弹层（ui/app/06-settings-render.js）、
-// 插件侧助手（src/plugin-loader.js 的 api.panel）—— 必须对**同一套常量与同一套路径规则**
+// 这条通道的三段，后端静态服务（src/app.js）、前端弹层（ui/app/06-settings-render.js）、
+// 插件侧助手（src/plugin-loader.js 的 api.panel），必须对**同一套常量与同一套路径规则**
 // 达成一致。以前它们各写一份：后端自带一份扩展名表，前端自己拼 URL 字符串，插件要手抄
 // `/plugin-panel/<自己的 id>/`。任何一处改动漏掉另一处，症状都是"按钮点了没反应 / 白屏"，
 // 而且**不报错**，非常难查。
 //
 // 收口方式：
-//   · 后端（src/app.js）与插件侧（src/plugin-loader.js 的 api.panel）——直接 import 本文件；
-//   · 前端弹层（ui/app/06-settings-render.js）——**不 import**（它是 classic script，不是 ES
+//   · 后端（src/app.js）与插件侧（src/plugin-loader.js 的 api.panel），直接 import 本文件；
+//   · 前端弹层（ui/app/06-settings-render.js），**不 import**（它是 classic script，不是 ES
 //     模块，见 ui/index.html 的 defer 列表），改为**只消费后端在加载期算好的 `panels[].url`**，
 //     自己一行路径都不拼。它只保留一个形状检查（URL 是否以 PANEL_ROUTE_PREFIX 开头）。
 // 所以常量、路径校验、URL 拼装、CSP 的唯一实现都在这里；改规则只改这一处。
 //
 // ── 安全模型（谁在防谁）───────────────────────────────────────────────────
 // 页面是**插件自己写的 HTML**，跑在控制台的**同源** iframe 里。所以：
-//   · 只能读，不能写 —— 通道是纯 GET 静态文件，没有任何写接口；
+//   · 只能读，不能写，通道是纯 GET 静态文件，没有任何写接口；
 //   · 只有两个根：插件自己的目录（plugins|skills/<id>/）与它自己的 plugin-data；
 //     两者都经 realpath 二次确认，符号链接 / 目录联接指到外面一律 404；
-//   · 扩展名白名单（PANEL_FILE_TYPES）—— 不做通用文件下载器；
-//   · 来源校验 —— 恶意网页借浏览器读 127.0.0.1 也读不到（app.js 的 originAllowed）；
+//   · 扩展名白名单（PANEL_FILE_TYPES），不做通用文件下载器；
+//   · 来源校验，恶意网页借浏览器读 127.0.0.1 也读不到（app.js 的 originAllowed）；
 //   · 页面 CSP 由 panelCsp() 统一给出：script-src 'self'（禁内联脚本）、
 //     frame-ancestors 'self'（只允许控制台自己嵌）。
 // 反过来说：**页面能读到自己插件的全部源码与全部 plugin-data**。这不是漏洞
@@ -50,7 +50,7 @@ export const PANEL_ROUTE_PREFIX = '/plugin-panel';
 /** `@data` 段：映射到 <DATA_DIR>/plugin-data/<id>/（插件的运行时数据）。 */
 export const PANEL_DATA_SEGMENT = '@data';
 
-/** api.storage 的落盘文件名 —— 也是页面默认的数据通道。 */
+/** api.storage 的落盘文件名，也是页面默认的数据通道。 */
 export const PANEL_DATA_FILE = 'storage.json';
 
 /** 一个模块最多声明几个界面入口（防手滑写出几十个按钮）。 */
@@ -158,7 +158,7 @@ export function panelUrl(id, relPath) {
 
 /**
  * 拼出插件运行时数据的只读 URL（默认就是 api.storage 的落盘文件）。
- * 页面里写相对路径 `../@data/storage.json` 等价，且不必知道自己的 id —— 推荐后者。
+ * 页面里写相对路径 `../@data/storage.json` 等价，且不必知道自己的 id，推荐后者。
  */
 export function panelDataUrl(id, relPath = PANEL_DATA_FILE) {
   const safeId = String(id ?? '').trim();
@@ -172,9 +172,9 @@ export function panelDataUrl(id, relPath = PANEL_DATA_FILE) {
  * 插件页面的 CSP。
  *
  * 与 /ui 同款，只有两处不同：
- *   · script-src 去掉 index.html 那个内联主题脚本的 hash —— 插件页面一律用外链 .js，
+ *   · script-src 去掉 index.html 那个内联主题脚本的 hash，插件页面一律用外链 .js，
  *     不给内联脚本留口子（内联脚本连 onclick= 一起算）；
- *   · frame-ancestors 从 'none' 放宽成 'self' —— /ui 是顶层导航不需要放宽，
+ *   · frame-ancestors 从 'none' 放宽成 'self'，/ui 是顶层导航不需要放宽，
  *     而插件页面**就是要**被设置弹窗里的 iframe 嵌，写 'none' 会被浏览器直接拒掉。
  *
  * @param {{frameAncestors?: string|null}} [opts]
@@ -207,7 +207,7 @@ export function isPanelAction(def) {
  *
  * 与 stripPanelActions 是一对：一个负责"取出入口"，一个负责"从配置项里摘掉"。
  * 两者都在 normalizeManifest 里调用一次，之后全流程都只认 `manifest.panels`
- * 与"已经不含 action 的 configSchema" —— UI 不必再过滤一遍，
+ * 与"已经不含 action 的 configSchema"，UI 不必再过滤一遍，
  * 「共 N 项设置」也不必再减掉它（那个减法曾经是必须的，见 06-settings-render.js 的历史）。
  *
  * @returns {{panels: Array<{key:string,label:string,button:string,icon:string,

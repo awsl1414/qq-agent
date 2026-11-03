@@ -1,15 +1,15 @@
 // 语义卡：从巩固出的块里启发式抽「计划 / 事实」，注入时按关键词匹配。
-// 比"群友印象"更像人的长期常识——不调模型，纯本地正则 + 频次。
+// 比"群友印象"更像人的长期常识：不调模型，纯本地正则 + 频次。
 //
-// ── 相对内置 lib/semantic-cards.js 的三处实质改动 ────────────────────────
-//   1. **垃圾在写入时就丢掉**。内置版是先写进去、再靠 purgeJunk() 事后清理，
-//      而 purgeJunk() 零调用 —— 实测它自己那 7 张卡里有 2 张按它自己的规则
-//      就该删。本插件没有"事后清理"这一步：抽不出干净标题的句子直接不进库。
-//   2. **匹配默认按会话隔离**。内置版在 arch.js 里传的是 chatKey: null，
-//      于是 A 群抽到的卡会注入到 B 群 —— 多个互不相识的群共用一个机器人时
-//      这是实打实的串味。本插件默认 scope='chat'，想要跨群通用得显式打开。
-//   3. **有淘汰**。卡片带 lastHitAt；长期没被任何一次注入命中的卡会被 sweep()
-//      清掉。内置版只在超过 400 张时按 lastTs 截断，噪声卡只要够新就永远在。
+// 相对内置 semantic-cards 的三处实质改动：
+//   1. 垃圾在写入时就丢掉。内置版先写进去、再靠 purgeJunk() 事后清理，
+//      而 purgeJunk() 零调用（实测它自己那 7 张卡里有 2 张按它自己的规则就该删）。
+//      本插件没有事后清理这一步：抽不出干净标题的句子直接不进库。
+//   2. 匹配默认按会话隔离。内置版传的是 chatKey: null，于是 A 群抽到的卡会注入到
+//      B 群，多个互不相识的群共用一个机器人时这是实打实的串味。
+//      本插件默认 scope='chat'，想要跨群通用得显式打开。
+//   3. 有淘汰。卡片带 lastHitAt，长期没被任何一次注入命中的卡会被 sweep() 清掉。
+//      内置版只在超过 400 张时按 lastTs 截断，噪声卡只要够新就永远在。
 import path from 'node:path';
 import { ensureDir, readJson, writeJson, dayKeyOf, num, normText, tokenize } from './util.js';
 
@@ -39,8 +39,8 @@ export class Cards {
   }
 
   #save() {
-    // ⚠️ 这里必须用 num() 而不是 clamp()：clamp(undefined, 20, 2000) 返回 **20**，
-    //    于是"没配置 maxCards"被理解成"最多 20 张卡"，卡片库悄悄被截到 20 张。
+    // 必须用 num() 而不是 clamp()：clamp(undefined, 20, 2000) 返回 20，
+    // 于是"没配置 maxCards"被理解成"最多 20 张卡"，卡片库悄悄被截到 20 张。
     const max = num(this.settings().maxCards, 500, 20, 5000);
     if (this.cards.length > max) {
       this.cards.sort((a, b) => (Number(b.lastTs) || 0) - (Number(a.lastTs) || 0));
@@ -51,7 +51,7 @@ export class Cards {
 
   /**
    * 这句够不够格当一张卡？
-   * 这是本模块与内置版最大的分歧点：**在这里拦住，而不是事后清理**。
+   * 这是本模块与内置版最大的分歧点：在这里拦住，而不是事后清理。
    * @returns {'plan'|'fact'|null}
    */
   static classify(text) {
@@ -123,11 +123,11 @@ export class Cards {
   /**
    * 按触发文本匹配。
    *
-   * ⚠️ 用 tokenize 的 **bigram** 匹配，不是"整段汉字当一个词"。
-   *    内置版用的是 `q.match(/[一-鿿]{2,}/g)` —— 对「下周一起去吃火锅」这种
-   *    没有空格的中文，整句会被当成**一个** token 去 includes，于是
-   *    「说好了下周末一起去吃火锅」这种带插字的卡根本匹配不上（差一个「末」就废了）。
-   *    换成 bigram 之后，「下周/一起/吃火/火锅」四个片各自命中，稳得多。
+   * 用 tokenize 的 bigram 匹配，不是"整段汉字当一个词"。内置版用的是
+   * `q.match(/[一-鿿]{2,}/g)`，对「下周一起去吃火锅」这种没有空格的中文，
+   * 整句会被当成一个 token 去 includes，于是「说好了下周末一起去吃火锅」
+   * 这种带插字的卡根本匹配不上（差一个「末」就废了）。
+   * 换成 bigram 之后，「下周/一起/吃火/火锅」四个片各自命中，稳得多。
    *
    * @param {string} query
    * @param {{chatKey?: string|null, scope?: 'chat'|'global', limit?: number}} opts
@@ -141,16 +141,16 @@ export class Cards {
     const words = [...new Set(tokenize(q))].filter((t) => t.length >= 2);
     if (!words.length) return [];
 
-    // ⚠️ 门槛必须随查询长度自适应。写死 `hit < 2` 的后果是：
-    //    「火锅」这种两字查询只能切出**一片**，命中数最多 1，于是永远 0 结果 ——
-    //    而中文里两字问法（火锅/婚礼/显卡）恰恰是最常见的一类。
+    // 门槛必须随查询长度自适应。写死 `hit < 2` 的后果是：
+    // 「火锅」这种两字查询只能切出一片，命中数最多 1，于是永远 0 结果，
+    // 而中文里两字问法（火锅/婚礼/显卡）恰恰是最常见的一类。
     const needHit = Math.min(2, words.length);
     const needRatio = words.length <= 2 ? 0.5 : 0.25;
 
     const scored = [];
     const now = Date.now();
     for (const c of this.cards) {
-      // ⚠️ 会话隔离：这是与内置版最重要的差别（内置版恒为 null → 跨群串味）
+      // 会话隔离：这是与内置版最重要的差别（内置版恒为 null → 跨群串味）
       if (effScope === 'chat' && chatKey && String(c.chatKey) !== String(chatKey)) continue;
       const hay = normText(`${c.title} ${c.detail}`);
       let hit = 0;
@@ -191,13 +191,12 @@ export class Cards {
 
   /**
    * 淘汰：长期没被命中的卡直接删。
-   * 内置版没有这一步 —— 噪声卡只要够新就一直留在库里，直到凑满 400 张。
+   * 内置版没有这一步，噪声卡只要够新就一直留在库里，直到凑满 400 张。
    */
   sweep() {
-    // ⚠️ 这里同样不能用 clamp()：clamp(undefined, 1, 3650) 返回 **1**，
-    //    于是"没配置 cardIdleDays"被理解成"卡片闲置一天就删" ——
-    //    而卡片只在有聊天时才被重新抽到/命中，等于隔一天就清空整个卡片库，
-    //    语义卡功能看着是开着的，实际上一张都留不下。
+    // 这里同样不能用 clamp()：clamp(undefined, 1, 3650) 返回 1，
+    // 于是"没配置 cardIdleDays"被理解成"卡片闲置一天就删"。
+    // 而卡片只在有聊天时才被重新抽到/命中，等于隔一天就清空整个卡片库。
     const maxIdleDays = num(this.settings().cardIdleDays, 90, 1, 3650);
     const cutoff = Date.now() - maxIdleDays * 86400000;
     const before = this.cards.length;

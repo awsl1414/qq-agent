@@ -8,7 +8,7 @@
 //       handler 返回 undefined 表示"已自行写响应"（如 SSE）；否则框架统一 json() 返回。
 //
 // 依赖（store/memory/sessions/onebot/orchestrator/…）通过 createRoutes(deps) 注入，
-// 路由 handler 通过闭包取用，避免在 app.js 里反复传参。
+// handler 通过闭包取用，避免在 app.js 里反复传参。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -43,15 +43,15 @@ import { toOpenAiTools, executeTool } from './tools.js';
 // 令牌不越过 HTTP 边界的保证在这个纯函数里，路由只负责调它。
 import { publicView as protocolDetectView } from './protocol-detect.js';
 
-// 更新源健康状态（2026-10-23 体检）：远端 version.json 落后于当前安装版本时，
-// 「hasUpdate=false」和「已经是最新」长得一模一样 —— 源荒废了也不会有人发现。
-// 这里只在同一次进程里告警一次，避免用户每开一次设置页就刷一条日志。
+// 更新源健康状态：远端 version.json 落后于当前安装版本时，「hasUpdate=false」和
+// 「已经是最新」长得一模一样，源荒废了也不会有人发现。同一进程里只告警一次，
+// 避免用户每开一次设置页就刷一条日志。
 const updateFeedState = { staleWarned: false };
 
-// ── ffmpeg 能力体检缓存（2026-11-03）──────────────────────────────────
+// ── ffmpeg 能力体检缓存 ────────────────────────────────────────────────
 // checkFfmpegCapabilities 要跑 -encoders / -filters 两条子进程，比 -version 慢
-// 一个数量级；而 /api/ffmpeg/status 会被设置页轮询。所以按「可执行文件路径 +
-// mtime」缓存：同一份文件不重复查，用户换了一份（下载/手填/切来源）才重查。
+// 一个数量级，而 /api/ffmpeg/status 会被设置页轮询。按「可执行文件路径 + mtime」
+// 缓存：同一份文件不重复查，用户换了一份（下载/手填/切来源）才重查。
 const FFMPEG_HEALTH_TTL_MS = 10 * 60 * 1000;
 const ffmpegHealthCache = new Map();   // key -> { at, result }
 
@@ -72,12 +72,11 @@ async function cachedFfmpegHealth(exe) {
 /**
  * 用系统文件管理器打开一个目录。
  *
- * 为什么必须按平台分派：三个平台的"打开目录"不是同一个命令 —— Windows 是
- * explorer.exe、macOS 是 open、Linux 桌面是 xdg-open。原先写死 explorer.exe，
- * 在 macOS / Linux 上 spawn 会直接 ENOENT（或在 Linux 上撞到不存在的命令），
+ * 三个平台的"打开目录"不是同一个命令：Windows 是 explorer.exe、macOS 是 open、
+ * Linux 桌面是 xdg-open。写死 explorer.exe 会让 macOS / Linux 上 spawn 直接 ENOENT，
  * 用户看到的是"点了没反应"。
  *
- * 固定路径参数（导出目录 / DATA_DIR），不接受任何用户输入 —— 没有命令注入面。
+ * 固定路径参数（导出目录 / DATA_DIR），不接受任何用户输入，没有命令注入面。
  */
 function openDirNative(dir) {
   const opener = process.platform === 'darwin' ? 'open'
@@ -102,8 +101,8 @@ export function createRoutes(deps) {
     // app.js 内部的过程/状态
     localVersion, compareSemver,
     sanitizeConfig, keyEndpointAllowed, sanitizeProvider,
-    // r92：删掉 authorize 的死解构 —— 本文件从未用它，鉴权实际在 app.js
-    // 统一执行。留着它会误导后来者以为某条路由漏鉴权。
+    // 注意：这里刻意不取 authorize。鉴权在 app.js 统一执行，留一个没用到的
+    // 解构会误导后来者以为某条路由漏鉴权。
     readBody,
     qqPortableStatus, qqPortableLogs, launchPortableQQ, stopPortableQQ,
     showPortableQQ, setupPortableQQFromLocal,
@@ -115,7 +114,7 @@ export function createRoutes(deps) {
   } = deps;
 
   // 小工具：读请求体（容错：没 body 当空对象）。
-  // 但 readBody 明确标记的可暴露错误（400 非法 JSON / 413 过大）必须透传，
+  // readBody 明确标记的可暴露错误（400 非法 JSON / 413 过大）必须透传，
   // 否则会从"应返回 400"退化成静默当成空 patch。
   const bodyOf = (req) => readBody(req).catch((e) => { if (e?.expose) throw e; return {}; });
 
@@ -145,7 +144,7 @@ export function createRoutes(deps) {
 
   return [
     // ── 系统自检（self-doctor 插件提供的 doctor.report 能力）────────────────
-    // 三条路由都是"能力代理"：核心不 import 那个插件，靠能力名问它要结果 ——
+    // 三条路由都是"能力代理"：核心不 import 那个插件，靠能力名问它要结果，
     // 关掉 self-doctor 后这些接口会明确报"未启用"，而不是 500 或空数据。
     {
       method: 'GET', pattern: '/api/doctor',
@@ -155,13 +154,12 @@ export function createRoutes(deps) {
         if (!providers.length) {
           return json(res, 200, {
             ok: false, available: false,
-            // 2026-10-20 修：原文案写「设置 → 插件」，但「插件」是顶部一个独立页签、
-            // 并不在设置里；self-doctor 属于插件页里的那个条目。
+            // 「插件」是顶部一个独立页签，不在设置里；self-doctor 是插件页里的条目。
             error: '「系统自检」插件未启用（顶部「插件」页 → self-doctor）'
           });
         }
         try {
-          // run=force 时强制重扫；默认 5 分钟内复用上次结果（与插件内逻辑一致）
+          // 复用插件侧 5 分钟内的上次结果，不强制重扫
           const force = false;
           const out = providers[0].fn({ run: force });
           const report = out?.report || null;
@@ -192,8 +190,8 @@ export function createRoutes(deps) {
     },
     {
       // 忽略 / 恢复体检单上的条目（self-doctor 的 doctor.ack 能力）。
-      // 为什么需要这条路：体检单的问题都是从磁盘现状推导的，用户自查后确认某条
-      // 无妨，原先没有任何地方能标记"我知道了"—— 下次体检原样回来，一直挂在警告位。
+      // 体检单的问题都是从磁盘现状推导的，用户自查后确认某条无妨时需要一个
+      // "我知道了"的标记，否则下次体检原样回来，一直挂在警告位。
       // 忽略清单落盘在 self-doctor 自己的 plugin-data 下，跨重启生效，可随时恢复。
       method: 'POST', pattern: '/api/doctor/ack',
       handler: async ({ req, res, json }) => {
@@ -241,10 +239,9 @@ export function createRoutes(deps) {
     },
     {
       // 前缀缓存哨兵（self-doctor 的 doctor.cache-sentinel 能力）。
-      // 取数 + 静态前缀体检，**不调模型** —— 分析由前端拿文本再走 /api/doctor/ask，
-      // 这样"看数"免费、"让模型解读"才花 token，两者可以分开点。
-      // 比 reload 慢（要读 24 个 session + 十几个插件源码，实测约 300ms），
-      // 所以只由按钮触发，不进页面轮询。
+      // 取数 + 静态前缀体检，**不调模型**，分析由前端拿文本再走 /api/doctor/ask，
+      // 这样"看数"免费、"让模型解读"才花 token。
+      // 要读 24 个 session + 十几个插件源码（实测约 300ms），所以只由按钮触发，不进页面轮询。
       method: 'POST', pattern: '/api/doctor/cache-sentinel',
       handler: async ({ req, res, json }) => {
         const ctx = skillRuntimeContext();
@@ -316,7 +313,7 @@ export function createRoutes(deps) {
     },
     {
       // 自检专用 Key 明文读取：与 /api/search-key、/api/onebot-token 同一套来源校验
-      // （keyEndpointAllowed —— 只放行控制台来源，挡的是外部网页冒用 127.0.0.1）。
+      // （keyEndpointAllowed 只放行控制台来源，挡的是外部网页冒用 127.0.0.1）。
       method: 'GET', pattern: '/api/doctor/config-key',
       handler: async ({ req, res, json }) => {
         if (!keyEndpointAllowed(req)) return json(res, 403, { error: '请求来源不被信任，已拒绝读取明文密钥。' });
@@ -325,17 +322,15 @@ export function createRoutes(deps) {
       }
     },
     {
-      // 对话式排查（工具循环版）：模型不再"盲答体检单"，而是可以**自己去读**项目文件与日志。
+      // 对话式排查（工具循环版）：模型可以**自己去读**项目文件与日志，而不是"盲答体检单"。
       //
-      // 为什么改成工具循环：原来只把一张预先算好的体检单文本塞进 system prompt，模型是"盲"的 ——
-      // 体检单没覆盖的问题（某插件为何没加载、昨天 3 点报了什么错）它只能猜或说"不知道"。
-      // 而项目里其实什么都有：源码、日志、插件数据。差的就是"让它自己去读"的能力。
+      // 只把一张预先算好的体检单塞进 system prompt 时，模型是"盲"的：体检单没覆盖的
+      // 问题（某插件为何没加载、昨天 3 点报了什么错）它只能猜。
       //
       // 分工：**工具层（doctor.tools 能力，由 self-doctor 插件提供）负责"给证据"**，
-      //       **本层负责"调模型 + 跑循环"**，模型只负责判断与组织语言。
-      //       核心仍然不 import 那个插件 —— 只按能力名问它要工具定义。
+      //       **本层负责"调模型 + 跑循环"**，核心不 import 那个插件。
       //
-      // 只读保证：工具定义里压根没有写/删/执行类工具；插件侧的沙箱（白名单目录 + realpath
+      // 只读保证：工具定义里没有写/删/执行类工具；插件侧的沙箱（白名单目录 + realpath
       // 校验 + 后缀白名单 + 字节/行数限额）是第二道闸。本层不额外造文件访问能力。
       method: 'POST', pattern: '/api/doctor/ask',
       handler: async ({ req, res, json }) => {
@@ -343,12 +338,11 @@ export function createRoutes(deps) {
         const question = String(body.question || '').trim();
         if (!question) return json(res, 400, { ok: false, error: '缺少 question' });
         if (question.length > 2000) return json(res, 400, { ok: false, error: '问题过长（上限 2000 字）' });
-        // ── 附加上下文（2026-10-23）──────────────────────────────────────
-        // 为什么单独开一个字段而不是放宽 question：2000 字是给**人手输入**设的
-        // 防呆（避免把一整篇文章粘进来），但哨兵的整份快照是程序生成的、
-        // 动辄两三千字，塞进 question 就会被这条校验直接打回
+        // ── 附加上下文 ────────────────────────────────────────────────
+        // 单独开一个字段而不是放宽 question：2000 字是给**人手输入**设的防呆，
+        // 但哨兵的整份快照是程序生成的、动辄两三千字，塞进 question 会被校验打回
         // （现场表现：点「哨兵分析」→ ⚠ 请求失败：问题过长（上限 2000 字））。
-        // 分开之后两边各管各的：提问仍然 ≤2000，上下文单独放到 12000。
+        // 分开之后两边各管各的：提问 ≤2000，上下文单独放到 12000。
         const contextText = String(body.context || '').trim();
         if (contextText.length > 12000) {
           return json(res, 400, { ok: false, error: '附加上下文过长（上限 12000 字）' });
@@ -379,7 +373,7 @@ export function createRoutes(deps) {
           logger.warn('doctor', `取证工具加载失败，降级为纯体检单模式：${String(error?.message ?? error)}`);
           toolDefs = [];
         }
-        // 只放行 doctor_ 前缀的工具 —— 兜住"插件不小心把写文件工具也报上来"的情况。
+        // 只放行 doctor_ 前缀的工具，兜住"插件不小心把写文件工具也报上来"的情况。
         // 这是第三道闸（前两道：插件沙箱、本层不造能力）：白名单前缀 + 显式排除非只读名。
         toolDefs = toolDefs.filter((d) => {
           const id = String(d?.id || d?.name || '');
@@ -392,7 +386,7 @@ export function createRoutes(deps) {
         // doctorApi.enabled=true 且填了 model 时用自检专用（隔离，不走账号池）；
         // 否则跟随全局 api（与原行为一致）。
         // ⚠️ 传了 overrides 就绕开账号池与专用模型切换（见 llm.js 的 `protocolForProvider`），
-        //    这正是"独立配置"该有的隔离语义 —— 用户在自检页指定什么就用什么。
+        //    这正是"独立配置"该有的隔离语义：用户在自检页指定什么就用什么。
         const d = cfg.doctorApi || {};
         const useOwn = d.enabled === true && String(d.model || '').trim();
         const overrides = useOwn ? {
@@ -444,7 +438,7 @@ export function createRoutes(deps) {
 
         try {
           // overrides 为 null 时跟随全局 api（与原行为一致）；非 null 时用自检专用配置。
-          // 超时用 AbortSignal（chatCompletion 不接受 timeoutMs —— 只有 signal 能中断）。
+          // 超时用 AbortSignal（chatCompletion 不接受 timeoutMs，只有 signal 能中断）。
           const ac = new AbortController();
           // 总预算 180s：比原来的 120s 放宽，因为现在可能要跑若干轮工具。
           const timer = setTimeout(() => ac.abort(new Error('诊断请求超时（180s）')), 180000);
@@ -465,10 +459,9 @@ export function createRoutes(deps) {
             for (let round = 0; round < MAX_ROUNDS; round++) {
               rounds = round + 1;
               // ── 收口提醒（学 orchestrator 的"剩余轮次提醒"）──
-              // 没有它时实测模型会**一直查**：日志有几千行，它翻到第 5 轮还在 grep，
+              // 没有它时模型会**一直查**：日志有几千行，它翻到第 5 轮还在 grep，
               // 最后给不出结论（真跑过一次：5 轮 10 次工具调用，最终回答为空）。
-              // 倒数第 2 轮起明确告诉它"该收口了"，逼它把已经读到的证据组织成答案。
-              // 只在有工具时加 —— 没工具的单轮模式本来就会直接出正文。
+              // 倒数第 2 轮起明确告诉它"该收口了"。
               const left = MAX_ROUNDS - round;
               if (hasTools && left <= 2 && left > 0) {
                 messages.push({
@@ -485,8 +478,7 @@ export function createRoutes(deps) {
                 overrides,
                 // ⚠️ 取证场景必须关思考，理由与 /api/doctor/triage 完全相同（见该处注释）：
                 //    deepseek-flash 等服务端强制思考的模型，reasoning token 从 max_tokens 里扣，
-                //    不关的话每轮都在为"想"付费 —— 而取证要的是"读文件"，推理反而是噪声。
-                //    日志实证：triage 关了 → mt=1200 正常工作；ask 没关 → mt=0 且 reasoning 全额计费。
+                //    不关的话每轮都在为"想"付费，而取证要的是"读文件"。
                 skillContext: { thinkingMode: 'off' },
                 tag: `doctor-ask:r${round}`
               });
@@ -500,7 +492,7 @@ export function createRoutes(deps) {
                 break;
               }
 
-              // 把 assistant 这一轮（含 tool_calls）回填进历史 —— 不回填的话下一轮
+              // 把 assistant 这一轮（含 tool_calls）回填进历史，不回填的话下一轮
               // 请求会缺 tool 消息对应的 tool_call_id，OpenAI 协议直接 400。
               messages.push({ role: 'assistant', content: msg.content ?? null, tool_calls: calls });
               for (const call of calls) {
@@ -536,7 +528,7 @@ export function createRoutes(deps) {
           }
 
           if (!String(answer).trim()) {
-            // 到轮次上限还没收口（模型一直在查不写结论）—— 用最后一次工具轨迹说明情况，
+            // 到轮次上限还没收口（模型一直在查不写结论），用最后一次工具轨迹说明情况，
             // 而不是返回空字符串让用户面对一片空白。这种情况已加"收口提醒"缓解，
             // 但小模型仍偶发，所以兜底文案要**告诉用户下一步怎么办**，而不是只报个失败。
             if (trace.length) {
@@ -562,12 +554,12 @@ export function createRoutes(deps) {
     {
       // 模型逐个审（triage）：把静态扫描的候选交给模型，读**该文件真实源码**判断真伪。
       //
-      // 为什么在这里（而不是插件里）调模型：LLM 访问是本层（routes.js）的职责 ——
+      // 为什么在这里（而不是插件里）调模型：LLM 访问是本层（routes.js）的职责，
       // 插件层保持零 LLM 依赖，只负责扫/分组/读源码/拼 prompt（doctor.triage 能力）。
       // 这样"换成别的模型渠道/加缓存/billing tag"都只需动这一处。
       //
       // 成本控制：按文件分组（多命中合成一次调用）、只审 warning+、串行、可中断。
-      // 流式推进：每审完一个文件就往 SSE 推一条进度，UI 实时刷新（不必干等全部完成）。
+      // 每审完一个文件就往 SSE 推一条进度，UI 不必干等全部完成。
       method: 'POST', pattern: '/api/doctor/triage',
       handler: async ({ req, res, json }) => {
         const body = await bodyOf(req);
@@ -627,15 +619,15 @@ export function createRoutes(deps) {
               maxTokens: 1200,
               // ⚠️ 判分类请求**必须**关思考。不关的话 thinking-adapters 会给 body 加上
               //    reasoning 参数，而 DeepSeek 系推理模型的 reasoning token 从 max_tokens
-              //    里扣 —— 实测 maxTokens:1200 时 reasoning 就吃掉 1200，finish_reason=length、
-              //    content 为空字符串。表现是"审阅完成但一条结论都没有"，静默失败。
-              //    thinking-adapters 已为此提供了官方的按次覆盖口子（context.thinkingMode）。
+              //    里扣，实测 maxTokens:1200 时 reasoning 就吃掉 1200，finish_reason=length、
+              //    content 为空字符串，表现是"审阅完成但一条结论都没有"。
+              //    thinking-adapters 为此提供了按次覆盖的口子（context.thinkingMode）。
               skillContext: { thinkingMode: 'off' },
               tag: 'doctor-triage'
             });
-            // ⚠️ 必须同时看 message.content 和顶层 content —— chatCompletion 返回的是
+            // ⚠️ 必须同时看 message.content 和顶层 content：chatCompletion 返回的是
             //    { message: {content}, finishReason, usage, ... }，顶层没有 content。
-            //    只取 r.content 会永远拿到 undefined，表现为"审阅完成但零结论"。
+            //    只取 r.content 会永远拿到 undefined。
             const text = r?.message?.content || r?.content || '';
             // 空正文 = 这次没判出东西（多半是被 reasoning 吃光了 max_tokens），
             // 记为失败而不是"成功但无结论"，否则问题会被静默吞掉。
@@ -662,7 +654,7 @@ export function createRoutes(deps) {
           }
         }
 
-        // ④ 解析 + 合并（解析逻辑归插件 —— 输出格式的所有权在定义 prompt 的那一方）
+        // ④ 解析 + 合并（解析逻辑归插件，输出格式的所有权在定义 prompt 的那一方）
         const parseProviders = skillManager.getCapabilityProviders('doctor.triage-parse', ctx);
         const parsed = parseProviders.length
           ? parseProviders[0].fn({ batches: queue, replies: rawReplies })
@@ -735,9 +727,9 @@ export function createRoutes(deps) {
     // "谁提供 forge.draft / forge.gate / forge.install"。真正的写盘 confinement、
     // 三道闸门、落地逻辑全在模块里（src/harness/forge/）。
     //
-    // ⚠️ 为什么必须在这里加这几行：**插件无法注册 HTTP 路由**
-    //    （createSkillApi 只给了 registerTool / config / capability / log / fetch）。
-    //    这与 /api/doctor/* 完全同构 —— 是既定的扩展模式，不是为 forge 开的口子。
+    // ⚠️ 插件无法注册 HTTP 路由（createSkillApi 只给了 registerTool / config /
+    //    capability / log / fetch），所以必须在核心补这几行。
+    //    这与 /api/doctor/* 完全同构，是既定的扩展模式。
     {
       // 状态：插件是否启用 + 暂存区里有哪些草稿
       method: 'GET', pattern: '/api/forge',
@@ -779,8 +771,8 @@ export function createRoutes(deps) {
       // 与 /api/skills/import 的关键差别：那条是"校验后直接落地、落地即执行"，
       // 这条只把内容读进暂存区，让人先看过。第三方代码不该有"导入即运行"的旁路。
       //
-      // 快照（forge.snapshot）是给后面的"适配"用的 —— 有了适配前的底片，
-      // 才能算出模型到底改了什么并展示 diff。这是第三方场景下最重要的透明度保障。
+      // 快照（forge.snapshot）是给后面的"适配"用的：有了适配前的底片，
+      // 才能算出模型到底改了什么并展示 diff。
       method: 'POST', pattern: '/api/forge/import',
       handler: async ({ req, res, json }) => {
         const body = await bodyOf(req);
@@ -806,7 +798,7 @@ export function createRoutes(deps) {
           return json(res, 200, { ok: false, available: true, rejected: !!out.rejected, error: out.error });
         }
 
-        // 拍适配前快照（失败不阻断 —— 没有快照只是后面看不到 diff）
+        // 拍适配前快照（失败不阻断，没有快照只是后面看不到 diff）
         try {
           skillManager.getCapabilityProviders('forge.snapshot', ctx)[0]?.fn({ draftId: out.draftId, label: 'pre' });
         } catch { /* ignore */ }
@@ -830,7 +822,7 @@ export function createRoutes(deps) {
       // 约束（界面上选的「清单为主 + 代码最小修补」）：
       //   · 优先改清单（apiVersion / entry / name / tools 声明 / permissions / requires）
       //   · 代码只在"不改就跑不起来"时做最小修补，且每处必须能说出"不改会怎么坏"
-      //   · **不许借适配之名重写业务逻辑** —— 那等于把别人的扩展变成另一个东西
+      //   · **不许借适配之名重写业务逻辑**
       //
       // 完成后重跑闸门 + 算 diff，把"改了什么"如实回给前端。
       method: 'POST', pattern: '/api/forge/adapt',
@@ -890,10 +882,9 @@ export function createRoutes(deps) {
           }).join('\n')
           : '（没有发现问题 —— 这个包可以直接装）';
 
-        // 提示词体积：单文件仍截 12K 字符，但**整包总量封顶 12 万字符** ——
-        // 超过时优先保留"清单 + 入口"（装不装得上就看它们），其余文件只列名，
-        // 由模型用 forge_read_file 按需读取（工具本来就在工具集里）。
-        // 目的：超大第三方包不再把每一轮都拖成"天价慢请求"，把预算花在刀刃上。
+        // 提示词体积：单文件截 12K 字符，整包总量封顶 12 万字符。超过时优先保留
+        // "清单 + 入口"（装不装得上就看它们），其余文件只列名，由模型用
+        // forge_read_file 按需读取（工具本来就在工具集里）。
         const PROMPT_FILE_CHARS = 12000;
         const PROMPT_TOTAL_CHARS = 120000;
         const promptRankOf = (p) => (/^(skill|plugin)\.json$/i.test(p) ? 0 : (/(^|\/)index\.(js|mjs|cjs)$/i.test(p) ? 1 : 2));
@@ -959,14 +950,13 @@ export function createRoutes(deps) {
         ].join('\n');
 
         // ── 适配的预算口径（改这里之前先读这条）─────────────────────────────
-        // · 单段墙 240s（保持原值）；一段用满且**有进展**时自动续一段，最多 2 段
-        //   （总计与起草路线"首轮 + 自动修复 2 轮"同量级）。这是 2026-10-16 的修复：
-        //   原实现"单段 240s 对不封顶的多轮工作量"，第三方大包必现超时。
+        // · 单段墙 240s；一段用满且**有进展**时自动续一段，最多 2 段。原实现
+        //   "单段 240s 对不封顶的多轮工作量"，第三方大包必现超时。
         // · 无进展（请求全挂死/端点不通）**不续段**：那种情况下续段只是把同一笔
-        //   预算再烧一遍，保持直接报错（错误文案与旧版一致）。
+        //   预算再烧一遍，直接报错。
         // · ⚠️ 改这里的任何数字，必须同步 ui/app/13-doctor.js 里适配按钮的客户端超时
         //   （560000ms ≈ 前置闸门 + 2×240s + 后置闸门/diff + 余量）。三层（客户端 /
-        //   本段墙 / llm.js 单请求 180s）互有耦合，注释互指，别让它们再次漂移。
+        //   本段墙 / llm.js 单请求 180s）互有耦合，别让它们漂移。
         const ADAPT_SEGMENT_MS = 240000;
         const ADAPT_MAX_SEGMENTS = 2;
         const ADAPT_MAX_ROUNDS = 12;
@@ -993,8 +983,8 @@ export function createRoutes(deps) {
             let wallHit = false;
             try {
               while (round < ADAPT_MAX_ROUNDS) {
-                // 提醒：轮次/时间任一接近枯竭就打招呼 —— 模型对时间没有感知，
-                // 不告诉它"还剩多少"，它会把预算花在细节上（2026-10-16 升级为时间提醒）。
+                // 提醒：轮次/时间任一接近枯竭就打招呼。模型对时间没有感知，
+                // 不告诉它"还剩多少"，它会把预算花在细节上。
                 const leftRounds = ADAPT_MAX_ROUNDS - round;
                 const leftSec = Math.max(0, Math.round((ADAPT_SEGMENT_MS - (Date.now() - segStart)) / 1000));
                 if (leftRounds <= 2 || leftSec <= 60) {
@@ -1035,9 +1025,9 @@ export function createRoutes(deps) {
               }
             } catch (error) {
               lastError = error;
-              // 段墙（ac 被 abort）或"单请求超时"（180s，防重复计费不重试）—— 两者都算
+              // 段墙（ac 被 abort）或"单请求超时"（180s，防重复计费不重试），两者都算
               // "本段被时间打断"，交给下面统一决定：有进展就续段 / 交付现场，无进展原样报错。
-              // 其它错误（网络/端点/配置/坏响应）原样上抛，保持旧语义。
+              // 其它错误（网络/端点/配置/坏响应）原样上抛。
               const isTimeoutLike = ac.signal.aborted || /模型请求超时|适配超时/.test(String(error?.message ?? error));
               if (!isTimeoutLike) throw error;
               wallHit = true;
@@ -1055,7 +1045,7 @@ export function createRoutes(deps) {
             });
           }
 
-          // 请求全挂死（一段都没跑动）→ 保持旧行为：直接报错，不做任何"完成"假象。
+          // 请求全挂死（一段都没跑动）→ 直接报错，不做任何"完成"假象。
           if (noProgressWall) throw lastError ?? new Error(`适配超时（${ADAPT_SEGMENT_MS / 1000}s）`);
 
           // 总结缺省：没给收尾说明时，给界面一段可读的话（不再回空串）
@@ -1065,12 +1055,12 @@ export function createRoutes(deps) {
               : `（已完成 ${round} 轮，模型未给出总结 —— 请查看下方 diff 与闸门结论。）`;
           }
 
-          // 改完 / 时间用尽但**有进展**：都要重跑闸门 + 算 diff —— 超时也要交付"现场"
+          // 改完 / 时间用尽但**有进展**：都要重跑闸门 + 算 diff，超时也要交付"现场"
           let gate2 = null, diff = null;
           try { gate2 = skillManager.getCapabilityProviders('forge.gate', ctx)[0]?.fn({ draftId }) || null; } catch { /* ignore */ }
           try { diff = skillManager.getCapabilityProviders('forge.diff', ctx)[0]?.fn({ draftId, label: 'pre' }) || null; } catch { /* ignore */ }
 
-          // 落一条结果日志：耗时/轮次/改动数/阻断数 —— 复盘不靠猜（配合 llm.js 的失败日志）
+          // 落一条结果日志：耗时/轮次/改动数/阻断数，复盘不靠猜（配合 llm.js 的失败日志）
           try {
             const sm = diff?.summary || {};
             const changed = Number(sm.added || 0) + Number(sm.changed || 0) + Number(sm.removed || 0);
@@ -1083,7 +1073,7 @@ export function createRoutes(deps) {
             gateBefore: gate, gate: gate2, diff
           });
         } catch (error) {
-          // 失败也要留痕（含已跑轮次与耗时）—— 用户问"卡在哪"时，日志能自证
+          // 失败也要留痕（含已跑轮次与耗时），用户问"卡在哪"时，日志能自证
           try {
             logger.warn('forge-adapt', `草稿 ${draftId} 适配失败：${String(error?.message ?? error)}（已跑 ${round} 轮 / ${Math.round((Date.now() - t0) / 1000)}s）`);
           } catch { /* ignore */ }
@@ -1094,13 +1084,13 @@ export function createRoutes(deps) {
     {
       // 起草：模型用写工具把草稿写进暂存区（多轮工具循环，复用 /api/doctor/ask 的模式）
       //
-      // 与「对话排查」的关键差别：那个是**只读**的，这个是**写**的 ——
+      // 与「对话排查」的关键差别：那个是**只读**的，这个是**写**的，
       // 但写盘被插件的 confinement 关在暂存区内，出不了 plugin-data/extension-forge/staging/。
-      // 起草完成后**不自动安装** —— 必须用户在前面点确认（见下面 /api/forge/install）。
+      // 起草完成后**不自动安装**，必须用户在前面点确认（见下面 /api/forge/install）。
       method: 'POST', pattern: '/api/forge/draft',
       handler: async ({ req, res, json }) => {
         const body = await bodyOf(req);
-        // 修改模式（带 draftId）下 requirement 允许为空 —— 原始需求从草稿元数据里取，
+        // 修改模式（带 draftId）下 requirement 允许为空，原始需求从草稿元数据里取，
         // 输入框里装的是"本轮补充说明"（note）。新建模式 requirement 仍然必填。
         const requirement = String(body.requirement || '').trim();
         const note = String(body.note || '').trim().slice(0, 1000);
@@ -1148,7 +1138,7 @@ export function createRoutes(deps) {
 
         // ── 修改模式上下文（draftId 已给定）──────────────────────────────────
         // 起草接口天然支持"在同一个草稿上继续写"（forge.draft 的 draftId 参数 + 覆盖写），
-        // 但"从零起草"的教学 prompt 会把修改轮带偏 —— 模型需要的是问题清单，不是格式课。
+        // 但"从零起草"的教学 prompt 会把修改轮带偏，模型需要的是问题清单，不是格式课。
         // 这里喂给它三样东西：现有文件清单、上一轮闸门问题明细、原始需求。
         let reviseCtx = null;
         if (reviseDraftId) {
@@ -1173,15 +1163,15 @@ export function createRoutes(deps) {
         }
 
         // ── 起草的三块内部构件 ──
-        // 抽成局部函数的原因：闸门失败后要**自动修复**（把问题清单喂回去重跑），
-        // 修复轮的 sys 与工具循环必须能在同一请求内复用 —— 复制粘贴两份迟早分叉。
+        // 抽成局部函数：闸门失败后要**自动修复**（把问题清单喂回去重跑），
+        // 修复轮的 sys 与工具循环必须能在同一请求内复用，复制粘贴两份迟早分叉。
 
         /** 金标准示例（few-shot）：给模型看"好扩展长什么样"，比十条规则更有效。 */
         const buildGoldenSection = () => {
           try {
-            // ⚠️ 2026-11-02：extension-forge 已内置化到 src/harness/forge/（见 src/harness/index.js），
-            //    旧路径 plugins/extension-forge/examples 已删除。这里走的是真实代码路径，
-            //    路径写错不会报错 —— 下面的 catch 会静默返回空串，只是起草质量悄悄变差。
+            // ⚠️ extension-forge 已内置化到 src/harness/forge/（见 src/harness/index.js），
+            //    旧路径 plugins/extension-forge/examples 已删除。路径写错不会报错，
+            //    下面的 catch 会静默返回空串，只是起草质量悄悄变差。
             //    用 ROOT 而不是 DATA_DIR：后者可被 QQ_AGENT_DATA_DIR 指到任意目录。
             const exDir = path.join(ROOT, 'src', 'harness', 'forge', 'examples');
             const j = fs.readFileSync(path.join(exDir, 'golden-skill.json'), 'utf8').trim();
@@ -1278,7 +1268,7 @@ export function createRoutes(deps) {
             description: '一句话说明这个扩展做什么（会显示在扩展列表里）',
             author: 'AI 生成',
             // ⚠️ 固定写 false：自创扩展**装完默认是关闭的**，用户去扩展列表里亲自开启。
-            //    这是刻意的安全默认 —— 生成的代码会真的在本机执行，
+            //    这是刻意的安全默认：生成的代码会真的在本机执行，
             //    "装上了但还没开"给了人一个在它生效前再看一眼的机会。
             //    （即使这里写成 true，安装时也会被强制关掉，见 /api/forge/install。）
             enabledByDefault: false,
@@ -1321,7 +1311,7 @@ export function createRoutes(deps) {
           '`api.capability(name, args)`（软依赖别的扩展提供的能力）。',
           buildGoldenSection(),
           // plan-then-write：计划是模型在计划轮**自己定的方向**，对"自己说过的话"的
-          // 服从性远高于对外部规则 —— 这正是单独跑一轮计划的价值所在。
+          // 服从性远高于对外部规则，这正是单独跑一轮计划的价值所在。
           ...(planText ? [
             '',
             '── 已批准的起草计划（上一轮定下的方向，动笔必须与它一致；',
@@ -1395,7 +1385,7 @@ export function createRoutes(deps) {
                 temperature: 0.2,
                 signal: ac.signal,
                 overrides,
-                // 起草要写代码，思考有帮助 —— 但服务端强制思考时 reasoning 会吃 max_tokens，
+                // 起草要写代码，思考有帮助，但服务端强制思考时 reasoning 会吃 max_tokens，
                 // 且这里有多轮兜底（没工具调用时正文才重要），所以关掉换取确定性。
                 skillContext: { thinkingMode: 'off' },
                 tag: `${tagPrefix}:r${round}`
@@ -1468,7 +1458,7 @@ export function createRoutes(deps) {
           let rounds = first.rounds;
           const trace = [...first.trace];
 
-          // 原始需求持久化 —— 修改轮 / 跨会话打开老草稿时，模型才知道"当初要做什么"。
+          // 原始需求持久化：修改轮 / 跨会话打开老草稿时，模型才知道"当初要做什么"。
           // 只在新草稿时写：修改轮需求没变（变化的部分走 note），重写反而可能覆盖掉更早的记录。
           if (!reviseCtx && draftId) {
             try {
@@ -1476,7 +1466,7 @@ export function createRoutes(deps) {
             } catch { /* 元数据失败不影响起草结果 */ }
           }
 
-          // 起草完立刻跑闸门 —— 让用户看到的是"已经检查过的"草稿
+          // 起草完立刻跑闸门，让用户看到的是"已经检查过的"草稿
           const gateProv = skillManager.getCapabilityProviders('forge.gate', ctx)[0];
           const runGate = () => {
             try { return gateProv ? gateProv.fn({ draftId }) : null; }
@@ -1485,9 +1475,9 @@ export function createRoutes(deps) {
           let gate = runGate();
 
           // ── 自动修复：把平台的反馈回路转起来 ──
-          // 闸门有 ⛔阻断 项时不再等用户点"继续修改"——问题清单本来就是修复 prompt，
+          // 闸门有 ⛔阻断 项时不再等用户点"继续修改"，问题清单本来就是修复 prompt，
           // 模型看到行号和原因就能修。上限 2 轮 + 总时限 8 分钟（防无限循环烧钱）。
-          // confirm 项不算失败 —— 那是留给用户的放行决定，机器不该替人点头。
+          // confirm 项不算失败，那是留给用户的放行决定，机器不该替人点头。
           let autoFixAttempts = 0;
           const fixDeadline = Date.now() + 8 * 60000;
           while (gate && Number(gate.blocking) > 0 && autoFixAttempts < 2 && Date.now() < fixDeadline) {
@@ -1529,14 +1519,13 @@ export function createRoutes(deps) {
       }
     },
     {
-      // 签发「人工确认票据」—— 安装的唯一钥匙。
+      // 签发「人工确认票据」，安装的唯一钥匙。
       //
-      // 为什么单独一条路由，而不是让 install 自己判断"是不是人在点"：
-      //   后端看不见"人"，它能看见的只有"这个请求是不是控制台自己发的"。
-      //   而那正是 keyEndpointAllowed 在判的事（渲染进程私有的 32 字节凭据，
-      //   由主进程 webRequest 注入、不落盘、不进 DOM；或用户自配的 server.token）——
-      //   本机其它进程与外部网页都拿不到。签票与用票分开，票再绑内容摘要，
-      //   于是"人看到的那份 == 将要落盘的那份"才成立。
+      // 单独一条路由，而不是让 install 自己判断"是不是人在点"：后端看不见"人"，
+      // 它能看见的只有"这个请求是不是控制台自己发的"，那正是 keyEndpointAllowed
+      // 在判的事（渲染进程私有的 32 字节凭据，由主进程 webRequest 注入、不落盘、
+      // 不进 DOM；或用户自配的 server.token）。签票与用票分开，票再绑内容摘要，
+      // 于是"人看到的那份 == 将要落盘的那份"才成立。
       method: 'POST', pattern: '/api/forge/confirm',
       handler: async ({ req, res, json }) => {
         if (!keyEndpointAllowed(req)) {
@@ -1571,7 +1560,7 @@ export function createRoutes(deps) {
     {
       // 安装：把放行过的草稿搬进 skills/ 或 plugins/（之后热重载自动装载）
       //
-      // ⚠️ 插件内部会**再跑一次闸门** —— 不信任"前端说它检查过了"。
+      // ⚠️ 插件内部会**再跑一次闸门**，不信任"前端说它检查过了"。
       //    闸门结论与安装之间隔着人工确认，期间草稿可能被改动。
       // ⚠️ 还必须带 /api/forge/confirm 签发的票据：闸门通过 ≠ 有人同意装。
       method: 'POST', pattern: '/api/forge/install',
@@ -1581,7 +1570,7 @@ export function createRoutes(deps) {
         const provs = skillManager.getCapabilityProviders('forge.install', ctx);
         if (!provs.length) return json(res, 200, { ok: false, available: false, error: '「扩展锻造台」插件未启用' });
         // 兜底：确认票据能力必须存在。缺了说明跑的是旧版锻造台（plugins/ 下还留着旧副本，
-        // 或应用没重启）—— 那种 install 不验票，不能让它承载"人工确认"这条链路。
+        // 或应用没重启），那种 install 不验票，不能让它承载"人工确认"这条链路。
         if (!skillManager.getCapabilityProviders('forge.confirm-ticket', ctx).length) {
           return json(res, 503, {
             ok: false,
@@ -1598,15 +1587,14 @@ export function createRoutes(deps) {
           // ── 装上之后**强制置为关闭** ──────────────────────────────────
           //
           // 为什么在核心做、而不是交给插件或靠模型自觉：
-          //   1. 模型写清单时基本会照抄提示词模板，它给不给 enabledByDefault:false 不可靠；
+          //   1. 模型写清单时基本会照抄提示词模板，它给不给 enabledByDefault:false 不可靠，
           //      写配置是"无论生成物怎么写都生效"的那条路。
           //   2. 配置的优先级高于清单（`isSkillEnabledInConfig`：有配置看配置，没配置才看清单），
           //      所以写一条 `skills.<id>.enabled = false` 就能盖过清单里写死的 true。
-          //   3. 写 skills 配置本来就是**核心的职责**（UI 的开关走的也是 setSkillEnabled），
+          //   3. 写 skills 配置本来就是核心的职责（UI 的开关走的也是 setSkillEnabled），
           //      插件不该去动别家扩展的配置。
           //
-          // 语义：这不是"禁用这个扩展"，而是"装好后先别跑，等你亲自开"。
-          //      用户去扩展列表点一下开启即可，之后一切照旧。
+          // 语义是"装好后先别跑，等你亲自开"：用户去扩展列表点一下开启即可，之后一切照旧。
           let autoDisabled = false;
           if (out?.ok && out.id) {
             try {
@@ -1639,10 +1627,10 @@ export function createRoutes(deps) {
 
     // ── 升级已有扩展（harness → 升级扩展）──────────────────────────────────
     // 与 forge.install 的分界：install 靠"撞车加 _1"永不覆盖；升级靠 manifest.id
-    // 一致性覆盖原目录（插件侧强制备份 + 失败自恢复）。详见 extension-forge/index.js。
+    // 一致性覆盖原目录（插件侧强制备份 + 失败自恢复）。详见 src/harness/forge/。
 
     {
-      // 已装扩展清单（可升级对象）。不读内存注册表读磁盘清单 —— 升级要对的是"目录里的版本"
+      // 已装扩展清单（可升级对象）。不读内存注册表读磁盘清单：升级要对的是"目录里的版本"
       method: 'GET', pattern: '/api/forge/installed',
       handler: async ({ res, json }) => {
         const ctx = skillRuntimeContext();
@@ -1719,7 +1707,7 @@ export function createRoutes(deps) {
         const modelName = useOwn ? overrides.model : cfg.api?.model;
         if (!modelName) return json(res, 200, { ok: false, available: true, error: '尚未配置聊天模型（设置 → 模型与搜索 → 模型 API）' });
 
-        // 草稿全文（总量截断 —— 大扩展靠文件清单 + forge_read_file 兜底）
+        // 草稿全文（总量截断，大扩展靠文件清单 + forge_read_file 兜底）
         let budget = 40000;
         const fileText = draftFiles.map((f) => {
           const content = String(f.content || '').slice(0, Math.max(0, budget));
@@ -1777,7 +1765,7 @@ export function createRoutes(deps) {
 
           /**
            * 一段"模型 + 写工具"循环。首轮与自动修复轮共用同一 messages 上下文
-           * （模型记得自己改过什么），但各有独立的 240s 自杀钟（signal 注入）。
+           * （模型记得自己改过什么），各有独立的 240s 自杀钟（signal 注入）。
            */
           const runLoop = async (tagPrefix, signal) => {
             for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -1833,7 +1821,7 @@ export function createRoutes(deps) {
 
           // ── 自动修复：升级路径与 draft 同款反馈回路 ──
           // 闸门有 ⛔阻断 时把问题清单喂回同一上下文重跑（模型记得自己刚改了什么），
-          // 上限 2 轮 / 总时限 8 分钟。confirm 项不算失败 —— 那是留给用户的放行决定。
+          // 上限 2 轮 / 总时限 8 分钟。confirm 项不算失败，那是留给用户的放行决定。
           let autoFixAttempts = 0;
           const fixDeadline = Date.now() + 8 * 60000;
           while (gate && Number(gate.blocking) > 0 && autoFixAttempts < 2 && Date.now() < fixDeadline) {
@@ -1930,7 +1918,7 @@ export function createRoutes(deps) {
     // ── 开发工单（dev-orders 插件）── 「开发模式」的传输层 ──────────────────
     // 纯传输层（与 /api/forge/* 同构）：核心不知道 "dev-orders" 是什么，按能力名问
     // "谁提供 dev.xxx"。白名单 / 会话存储 / 开发执行全在插件里。
-    // 对话的**回复**不走这里 —— 由 onMessage 钩子里核心递进来的发送队列直发 QQ；
+    // 对话的**回复**不走这里，由 onMessage 钩子里核心递进来的发送队列直发 QQ；
     // 这里只管页面侧的读与写：看会话（snapshot/detail）、本机说话（send/new）、归档（close）。
     {
       method: 'GET', pattern: '/api/dev/snapshot',
@@ -1940,7 +1928,7 @@ export function createRoutes(deps) {
         if (!provs.length) return json(res, 200, { ok: false, available: false, error: '「开发工单」插件未启用（顶部「插件」页 → dev-orders）' });
         try {
           // selected 透传：选中会话若不在服务端截断的最新 100 条里，由插件兜底追加，
-          // 否则前端"选中项不在列表就复位"会每秒把用户选中清掉（2026-10-15 回归修复）。
+          // 否则前端"选中项不在列表就复位"会每秒把用户选中清掉。
           const selected = String(url.searchParams.get('selected') || '');
           return json(res, 200, { available: true, ...provs[0].fn({ selected }) });
         } catch (error) { return json(res, 500, { ok: false, available: true, error: String(error?.message ?? error) }); }
@@ -1997,7 +1985,7 @@ export function createRoutes(deps) {
       }
     },
     {
-      // 重开旧工单（2026-10-09 加）：归档的工单回到 active，带着追加式上下文继续干。
+      // 重开旧工单：归档的工单回到 active，带着追加式上下文继续干。
       // QQ 侧对应「开发#6」。
       method: 'POST', pattern: '/api/dev/reopen',
       handler: async ({ req, res, json }) => {
@@ -2010,9 +1998,9 @@ export function createRoutes(deps) {
       }
     },
     {
-      // 中止正在跑的那一轮（2026-10-08 加）。
-      // 没有它的话，跑飞的一轮最长要等 turnTimeoutSec（默认 1 小时），而且调度是全局单飞
-      // —— 那一轮不结束，**所有**会话都排队，界面只显示"模型正在干活…"，用户以为卡死。
+      // 中止正在跑的那一轮。
+      // 没有它的话，跑飞的一轮最长要等 turnTimeoutSec（默认 1 小时），而且调度是全局单飞，
+      // 那一轮不结束，**所有**会话都排队，界面只显示"模型正在干活…"，用户以为卡死。
       method: 'POST', pattern: '/api/dev/abort',
       handler: async ({ req, res, json }) => {
         const body = await bodyOf(req);
@@ -2098,7 +2086,7 @@ export function createRoutes(deps) {
     {
       // 对话视图：增量读一个会话的"开发记录"（transcript）。
       // from = 不透明游标（插件侧语义是**字节偏移**，前端原样回传 nextFrom）；跑单时每秒拉一次，
-      //   开销只有新增的那一段（2026-10-15 前是整文件重读，文件一大就把主线程拖死）。
+      //   开销只有新增的那一段（整文件重读会让大文件把主线程拖死）。
       // before = 「载入更早」：往前翻一页（此时忽略 from）。
       method: 'GET', pattern: '/api/dev/detail',
       handler: async ({ res, json, url }) => {
@@ -2116,9 +2104,9 @@ export function createRoutes(deps) {
       }
     },
     // ── 导入备份与回滚（数据入口只剩「打包 / 接收」，但它的收尾能力留在这里）──
-    // 2026-10-22：「数据移植」页已删除（被「打包 / 接收」取代），/api/migrate/scan
-    // 与 /api/migrate/apply 一并下线 —— 那个页面是它们唯一的调用方，留着就是一条
-    // 没人用、也没人测的写盘入口。备份与回滚保留：整包导入的数据落地仍然走
+    // 「数据移植」页已删除（被「打包 / 接收」取代），/api/migrate/scan 与
+    // /api/migrate/apply 一并下线：那个页面是它们唯一的调用方，留着就是一条
+    // 没人用、也没人测的写盘入口。备份与回滚保留，整包导入的数据落地仍然走
     // migrate.applyImport，它写出的 backup 必须能在界面上回滚。
     {
       method: 'POST', pattern: '/api/migrate/rollback',
@@ -2156,10 +2144,9 @@ export function createRoutes(deps) {
     // ── 整包：打包带走 / 接收（harness → 打包 / 接收）──────────────────────
     //
     // 边界：数据落地复用 migrate.applyImport（一套合并/去重/备份逻辑），但入口
-    // 只有"收一个别人发来的 zip"这一条 —— 不再有"直接读另一个 data 目录"的路径。
-    // 接收侧**绝不直接安装**扩展 ——
-    // 解包只进 data/import-bundles/<id>/ 临时区，扩展逐个送锻造台过闸，
-    // 最后由一次人工确认批量落地（每个草稿仍各签一张票，批量 ≠ 免票）。
+    // 只有"收一个别人发来的 zip"这一条，没有"直接读另一个 data 目录"的路径。
+    // 接收侧**绝不直接安装**扩展：解包只进 data/import-bundles/<id>/ 临时区，
+    // 扩展逐个送锻造台过闸，最后由一次人工确认批量落地（每个草稿仍各签一张票）。
     {
       method: 'GET', pattern: '/api/bundle/options',
       handler: async ({ res, json }) => {
@@ -2185,7 +2172,7 @@ export function createRoutes(deps) {
       }
     },
     {
-      // 打开导出目录。固定路径、不接受任何用户参数 —— 没有路径穿越面。
+      // 打开导出目录。固定路径、不接受任何用户参数，没有路径穿越面。
       method: 'POST', pattern: '/api/bundle/reveal',
       handler: async ({ res, json }) => {
         try {
@@ -2258,8 +2245,8 @@ export function createRoutes(deps) {
     },
     {
       // 一次确认，批量安装。
-      // 每个草稿仍然单独签票（票据绑内容摘要、一次性、10 分钟）—— 批量省的只是"点几次"，
-      // 不是"验不验"。带上 keyEndpointAllowed：只有控制台发起的请求能签票。
+      // 每个草稿仍然单独签票（票据绑内容摘要、一次性、10 分钟），批量省的只是"点几次"。
+      // 带上 keyEndpointAllowed：只有控制台发起的请求能签票。
       method: 'POST', pattern: '/api/bundle/install',
       handler: async ({ req, res, json }) => {
         if (!keyEndpointAllowed(req)) {
@@ -2352,12 +2339,12 @@ export function createRoutes(deps) {
       }
     },
     {
-      // 界面背景图（R40 外观个性化）。
+      // 界面背景图。
       // 图片由 Electron 主进程经原生文件对话框选好后**复制**进 data/ui/ 下，
-      // 这里只按 config.ui.bgImage 记录的文件名把它读出来 —— 不接受任何路径参数，
+      // 这里只按 config.ui.bgImage 记录的文件名把它读出来，不接受任何路径参数，
       // 所以不存在"传 ../../ 读任意文件"的穿越面。
       // ⚠️ 必须走同源 HTTP（img-src 'self'），file:// 图片会被 Chromium 拦下。
-      // ⚠️ 路径必须带 /api/ 前缀 —— app.js 只对 /api/* 做路由表分发，
+      // ⚠️ 路径必须带 /api/ 前缀：app.js 只对 /api/* 做路由表分发，
       //    其余路径一律走 ui/ 静态文件（会 404）。
       method: 'GET', pattern: '/api/ui-bg',
       handler: async ({ res }) => {
@@ -2414,7 +2401,7 @@ export function createRoutes(deps) {
           }
 
           // 只清内容，不删目录本身（目录可能被占用/是挂载点）；
-          // 跳过 qq-agent.lock —— 那是本进程活着的凭证，删了会让第二个实例误判无锁启动。
+          // 跳过 qq-agent.lock：那是本进程活着的凭证，删了会让第二个实例误判无锁启动。
           for (const name of fs.readdirSync(resolved)) {
             if (name === 'qq-agent.lock') continue;
             fs.rmSync(path.join(resolved, name), { recursive: true, force: true });
@@ -2435,7 +2422,7 @@ export function createRoutes(deps) {
         try {
           const raw = String(url.searchParams.get('range') || url.searchParams.get('days') || '7');
           // force=1：绕过 3 小时结果缓存，当场重算（用户点「刷新」时前端带这个参数）。
-          // 统计结果本身有缓存，但"用户明确要求现在算"必须被尊重 —— 否则那个刷新
+          // 统计结果本身有缓存，但"用户明确要求现在算"必须被尊重，否则那个刷新
           // 按钮按下去没反应，比慢更让人困惑。
           const force = ['1', 'true', 'yes', 'force'].includes(
             String(url.searchParams.get('force') || '').trim().toLowerCase());
@@ -2498,11 +2485,10 @@ export function createRoutes(deps) {
       }
     },
 
-    // ── 人设市场（r113）────────────────────────────────────────────────
+    // ── 人设市场 ───────────────────────────────────────────────────────
     // 人设**不是代码**，所以装法与技能 / 插件完全不同：没有 zip、没有安装口令，
     // 而是"取正文 → 写进 config.customPersonas → 用户自己切过去"。
-    // 三步各自一个端点，分别对应 UI 上的「预览 → 试用 → 应用」：
-    // （2026-10-15：当天曾被桌面旧快照覆盖丢失，已从 routes.js.bak-R126 原样恢复。）
+    // 三步各自一个端点，分别对应 UI 上的「预览 → 试用 → 应用」。
     {
       // 列表：⚠️ 刻意**不含 prompt 正文**（官网整包 3.7MB / 70 万字，
       // 一屏 123 张卡全带正文必卡）。只回元信息 + promptLength。
@@ -2521,7 +2507,7 @@ export function createRoutes(deps) {
       method: 'GET', pattern: /^\/api\/persona-market\/item\/([^/]+)$/,
       handler: async ({ res, json, match }) => {
         // 参数非法用 400，别用 502：502 是"上游失败"的语义，正文却写着"人设 id 非法"，
-        // 前端按状态码分流时会把它当成市场不可用（体检 F4）。
+        // 前端按状态码分流时会把它当成市场不可用。
         const pid = decodeURIComponent(match[1]);
         if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(String(pid).trim())) {
           return json(res, 400, { ok: false, error: '人设 id 非法' });
@@ -2537,10 +2523,9 @@ export function createRoutes(deps) {
     },
     {
       // 应用（= 安装）：把正文落成一条自定义人设。
-      // ⚠️ 幂等：同一 id 重复应用时**覆盖**同名旧条目，不追加 —— 否则用户
-      //   每次点「应用」都会多一条，"这个人设"能装出五份一模一样的。
-      //   落点用 customPersonas，不动 persona.roleText —— 当前生效的人设由
-      //   设置页自己管，市场只负责"往库里放"，语义更干净。
+      // ⚠️ 幂等：同一 id 重复应用时**覆盖**同名旧条目，不追加，否则用户每次点
+      //   「应用」都会多一条。落点用 customPersonas，不动 persona.roleText，
+      //   当前生效的人设由设置页自己管，市场只负责"往库里放"。
       method: 'POST', pattern: '/api/persona-market/apply',
       handler: async ({ req, res, json }) => {
         const body = await bodyOf(req);
@@ -2561,7 +2546,7 @@ export function createRoutes(deps) {
           if (at >= 0) list[at] = { ...list[at], ...entry };
           else list.push(entry);
           const patch = { customPersonas: list };
-          // 立即生效：只改 roleText / customRules，不动 botName ——
+          // 立即生效：只改 roleText / customRules，不动 botName，
           //   名字是账号身份，@ 判定与存档称呼都依赖它，换名会串。
           if (applyNow) {
             patch.persona = { ...(getConfig().persona || {}), roleText: item.prompt };
@@ -2608,7 +2593,7 @@ export function createRoutes(deps) {
       handler: async ({ res, json }) => json(res, 200, { logs: qqPortableLogs.slice(-200) })
     },
     {
-      // r105 搬运（自 v0.4.5 r48）：唤起便携 QQ 主窗口
+      // 唤起便携 QQ 主窗口
       method: 'POST', pattern: '/api/qq-portable/show',
       handler: async ({ res, json }) => {
         try {
@@ -2620,7 +2605,7 @@ export function createRoutes(deps) {
       }
     },
     {
-      // r105 搬运（自 v0.4.5 r52）：一键安装便携 QQ —— 从本机已安装的 QQNT 复制。
+      // 一键安装便携 QQ：从本机已安装的 QQNT 复制。
       // body 可带 { sourceDir }（注册表/常见路径都找不到时的手动兜底），一般为空。
       // 复制以分钟计，前端轮询 /api/status 的 qqPortable.setup 显示进度。
       method: 'POST', pattern: '/api/qq-portable/setup',
@@ -2635,7 +2620,7 @@ export function createRoutes(deps) {
       }
     },
     {
-      // r105 搬运（自 v0.4.5 r90）：?force=1 跳过「本机 QQ 探测」的 30s 缓存
+      // ?force=1 跳过「本机 QQ 探测」的 30s 缓存
       method: 'GET', pattern: '/api/qq-portable/status',
       handler: async ({ res, json, url }) => {
         const force = String(url?.searchParams?.get('force') || '') === '1';
@@ -2692,7 +2677,7 @@ export function createRoutes(deps) {
         if (!name || !text) return json(res, 400, { ok: false, error: '人设名称和角色设定都不能为空' });
         const customRules = String(body.customRules ?? '').trim();
 
-        // ── 带 id = 修改已有的自定义人设（2026-10-22 新增，供人设卡上的「编辑」用）──
+        // ── 带 id = 修改已有的自定义人设（供人设卡上的「编辑」用）──
         // 只认 custom_N：内置人设的正文写死在 src/personas.js 里，改不了。
         const editId = String(body.id ?? '').trim();
         if (editId) {
@@ -2709,15 +2694,14 @@ export function createRoutes(deps) {
 
           const patch = { customPersonas: list };
           // ⚠️ 改的正是**当前生效**的那套 → 必须同步 persona.roleText / customRules。
-          // 否则界面上显示的是新人设，机器人却还拿着旧正文说话（与删除接口
-          // 2026-10-16 修的是同一类问题：语义放服务端，随同一次 updateConfig 落盘）。
+          // 否则界面上显示的是新人设，机器人却还拿着旧正文说话。语义放服务端，
+          // 随同一次 updateConfig 落盘。
           if (String(old.text ?? '') && String(old.text) === String(getConfig().persona?.roleText ?? '')) {
             patch.persona = { ...(getConfig().persona || {}), roleText: text };
-            // 2026-10-23 修复：清空「额外规矩」时也要把当前生效人设上的旧规则一起清掉。
-            //   旧写法是 `if (customRules) patch.persona.customRules = customRules;`，
-            //   清空那次不进这个分支，而 patch.persona 是从旧对象展开的 —— 旧规则原样留下。
-            //   症状：模板里已经删掉的规矩，仍在每轮注入提示词（界面显示已清空，行为没变）。
-            //   显式写空串而不是 delete：updateConfig 是深合并，delete 删不掉已存在的键。
+            // 清空「额外规矩」时也要把当前生效人设上的旧规则一起清掉：
+            // patch.persona 是从旧对象展开的，不显式写空串，旧规则会原样留下，
+            // 表现为模板里已删掉的规矩仍在每轮注入提示词。
+            // 显式写空串而不是 delete：updateConfig 是深合并，delete 删不掉已存在的键。
             patch.persona.customRules = customRules || '';
           }
           updateConfig(patch);
@@ -2739,12 +2723,11 @@ export function createRoutes(deps) {
         const removed = list[idx];
         const next = list.filter((_, i) => i !== idx);
         const patch = { customPersonas: next };
-        // ⚠️（2026-10-16 外部审查 #5）被删的正是**当前生效**的那套时，原实现只过滤
-        //    customPersonas，不动 config.persona.roleText —— 于是界面显示"未选人设"，
-        //    机器人却继续拿被删掉的角色卡说话，前后不一致且极难排查。
-        //    UI 侧本来也想复位（07-settings-events.js 的删除处理器），但它操作的
-        //    #cfg-roletext / #cfg-customrules 早已随人设编辑器搬进弹窗、不在 DOM 里，
-        //    存在性守卫把那段变成了空操作 —— 所以语义放服务端，随同一次 updateConfig 落盘。
+        // ⚠️ 被删的正是**当前生效**的那套时，只过滤 customPersonas 会让界面显示
+        //    "未选人设"而机器人继续拿被删掉的角色卡说话，前后不一致且极难排查。
+        //    UI 侧那段复位操作依赖的 #cfg-roletext / #cfg-customrules 已随人设编辑器
+        //    搬进弹窗、不在 DOM 里，存在性守卫让它变成了空操作。所以语义放服务端，
+        //    随同一次 updateConfig 落盘。
         if (removed && String(removed.text ?? '')
           && String(removed.text) === String(getConfig().persona?.roleText ?? '')) {
           const { PERSONAS } = await import('./personas.js');
@@ -2763,7 +2746,7 @@ export function createRoutes(deps) {
           id: p.id, displayName: p.displayName, baseURL: p.baseURL,
           apiKey: '', apiKeyFrom: p.apiKeyFrom || '', needsBaseUrl: p.needsBaseUrl === true,
           hasKey: !!p.apiKey, anthropicOrigin: p.anthropicOrigin === true,
-          // API 协议（2026-10-19）：旧数据无 apiProtocol → openai；label 供前端直接显示
+          // API 协议：旧数据无 apiProtocol → openai；label 供前端直接显示
           apiProtocol: normalizeProtocol(p.apiProtocol || p.api),
           protocolLabel: protocolLabel(p.apiProtocol || p.api),
           models: p.models, modelNames: p.modelNames || {}
@@ -2818,9 +2801,9 @@ export function createRoutes(deps) {
       }
     },
     {
-      // 协议端配置探测（只读，2026-10-24）──────────────────────────────────
+      // 协议端配置探测（只读）─────────────────────────────────────────────
       // 给连接页用：告诉 UI「能不能自动填、填的是哪个账号、端口在不在」。
-      // 典型调用时机是"装好并登录了，重新检测"——先让它试自动填，再报结论。
+      // 典型调用时机是"装好并登录了，重新检测"。
       //
       // ⚠️ 响应里**没有令牌**：detectProtocol 的原始结果带明文，必须过 publicView。
       //    这条是令牌不越过 HTTP 边界的关键，改动时别把 hit 直接 json 出去。
@@ -2831,9 +2814,8 @@ export function createRoutes(deps) {
       }
     },
     {
-      // 自动填端点/令牌（2026-10-24）────────────────────────────────────────
+      // 自动填端点/令牌 ──────────────────────────────────────────────────
       // 与「保存并重连」走**同一条**落盘 + setEndpoint 路径，不另写一套连接逻辑。
-      // 口径：
       //   · force=true  → 手动点「自动读取协议端配置」，以探测结果为准覆盖；
       //   · 不带 force  → 启动兜底，只补空字段（用户手填过的值不动）。
       // body 可带 dir（"我知道装在哪"），留空则由探测自己找。
@@ -2846,16 +2828,15 @@ export function createRoutes(deps) {
       }
     },
     {
-      // 协议端端点：保存并立即生效（2026-10-23，协议端解耦配套）。
+      // 协议端端点：保存并立即生效（协议端解耦配套）。
       //
-      // 为什么需要专用端点：协议端现在由用户自行安装（SnowLuma / NapCat），端点
-      // 地址与令牌是用户第一次配置就要填的；而 OneBotClient 在构造时快照了
-      // wsUrl/httpUrl/令牌，改配置不重建连接就等于没改。以前只能"改完重启应用"，
-      // 对刚装好协议端的人是一次莫名其妙的重启。这里把"落配置 + 换端点重连"
-      // 合成一步。
+      // 为什么需要专用端点：协议端由用户自行安装（SnowLuma / NapCat），端点地址与
+      // 令牌是第一次配置就要填的；而 OneBotClient 在构造时快照了 wsUrl/httpUrl/令牌，
+      // 改配置不重建连接就等于没改。以前只能"改完重启应用"，这里把"落配置 +
+      // 换端点重连"合成一步。
       //
       // 令牌口径与设置页一致：空串 / '******' = 保持原值不变（脱敏回传的常态），
-      // 只有真的输入了新明文才更新 —— 否则"保存一次地址就把令牌清空"。
+      // 只有真的输入了新明文才更新，否则"保存一次地址就把令牌清空"。
       method: 'POST', pattern: '/api/protocol/apply',
       handler: async ({ req, res, json }) => {
         const body = await bodyOf(req);
@@ -2874,7 +2855,7 @@ export function createRoutes(deps) {
         if (wsToken && wsToken !== '******') next.accessToken = wsToken;
         const httpToken = String(body.httpAccessToken ?? '').trim();
         if (httpToken && httpToken !== '******') next.httpAccessToken = httpToken;
-        // 清空令牌要显式传 clearTokens —— 避免"空输入框"被当成"我要清空"。
+        // 清空令牌要显式传 clearTokens，避免"空输入框"被当成"我要清空"。
         if (body.clearAccessToken === true) next.accessToken = '';
         if (body.clearHttpAccessToken === true) next.httpAccessToken = '';
 
@@ -2890,7 +2871,7 @@ export function createRoutes(deps) {
             httpToken: cfg.protocol?.httpAccessToken
           });
         } catch (e) {
-          // 配置已经落盘（下次启动仍会用新值），只是本次重连没跑起来 —— 如实说
+          // 配置已经落盘（下次启动仍会用新值），只是本次重连没跑起来，如实说
           return json(res, 200, { ok: true, applied: false, error: String(e?.message || e) });
         }
         return json(res, 200, {
@@ -2924,7 +2905,7 @@ export function createRoutes(deps) {
           const body = await bodyOf(req);
           const cfgNow = getConfig();
           const baseUrl = String(body.baseUrl || cfgNow.api.baseUrl || '');
-          // API 协议口径（2026-10-19）：显式传入 > 按 providerId 查已存 > 主提供商的
+          // API 协议口径：显式传入 > 按 providerId 查已存 > 主提供商的
           const pid0 = String(body.providerId ?? '').trim();
           const proto = normalizeProtocol(
             body.apiProtocol
@@ -2932,10 +2913,9 @@ export function createRoutes(deps) {
             || (currentProviders().find((x) => x.id === cfgNow.api?.provider)?.apiProtocol)
             || 'openai'
           );
-          // Key 解析顺序（2026-09-20 修 401 高发）：显式明文 > 按 providerId 查该提供商
-          // 保存的 Key（dshProviderKeys / providers[].apiKey）> 顶层 api.apiKey。
-          // 旧实现只看顶层 Key —— 多提供商场景下顶层只存"当前选中那个"的 Key，
-          // 从其它提供商拉列表就会拿错 Key，全部 401。
+          // Key 解析顺序：显式明文 > 按 providerId 查该提供商保存的 Key
+          // （dshProviderKeys / providers[].apiKey）> 顶层 api.apiKey。
+          // 只看顶层 Key 会在多提供商场景下拿错 Key（顶层只存"当前选中那个"），全部 401。
           let apiKey = '';
           if (body.apiKey !== undefined && String(body.apiKey ?? '').trim() && body.apiKey !== '******') {
             apiKey = String(body.apiKey).trim();
@@ -2978,7 +2958,7 @@ export function createRoutes(deps) {
           const apiKey = (submitted && submitted !== '******') ? submitted : resolveApiKey(getConfig());
           const baseUrl = String(body.baseUrl ?? '');
           const model = String(body.model ?? '');
-          // 测试协议必须与实跑同源（2026-10-19）：显式传入 > 主提供商已存的协议
+          // 测试协议必须与实跑同源：显式传入 > 主提供商已存的协议
           const cfgNow = getConfig();
           const proto = normalizeProtocol(
             body.apiProtocol
@@ -3051,7 +3031,7 @@ export function createRoutes(deps) {
       }
     },
     {
-      // 修改已有提供商的 API 协议（「API 协议」下拉，2026-10-19）
+      // 修改已有提供商的 API 协议（「API 协议」下拉）
       method: 'POST', pattern: '/api/providers/protocol',
       handler: async ({ req, res, json }) => {
         const body = await bodyOf(req);
@@ -3223,8 +3203,6 @@ export function createRoutes(deps) {
       // 完整系统提示词预览：按**当前**插件/技能/工具启用状态组装（没开的不出现），
       // 供设置-工具与技能页和技能页右侧预览共用。走后端而不是前端拼：组装逻辑
       // 就是运行时的 buildSystemPrompt + getToolAvailability，前端另写一份迟早漂移。
-      // 注意 skillContext 与 orchestrator 同构（visionEnabled/searchEnabled/toolsCfg），
-      // 否则预览和实际运行的口径会分裂。
       //
       // POST + 可选 overrides：前端自动保存有 600ms 防抖，用户刚点的开关还没落盘；
       // 调用方把"当前工具面板状态"随请求发来，这里先 deepMerge 到临时副本上组装
@@ -3246,12 +3224,11 @@ export function createRoutes(deps) {
             && modelImageVerdict(effective.api?.provider, effective.api?.model) !== 'no-vision',
           searchEnabled: effective.webSearch?.enabled !== false,
           runtimeContext: { model: effective.api?.model || '', provider: effective.api?.provider || '', source: 'api' },
-          // ⚠️ 必须与 orchestrator 的 skillContext **同口径**（2026-10-16 修）：
+          // ⚠️ 必须与 orchestrator 的 skillContext **同口径**：
           //    thinking-adapters 的 promptSections(context) 要从这里取 model/baseUrl/
-          //    thinking* 才能写出与真实请求一致的"当前思考模式/方言"。原先这里只给了
-          //    runtimeContext.model，插件读不到 → 预览里恒显示"通用（不发送思考参数）"，
-          //    而真实运行用的是 DeepSeek/通义等 —— 正是本路由注释要消灭的
-          //    "预览与实际发给模型的不符"。
+          //    thinking* 才能写出与真实请求一致的"当前思考模式/方言"。只给
+          //    runtimeContext.model 的话插件读不到，预览里恒显示"通用（不发送思考参数）"，
+          //    而真实运行用的是 DeepSeek/通义等。
           model: effective.api?.model || '',
           provider: effective.api?.provider || '',
           baseUrl: effective.api?.baseUrl || '',
@@ -3266,7 +3243,7 @@ export function createRoutes(deps) {
         const tools = buildToolDefs()
           .filter((d) => getToolAvailability(d.id, skillContext).enabled)
           .map((d) => ({ id: d.id, name: d.name, description: d.description, category: d.category }));
-        // ⚠️ 必须与 orchestrator 的**真实组装口径**一致（方案 A，2026-10-11）：
+        // ⚠️ 必须与 orchestrator 的**真实组装口径**一致：
         //    易变片段已从系统提示拆出、改注入用户提示词末尾。预览若仍把易变片段
         //    混在 systemPrompt 里，用户看到的就与实际发给模型的不符。
         //    这里把两部分**分别**给出：systemPrompt（实际系统提示）+ 尾注说明。
@@ -3311,8 +3288,8 @@ export function createRoutes(deps) {
       }
     },
     {
-      // r105 搬运（自 v0.4.5）：市场列表（应用内「市场」页）：代理官网 GET /skills | /plugins。
-      // 为什么要代理：浏览器直连会被 CORS 拦，与其它市场端点走同一条 marketFetch 通道。
+      // 市场列表（应用内「市场」页）：代理官网 GET /skills | /plugins。
+      // 浏览器直连会被 CORS 拦，与其它市场端点走同一条 marketFetch 通道。
       // 返回 { ok, categories, items }；items 已在 market.js 做过字段白名单裁剪。
       method: 'GET', pattern: '/api/market/list',
       handler: async ({ req, res, json, url }) => {
@@ -3324,9 +3301,8 @@ export function createRoutes(deps) {
           const r = await listMarketItems(kind, { force });
           return json(res, 200, { ok: true, kind, categories: r.categories, items: r.items });
         } catch (error) {
-          // 2026-10-20：原来这里只回 502、**一个字都不落日志** —— 用户报"市场加载不出来"
-          // 时后台干干净净，事后完全无法复盘（是 DNS / WAF 挡了 / 上游 5xx / 超时？）。
-          // 现在把原因写进应用日志（「工具 → 连接 → 应用日志」能看到）。
+          // 只回 502 不落日志时，用户报"市场加载不出来"后台干干净净，无法复盘
+          // （是 DNS / WAF 挡了 / 上游 5xx / 超时？）。这里把原因写进应用日志。
           logger.warn('market', `市场列表拉取失败：${kind} · ${String(error?.message ?? error)}`);
           return json(res, 502, { ok: false, error: String(error?.message ?? error) });
         }
@@ -3381,7 +3357,7 @@ export function createRoutes(deps) {
             displayName: String(body?.displayName || ''),
             description: String(body?.description || ''),
             token: acc.token,
-            // 2026-10-17：kondius.cn 发布端点加人机验证，前端弹完滑块把 param 透传
+            // 发布端点有人机验证，前端弹完滑块把 param 透传
             captchaVerifyParam: String(body?.captchaVerifyParam || '')
           });
           return json(res, 200, {
@@ -3416,13 +3392,12 @@ export function createRoutes(deps) {
       // 口令安装：body { code, entry }（entry = verify 阶段拿到的条目，含服务器判定的 type）。
       // 类型路由由服务器 entry.type 决定：技能页输插件口令也会归到插件。
       //
-      // ⚠️ 2026-10-22 语义变更：**这条路由不再落盘**。
-      //    流程改为：下载 → 导入扩展锻造台暂存区 → 拍快照 → 过五道闸门 → 返回"待确认"。
-      //    真正写 skills/ / plugins/ 的是 /api/forge/install，且必须带人工确认票据。
+      // ⚠️ **这条路由不落盘**。流程：下载 → 导入扩展锻造台暂存区 → 拍快照 → 过五道闸门
+      //    → 返回"待确认"。真正写 skills/ / plugins/ 的是 /api/forge/install，且必须带人工确认票据。
       //
-      //    为什么必须改：旧实现只做结构与清单预检就直落模块目录，五道闸门一道没跑、
-      //    人工确认一步没有 —— 用户点一下"安装"等于把整台机器交给一份没人看过的代码。
-      //    而闸门结论本身也不该自动换出安装许可（静态扫描是启发式的，见 gate.js 头注释）。
+      //    为什么必须这样：旧实现只做结构与清单预检就直落模块目录，五道闸门一道没跑、
+      //    人工确认一步没有，用户点一下"安装"等于把整台机器交给一份没人看过的代码。
+      //    闸门结论本身也不该自动换出安装许可（静态扫描是启发式的，见 gate.js 头注释）。
       //    现在"安装"这个词只保留给「人确认过的那一次落盘」。
       method: 'POST', pattern: '/api/market/install',
       handler: async ({ req, res, json }) => {
@@ -3435,7 +3410,7 @@ export function createRoutes(deps) {
         const canConfirm = skillManager.getCapabilityProviders('forge.confirm-ticket', ctx).length > 0;
         if (!impProv || !canConfirm) {
           // 锻造台是内置模块（kind='core'），正常不会缺席；缺席或版本过旧时宁可整单取消，
-          // 也不退回"直装" —— 那正好是最该被删掉的那条旁路。
+          // 也不退回"直装"，那正好是最该被删掉的那条旁路。
           return json(res, 503, {
             ok: false, available: false,
             error: impProv
@@ -3508,7 +3483,7 @@ export function createRoutes(deps) {
       handler: async ({ res, json }) => {
         const context = skillRuntimeContext();
         const baseList = skillManager.list(context);
-        // 2026-10-22：给每条补「是不是随应用分发的内置模块」，前端「下载 → 技能 / 插件」
+        // 给每条补「是不是随应用分发的内置模块」，前端「下载 → 技能 / 插件」
         // 据此做"来源"筛选（内置 / 第三方分开，方便管理自己后来装的那些）。
         // ⚠️ 刻意算在这里、而不是 manager.status 里：plugin-loader 已经 import 了
         //   skills/manager（加载模块要用），manager 再反向 import plugin-loader 就成了
@@ -3530,12 +3505,11 @@ export function createRoutes(deps) {
               hasSettings: Object.keys(c).some((k) => k !== 'enabled')
             };
           });
-        // ── 工具调用性合并（2026-10-19）────────────────────────────────
+        // ── 工具调用性合并 ─────────────────────────────────────────────
         // "加载成功 + 开关打开 + 生效中" ≠ "模型调得到它的工具"：单工具开关、
         // 分类开关、requiresVision、send_to 独立开关……任何一档都能把工具
-        // 静默拦在模型列表外。此前只有 /api/tools/availability 一页能看到，
-        // 模块页的卡片毫不知情 —— 用户看到"生效中"，实际一个工具都调不到。
-        // 这里按 skillId 聚合可用性，给每个有工具的模块挂上 callability。
+        // 静默拦在模型列表外。模块页的卡片此前毫不知情，用户看到"生效中"，
+        // 实际一个工具都调不到。这里按 skillId 聚合可用性挂上 callability。
         let bySkill = null;
         try {
           bySkill = new Map();
@@ -3569,8 +3543,8 @@ export function createRoutes(deps) {
     },
     {
       // 手动重扫磁盘：UI「刷新」按钮的后端动作。
-      // 之前刷新只读内存注册表，watcher 丢事件（目录删除重建 / 网络盘 / 杀软）
-      // 时新插件永远进不来。这里走 app.reloadSkills()：重扫 + 激活 + 刷工具 + 重建 watcher。
+      // 只读内存注册表的话，watcher 丢事件（目录删除重建 / 网络盘 / 杀软）时
+      // 新插件永远进不来。这里走 app.reloadSkills()：重扫 + 激活 + 刷工具 + 重建 watcher。
       method: 'POST', pattern: '/api/skills/reload',
       handler: async ({ res, json }) => {
         if (typeof reloadSkills !== 'function') {
@@ -3594,25 +3568,24 @@ export function createRoutes(deps) {
       }
     },
     {
-      // 信任一个模块并立即重试加载（2026-10-07 新增）。
+      // 信任一个模块并立即重试加载。
       //
-      // 为什么需要它：准入闸拦下第三方模块后，用户若只能自己去改 data/config.json 的
-      // trustedPlugins 数组，那体验等于"根本用不了自己写的插件"—— 于是闸门会被
+      // 准入闸拦下第三方模块后，用户若只能自己去改 data/config.json 的
+      // trustedPlugins 数组，那等于"根本用不了自己写的插件"，于是闸门会被
       // 绕过或被整体关掉。这里给一次点击的入口。
       //
-      // ⚠️ 严格限定「只能信任当前**确实因高危能力被拒**的模块」：
-      //   否则这个接口就退化成一个万能放行口（配合任意 id 猜测，
-      //   可以把某个第三方模块悄悄标成可信，而界面上看不出差别）。
-      //   判据：它必须已注册在 skillManager.errors 里，且错误文本带本次闸门的标记。
-      // 登记后立刻 reloadSkills()，用户点完就能看到结果，不用手动点刷新。
+      // ⚠️ 严格限定「只能信任当前**确实因高危能力被拒**的模块」，否则这个接口
+      //   就退化成万能放行口（配合任意 id 猜测，可以把某个第三方模块悄悄标成
+      //   可信，而界面上看不出差别）。判据：它必须已注册在 skillManager.errors 里，
+      //   且错误文本带本次闸门的标记。
+      // 登记后立刻 reloadSkills()，用户点完就能看到结果。
       method: 'POST', pattern: '/api/skills/trust',
       handler: async ({ req, res, json }) => {
         const body = await readBody(req).catch(() => ({}));
-        // ⚠️ 宽容取 id：这个接口的调用方有三类 —— UI 按钮（id=<目录名>）、
-        //   用户脚本、以及**模型直接构造的请求**（收包人场景：缺陷报告由 AI
-        //   代测提交，模型猜字段名 skillId/dir/dirName 或干脆不带 body）。
-        //   旧版对后两类只回「缺少 id」—— 不教正确写法，调用方反复换字段重试，
-        //   体感就是"信任要 id、id 要信任"的死循环（2026-10-10 用户二次确认）。
+        // ⚠️ 宽容取 id：这个接口的调用方有三类，UI 按钮（id=<目录名>）、
+        //   用户脚本、以及**模型直接构造的请求**（缺陷报告由 AI 代测提交，模型会猜
+        //   字段名 skillId/dir/dirName 或干脆不带 body）。只回「缺少 id」不教正确写法，
+        //   调用方反复换字段重试，体感就是"信任要 id、id 要信任"的死循环。
         //   宽容别名不影响安全性：下面仍有三路 find、"触碰了高危能力"前置校验、
         //   只登记目录名三道闸守着。
         const raw = String(body?.id ?? body?.skillId ?? body?.dir ?? body?.dirName ?? body?.moduleName ?? '').trim();
@@ -3626,16 +3599,13 @@ export function createRoutes(deps) {
         const norm = raw.replace(/\\/g, '/');
         const base = path.basename(norm);
 
-        // ⚠️ 判据**不能靠猜 `skillManager.errors` 的键**（2026-10-08 修，用户报障）。
-        //   历史：2026-10-07 这里从 `s.dir`（`plugins/xxx`）改成 basename，以为就对了 ——
-        //   但那个假设是错的：`errors` 的键是 **manifest.id**（清单里自己声明的 id），
-        //   而界面传来的是**目录名**。二者平时相等，可一旦安装时目录名冲突，安装器会给
-        //   目录递增后缀（`meme-tracker` → `meme-tracker_1`，见"永不覆盖"策略），
-        //   而清单里的 id 不变 → 两者分叉：`errors['meme-tracker']` 明明在，
-        //   按目录名查 `meme-tracker_1` 却永远查不到 → 永远回
-        //   "当前不是因高危能力被拦截"，用户怎么点都信任不了。
-        //   现在改成回**注册表**找这张卡片自己那一条（界面就是用它渲染的，`dir` 一定对得上），
-        //   读它的 `loadError` —— 与界面决定"要不要显示信任按钮"用的是**同一个字段**。
+        // ⚠️ 判据**不能靠猜 `skillManager.errors` 的键**：`errors` 的键是 **manifest.id**
+        //   （清单里自己声明的 id），而界面传来的是**目录名**。二者平时相等，可一旦安装时
+        //   目录名冲突，安装器会给目录递增后缀（`meme-tracker` → `meme-tracker_1`，
+        //   见"永不覆盖"策略），而清单里的 id 不变，两者就分叉：`errors['meme-tracker']`
+        //   明明在，按目录名查 `meme-tracker_1` 却永远查不到，用户怎么点都信任不了。
+        //   所以回**注册表**找这张卡片自己那一条（界面就是用它渲染的，`dir` 一定对得上），
+        //   读它的 `loadError`，与界面决定"要不要显示信任按钮"用的是**同一个字段**。
         let row = null;
         try {
           const rows = skillManager.list(skillRuntimeContext()) || [];
@@ -3661,8 +3631,8 @@ export function createRoutes(deps) {
           });
         }
         // 只登记**目录名**：id 写在第三方可编辑的清单文件里，当作信任判据的话，
-        // 攻击者把清单 id 改成别人已信任的名字即可免检（实测确实能过）。
-        // 目录名是磁盘上的一级目录名，第三方装进来时无法自选（冲突会递增后缀）。
+        // 攻击者把清单 id 改成别人已信任的名字即可免检。目录名是磁盘上的一级目录名，
+        // 第三方装进来时无法自选（冲突会递增后缀）。
         // ⚠️ `checkPluginTrust` 也按这个目录名匹配（plugin-loader 的 dirName），
         //   所以这里必须是**目录名**，不能是 row.id。
         const id = path.basename(String(row.dir || base).replace(/\\/g, '/')) || base;
@@ -3679,7 +3649,7 @@ export function createRoutes(deps) {
             return json(res, 500, { ok: false, error: `已登记信任，但重载失败：${String(error?.message ?? error)}` });
           }
         }
-        // 失败清单里的 id 是 **manifest.id**，可能不等于目录名 —— 两种都比一次。
+        // 失败清单里的 id 是 **manifest.id**，可能不等于目录名，两种都比一次。
         const failRow = (result?.failed || [])
           .find((f) => String(f.id) === id || String(f.id) === String(row.id || ''));
         const context = skillRuntimeContext();
@@ -3695,9 +3665,9 @@ export function createRoutes(deps) {
     {
       // 本地导入：用户把 zip 包 / 整个文件夹拖进技能页或插件页（或走「导入本地文件」按钮）。
       // body: { kind: 'skill'|'plugin', paths?: [本机绝对路径], zipBase64?: string, zipName?: string }
-      //   · paths     —— Electron 里直接从拖放的 File 反查出来的真实路径（前端不过手文件内容）
-      //   · zipBase64 —— 浏览器/远程打开时的退路（没有本机路径可用，只能传字节）
-      // 装完立刻 reloadSkills()，让新条目当场出现在页面上（不用再手动点刷新）。
+      //   · paths     ：Electron 里直接从拖放的 File 反查出来的真实路径（前端不过手文件内容）
+      //   · zipBase64 ：浏览器/远程打开时的退路（没有本机路径可用，只能传字节）
+      // 装完立刻 reloadSkills()，新条目当场出现在页面上。
       method: 'POST', pattern: '/api/skills/import',
       handler: async ({ req, res, json }) => {
         // zip 的 base64 比原文件大约 1/3，给到 12MB（硬上限 16MB 见 app.js）
@@ -3846,7 +3816,7 @@ export function createRoutes(deps) {
         const skill = skillManager.registry.get(id);
         if (!skill) return json(res, 404, { ok: false, error: `Skill 不存在：${id}` });
 
-        // 1) 开关（先写配置，再跑生命周期；顺序不能反 ——
+        // 1) 开关（先写配置，再跑生命周期；顺序不能反，
         //    activate 里读配置必须已经生效，否则 Skill 会以为自己是关闭的）
         if (body.enabled !== undefined) {
           setSkillEnabled(id, !!body.enabled);
@@ -3878,7 +3848,7 @@ export function createRoutes(deps) {
           ok: true,
           skill: skillManager.status(id, context),
           // ⚠️ 响应里的 settings 必须用脱敏视图（settingsView）：
-          //    曾经直接回 getSkillConfig（明文），保存一次设置就把
+          //    直接回 getSkillConfig（明文）会在保存一次设置后把
           //    apiKey / Cookie 原文发回浏览器，与 GET 列表的脱敏口径相反。
           settings: skillManager.settingsView(id),
           config: sanitizeConfig(getConfig())
@@ -3956,14 +3926,14 @@ export function createRoutes(deps) {
       }
     },
     {
-      // ── 插件面板内的「用户操作」通道（2026-10-18）──────────────────────
-      // 背景：插件面板是**只读静态页**（安全模型见 src/skills/panel.js），
-      // 群友反馈"表情库里的表情没法自己编辑"——备注/标签只能让机器人在聊天里改。
+      // ── 插件面板内的「用户操作」通道 ────────────────────────────────────
+      // 插件面板是**只读静态页**（安全模型见 src/skills/panel.js），群友反馈
+      // "表情库里的表情没法自己编辑"，备注/标签只能让机器人在聊天里改。
       // 这条通道让面板把"用户明确点的保存"转发成一次工具调用。
       //
       // 安全三道（缺一不可）：
-      //   ① 来源校验 keyEndpointAllowed —— 只放行控制台自己（挡外部网页冒用 127.0.0.1）；
-      //   ② 工具白名单 —— 只放"不发送消息、不读群上下文、只动插件自己数据"的工具；
+      //   ① 来源校验 keyEndpointAllowed：只放行控制台自己（挡外部网页冒用 127.0.0.1）；
+      //   ② 工具白名单：只放"不发送消息、不读群上下文、只动插件自己数据"的工具；
       //      发送类（send_message/sticker__send_sticker）、读群类一律不在此列；
       //   ③ 工具必须真实注册且可执行。
       method: 'POST', pattern: '/api/plugin-tool',
@@ -4007,7 +3977,7 @@ export function createRoutes(deps) {
       handler: async ({ res, json }) => {
         const current = localVersion();
         // 功能关闭或没配源：明确返回 disabled，不发任何网络请求。
-        // 不能只是"查不到"—— UI 需要把"这项没开"和"网络不通"分开显示，
+        // 不能只是"查不到"，UI 需要把"这项没开"和"网络不通"分开显示，
         // 否则用户会以为检查失败，反复点。
         const feed = getConfig()?.update || {};
         const feedUrl = String(feed.feedUrl || '').trim();
@@ -4024,7 +3994,7 @@ export function createRoutes(deps) {
           const latest = String(info.version || '');
           if (!latest) throw new Error('version.json 缺少 version 字段');
           // 远端比本地还低 = 更新源没跟着发版推进。此时 hasUpdate 必然 false，
-          // 光看它和"已是最新"分不开（2026-10-23 实测：远端 0.4.0 / 本地 0.4.8.9）。
+          // 光看它和"已是最新"分不开（实测远端 0.4.0 / 本地 0.4.8.9）。
           // 单独给 stale 字段，UI 可以据此提示"更新源未更新"而不是"已是最新"。
           const stale = compareSemver(latest, current) < 0;
           if (stale && !updateFeedState.staleWarned) {
@@ -4053,7 +4023,7 @@ export function createRoutes(deps) {
       method: 'GET', pattern: '/api/models',
       handler: async ({ res, json }) => {
         // 没配 Base URL 时直接说清楚，别让它走到 fetch 变成
-        // 「网络错误 ERR_INVALID_URL：/models Invalid URL」——用户会去查网络（体检 F3）。
+        // 「网络错误 ERR_INVALID_URL：/models Invalid URL」，用户会去查网络。
         const baseUrl = String(getConfig().api?.baseUrl ?? '').trim();
         if (!baseUrl) {
           return json(res, 400, {
@@ -4133,11 +4103,10 @@ export function createRoutes(deps) {
         await Promise.allSettled(chats.map(async (c) => {
           const m = /^group:(\d+)$/.exec(String(c.key || ''));
           if (!m) { c.chatName = ''; return; }
-          // ⚠️（2026-10-17 修 L1）超时定时器必须在**正常路径**上也清掉。
-          //   原写法从不 clearTimeout：缓存命中时 getChatName 立刻 resolve，可那个
-          //   3 秒定时器仍挂在事件循环上 —— 而本端点被 UI 每 15 秒轮询一次、每次对
-          //   **每个群**各起一个。几百个群时，事件循环里长期漂着上千个无用定时器
-          //   （每个都带一个 Promise 与闭包），纯浪费。放在 finally 里清，两条路径都覆盖。
+          // ⚠️ 超时定时器必须在**正常路径**上也清掉。缓存命中时 getChatName 立刻
+          //   resolve，但 3 秒定时器仍挂在事件循环上，而本端点被 UI 每 15 秒轮询一次、
+          //   每次对**每个群**各起一个：几百个群时事件循环里长期漂着上千个无用定时器。
+          //   放在 finally 里清，两条路径都覆盖。
           let timer = null;
           try {
             c.chatName = await Promise.race([
@@ -4171,12 +4140,11 @@ export function createRoutes(deps) {
           const key = `private:${String(uid)}`;
           if (!seen.has(key)) { files.push({ chatKey: key, impressionCount: 0, memberCount: 0, updatedAt: 0, consolidating: false }); seen.add(key); }
         }
-        // r125：聊过但既没有记忆文件、也不在白名单里的会话（典型：allowAllWhenEmpty
-        // 模式下机器人回过话的群）也要出现在记忆页 —— 否则这种群永远进不了列表，
-        // 就没机会点「整理本群记忆」，永远不会有记忆文件，卡死循环（2026-10-14 用户实测：
-        // 56 条消息的群因为"从来没被整理过"在记忆页里连入口都没有）。
+        // 聊过但既没有记忆文件、也不在白名单里的会话（典型：allowAllWhenEmpty
+        // 模式下机器人回过话的群）也要出现在记忆页，否则这种群永远进不了列表，
+        // 就没机会点「整理本群记忆」，永远不会有记忆文件，卡死循环。
         // 只补轻量占位条目：updatedAt 用消息存档的最后一条时间，点开详情走
-        // GET /api/memory-files/:key —— 对没有文件的会话返回空结构，不会报错，
+        // GET /api/memory-files/:key，对没有文件的会话返回空结构，不会报错，
         // 详情页里的「整理本群记忆」按钮照常可用。
         for (const key of store.listChats()) {
           if (seen.has(key)) continue;
@@ -4284,9 +4252,9 @@ export function createRoutes(deps) {
           const body = await readBody(req);
           const items = Array.isArray(body?.items) ? body.items.slice(0, 20) : [];
           const mimeOf = (p) => /\.png$/i.test(p) ? 'image/png' : /\.gif$/i.test(p) ? 'image/gif' : /\.webp$/i.test(p) ? 'image/webp' : 'image/jpeg';
-          // R81（R79-2）：同步 IO 改异步。旧逻辑 statSync + readFileSync，
-          // 单请求最多 20 条 × 单文件 15MB = 最坏 300MB 同步读，直接堵主进程
-          // 事件循环（存档页打开多张大图的群时窗口卡住的元凶之一）。
+          // 同步 IO 改异步：旧逻辑 statSync + readFileSync，单请求最多 20 条 ×
+          // 单文件 15MB = 最坏 300MB 同步读，直接堵主进程事件循环（存档页打开
+          // 多张大图的群时窗口卡住）。
           const fileToDataUrl = async (fp) => {
             const st = await fs.promises.stat(fp);
             if (st.size > 15 * 1024 * 1024) return null;
@@ -4458,7 +4426,7 @@ export function createRoutes(deps) {
     // 两道人工闸在这里被强化成"后端绕不过去的门"：
     //   · 闸①：/api/fix/propose 只产出提案（不写盘）并返回一次性 approvalToken；
     //          /api/fix/apply 必须回传该令牌，令牌不对/用过一律拒绝。
-    //          这样"人工批准"不是界面上的装饰，而是代码层的门。
+    //          这样"人工批准"才是代码层的门，而不是界面上的装饰。
     //   · 闸②：/api/fix/verify 把**原始产物**留档；/api/fix/rerun 限次（防"刷到通过"）；
     //          通过要人显式调 /api/fix/commit 才会落地。
     {
@@ -4681,7 +4649,7 @@ export function createRoutes(deps) {
       }
     },
     {
-      // 删一笔审计。deleteSnapshot 必须显式给 —— 快照是回滚的唯一依据，不能顺手删掉。
+      // 删一笔审计。deleteSnapshot 必须显式给，快照是回滚的唯一依据，不能顺手删掉。
       method: 'DELETE', pattern: '/api/fix',
       handler: async ({ req, res, json }) => {
         const body = await bodyOf(req);
@@ -4760,8 +4728,8 @@ export function createRoutes(deps) {
         } catch (error) { return json(res, 500, { ok: false, error: String(error?.message ?? error) }); }
       }
     },
-    // ── 媒体工具（ffmpeg，2026-11-03）───────────────────────────────────
-    // ffmpeg 不再随包分发，改为按需下载到 data/runtime/ffmpeg/bin/。
+    // ── 媒体工具（ffmpeg）────────────────────────────────────────────────
+    // ffmpeg 不随包分发，按需下载到 data/runtime/ffmpeg/bin/。
     // 这里直接 import 模块（与 wallpaper 那条「不 import、只问能力」不同）：
     // ffmpeg 是核心 src/ 下的基础设施，不是可插拔扩展，没有第二种实现可换。
     {
@@ -4778,7 +4746,7 @@ export function createRoutes(deps) {
           const cfg = getConfig();
           // 预演一次下载通道（镜像 / 代理直连），让 UI 能提前说清"这次会怎么下"。
           // 探测失败当直连处理，不让它拖慢状态接口。
-          // 预演的是 Windows 的 7z 资产 —— 镜像 / 代理通道只对 GyanD 的 GitHub
+          // 预演的是 Windows 的 7z 资产：镜像 / 代理通道只对 GyanD 的 GitHub
           // Release 成立；Linux 的 riedl 资产自带完整 URL，不经过这条通道。
           // 所以非 win32 上这个字段只作参考，UI 不该拿它渲染下载源说明。
           let route = { url: '', proxy: '', reason: '' };
@@ -4797,9 +4765,8 @@ export function createRoutes(deps) {
           let managed = false;
           try { managed = fs.existsSync(path.join(managedBinDir(), process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')); } catch { /* ignore */ }
           // 能力体检：装了 ffmpeg 但可能缺 libx264 / 缺滤镜，表现出来是
-          // "功能报错，可状态栏说已安装"。只在**有 ffmpeg 时**才查，且结果缓存
-          // —— 两三条 -encoders/-filters 子进程比 -version 慢一个数量级，
-          // 不能让状态轮询每次都付这份代价。
+          // "功能报错，可状态栏说已安装"。只在**有 ffmpeg 时**才查，结果走缓存，
+          // 不让状态轮询每次都付两条子进程的代价。
           let health = { ok: true, problems: [] };
           if (r.ok) {
             try { health = await cachedFfmpegHealth(r.ffmpeg); } catch { /* ignore */ }
@@ -4852,7 +4819,7 @@ export function createRoutes(deps) {
     },
     {
       // 启动下载安装任务。GET ?job=1 读进度（形态与 /api/wallpaper/import 一致）。
-      // 会写磁盘，所以要 keyEndpointAllowed —— 挡的是外部网页冒用 127.0.0.1。
+      // 会写磁盘，所以要 keyEndpointAllowed，挡的是外部网页冒用 127.0.0.1。
       method: '*', pattern: '/api/ffmpeg/download',
       handler: async ({ req, res, url, json }) => {
         if (req.method !== 'GET' && req.method !== 'POST') {
@@ -4878,7 +4845,7 @@ export function createRoutes(deps) {
       }
     },
     {
-      // 验证手动指定的 ffmpeg 路径（只验证，不写配置 —— 写配置走 POST /api/config）。
+      // 验证手动指定的 ffmpeg 路径（只验证，不写配置，写配置走 POST /api/config）。
       method: 'POST', pattern: '/api/ffmpeg/test',
       handler: async ({ req, res, json }) => {
         if (!keyEndpointAllowed(req)) return json(res, 403, { ok: false, error: '请求来源不被信任' });
@@ -4915,7 +4882,7 @@ export function createRoutes(deps) {
         }
       }
     },
-    // ── 控制台壁纸（内置模块 src/wallpaper，2026-10-23 由交接包内置化）──────────
+    // ── 控制台壁纸（内置模块 src/wallpaper）──────────────────────────────
     // 这些路由**不 import 模块代码**，一律经 skillManager.getCapabilityProviders()
     // 拿能力函数的引用（与 doctor / forge 同款）。模块没注册上时统一 404。
     {
@@ -4955,8 +4922,8 @@ export function createRoutes(deps) {
         let st;
         try { st = fs.statSync(r.path); } catch { return json(res, 404, { ok: false, error: '文件不存在' }); }
         // 缓存策略分两类：
-        //   预览图 —— 内容随 id 不变，缓存一天（启动秒出、缩略图不重下）。
-        //   媒体（视频/循环）—— 同一 URL 会在「转动态」后换成另一个文件
+        //   预览图：内容随 id 不变，缓存一天（启动秒出、缩略图不重下）。
+        //   媒体（视频/循环）：同一 URL 会在「转动态」后换成另一个文件
         //     （4K 原片 → 1080p 循环），max-age 会让播放器一直拿缓存的旧片
         //     最长一天！改 no-cache + ETag：内容没变 304（缓存照用，只多一次
         //     回环确认），变了立刻拿新文件。
@@ -4974,7 +4941,7 @@ export function createRoutes(deps) {
           res.end();
           return;
         }
-        // 流式响应。两个错误口都要堵住：流读失败、客户端中途关连接（拖动视频时常见）——
+        // 流式响应。两个错误口都要堵住：流读失败、客户端中途关连接（拖动视频时常见），
         // 不处理的话 unhandled 'error' 会走进程级 uncaughtException 直接退出整个应用。
         const sendStream = (opts) => {
           const stream = fs.createReadStream(r.path, opts);
@@ -5019,7 +4986,7 @@ export function createRoutes(deps) {
     {
       // 壁纸当前状态：控制台每次保存会 POST 一份镜像过来；GET 供控制台
       // 启动时对齐（机器人改过壁纸时以远端为准）。这里只做能力中介，
-      // 不广播事件 —— 控制台改状态自己已生效，广播是 wallpaper-chat 部分的事。
+      // 不广播事件：控制台改状态自己已生效，广播是 wallpaper-chat 部分的事。
       method: '*', pattern: '/api/wallpaper/state',
       handler: async ({ req, res, json }) => {
         if (req.method !== 'GET' && req.method !== 'POST') {

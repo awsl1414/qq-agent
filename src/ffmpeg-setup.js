@@ -1,34 +1,28 @@
 // ffmpeg 按需下载安装：下载 → 校验 → 解压 → 验证 → 原子安装。
 //
-// ── 为什么不再随包分发 ────────────────────────────────────────────────
-// 旧方案把 79MB 的 runtime/ffmpeg.exe 打进安装包，安装包因此从 166.8MB 涨到
-// 186.3MB —— 而 ffmpeg 只有「大图压缩 / GIF 转视频 / 视频抽帧 / 动态壁纸」
-// 四项用得上，纯文字聊天的用户白付这份体积。现在改为设置页「媒体工具」按需
-// 下载到 data/runtime/ffmpeg/bin/，不下载也不影响启动与其它功能（各处都降级）。
+// 为什么不随包分发：旧方案把 79MB 的 runtime/ffmpeg.exe 打进安装包，安装包
+// 因此从 166.8MB 涨到 186.3MB，而 ffmpeg 只有「大图压缩 / GIF 转视频 /
+// 视频抽帧 / 动态壁纸」四项用得上，纯文字聊天的用户白付这份体积。现在改为
+// 设置页「媒体工具」按需下载到 data/runtime/ffmpeg/bin/，不下载也不影响
+// 启动与其它功能（各处都降级）。
 //
-// ── 为什么 Windows 上 7z 优先、zip 兜底 ───────────────────────────────
-// 同一个 9.0.2 版本：7z 33.8MB，zip 109.5MB，差 3.2 倍。两者都用 Windows
-// 自带的 System32\tar.exe（bsdtar / libarchive）解压 —— Node 标准库解不了 7z。
-// 极老系统上 bsdtar 可能没有 lzma 支持，所以解压失败时自动改下 zip 重试一次；
-// zip 走 store/deflate，bsdtar 的支持面最广。
+// Windows 上 7z 优先、zip 兜底：同一个 9.0.2 版本，7z 33.8MB，zip 109.5MB，
+// 差 3.2 倍。两者都用 Windows 自带的 System32\tar.exe（bsdtar / libarchive）
+// 解压（Node 标准库解不了 7z）。极老系统上 bsdtar 可能没有 lzma 支持，
+// 所以解压失败时自动改下 zip 重试一次。
 //
 // ⚠️ 必须写死 System32\tar.exe，不能用裸名 `tar`：装了 Git for Windows 的机器
-//    上 `where tar` 先命中 Git 的 **GNU tar**，它读不了 7z/zip（实测报
-//    "This does not look like a tar archive"）。这条坑很容易在测试机上踩到，
-//    因为开发机往往正好装了 Git。
+//    上 `where tar` 先命中 Git 的 GNU tar，它读不了 7z/zip（实测报
+//    "This does not look like a tar archive"）。开发机往往正好装了 Git。
 //
-// ── Linux 为什么不用 tar ──────────────────────────────────────────────
-// Linux 的资产是 riedl 的 zip，每个包解出来就是单个无扩展名的 ffmpeg /
-// ffprobe。这里**不能**复用 tar：Linux 上的 `tar` 绝大多数是 GNU tar，它
-// 根本不认识 zip 格式（`--include` 是 bsdtar 的选项，GNU tar 用 `--wildcards`
-// ——换参数也解决不了「格式不支持」）；而 bsdtar 在多数发行版里不是默认安装。
-// 所以 Linux 分支直接用 Node 的 zlib 读 zip 中央目录并解出目标条目，不依赖
-// 任何外部解压工具。
+// Linux 为什么不用 tar：资产是 riedl 的 zip，每个包解出来就是单个无扩展名的
+// ffmpeg / ffprobe。Linux 上的 `tar` 绝大多数是 GNU tar，它根本不认识 zip
+// 格式；而 bsdtar 在多数发行版里不是默认安装。所以 Linux 分支直接用 Node
+// 的 zlib 读 zip 中央目录并解出目标条目，不依赖任何外部解压工具。
 //
-// ── 安全 ──────────────────────────────────────────────────────────────
+// 安全：
 //   · 下载走 safe-fetch（DNS 校验 / IP 固定 / 逐跳重定向校验），不裸 fetch
-//   · 校验值写死在 ffmpeg-resolve.js，不依赖 GitHub API（API 限流、挂掉、
-//     镜像站被投毒都改不了这里的一个字节）
+//   · 校验值写死在 ffmpeg-resolve.js，不依赖 GitHub API
 //   · Windows 只解压 */bin/ffmpeg.exe 与 */bin/ffprobe.exe 两个条目；
 //     Linux 只解出 zip 里唯一的那个 ffmpeg / ffprobe，其余不落地
 //   · 装完必须真跑 -version 通过才算成功；失败回滚，不留半套
@@ -47,11 +41,11 @@ import {
 } from './ffmpeg-resolve.js';
 
 // ── 代理 ──────────────────────────────────────────────────────────────
-// 34MB 的包走 GitHub Release，在没有代理的网络里往往很慢甚至超时；有代理时
-// 能快一个数量级。复用用户在「连接模型」里配的 api.proxy，不另开一个代理
-// 设置项 —— 否则用户得在两处各填一遍，且容易只配了一处。
+// 34MB 的包走 GitHub Release，在没有代理的网络里往往很慢甚至超时。复用用户
+// 在「连接模型」里配的 api.proxy，不另开一个代理设置项，否则用户得在两处
+// 各填一遍，且容易只配了一处。
 //
-// 没配 api.proxy 时**读 Windows 的系统代理设置**（Internet Settings 的
+// 没配 api.proxy 时读 Windows 的系统代理设置（Internet Settings 的
 // ProxyEnable / ProxyServer）：Clash / Mihomo 这类工具默认只开系统代理，
 // 用户不会想到还要来本应用再填一次。
 //
@@ -116,7 +110,7 @@ export function __getProxyProbeForTest() {
 }
 /**
  * 镜像前缀表。都采用 gh-proxy 类站点的通用形态：`前缀 + 完整 GitHub 地址`。
- * 多个镜像并存是有意的 —— 某个站挂掉或限速时，用户换个源就能继续，
+ * 多个镜像并存是有意的，某个站挂掉或限速时，用户换个源就能继续，
  * 不用等发版。下载内容一律过 SHA-256，换源不影响安全性。
  */
 export const MIRRORS = {
@@ -135,19 +129,18 @@ export const MIRRORS = {
 export const DEFAULT_MIRROR = 'yylx';
 
 /**
- * 选出这次下载的**实际通道**：URL 前缀 + 走不走代理。
+ * 选出这次下载的实际通道：URL 前缀 + 走不走代理。
  *
- * ── 为什么要把这两件事合在一起决策 ──────────────────────────────────
- * 「镜像」和「代理」是两个正交开关，但组合错了会互相拖后腿：
+ * 镜像和代理是两个正交开关，但组合错了会互相拖后腿：
  *
  *   代理 + 镜像站  = 代理 → 国内镜像站 → GitHub。多绕一跳，通常比单用更慢；
  *   代理 + 官方直连 = 代理 → GitHub，实测 5.5MB/s（最优）；
  *   无代理 + 镜像站 = 镜像站 → GitHub，实测约 700KB/s（次优）；
  *   无代理 + 直连   = 官方，国内经常几十 KB/s 甚至超时（最差）。
  *
- * 所以规则是：**有可用代理就走官方直连、不用镜像**（镜像的意义就是替代代理）；
+ * 所以规则是：有可用代理就走官方直连、不用镜像（镜像的意义就是替代代理）；
  * 没有代理才用镜像加速。用户显式选了「自定义前缀」时尊重他的选择，但同样
- * 在检测到代理时提示 —— 自定义源可能是内网镜像，未必该绕过代理。
+ * 在检测到代理时提示，自定义源可能是内网镜像，未必该绕过代理。
  *
  * @returns {{ url: string, proxy: string, reason: string }}
  */
@@ -186,11 +179,10 @@ export async function resolveDownloadRoute(assetName, { mirror = DEFAULT_MIRROR,
 /**
  * Windows 资产的官方地址（前缀由用户选的镜像拼在前面）。
  *
- * **只服务 win32。** 这里拼的是 GyanD 的 GitHub Release 地址，镜像前缀也是
- * 按「前缀 + 完整 GitHub 地址」的形态设计的。Linux 的 riedl 资产自带完整
+ * 只服务 win32。这里拼的是 GyanD 的 GitHub Release 地址，镜像前缀也是按
+ * 「前缀 + 完整 GitHub 地址」的形态设计的。Linux 的 riedl 资产自带完整
  * `url`（带构建时间戳目录，没有稳定别名），既不能加镜像前缀，也不该让用户
- * 选的下载源影响它 —— 传进来只会拼出一个 404 地址。Linux 分支直接用资产里
- * 的 `url`，见 installLinux。
+ * 选的下载源影响它，传进来只会拼出一个 404 地址。
  */
 export function assetUrl(assetName, { mirror = DEFAULT_MIRROR, customMirror = '' } = {}) {
   const official = `https://github.com/GyanD/codexffmpeg/releases/download/${FFMPEG_VERSION}/${assetName}`;
@@ -206,13 +198,12 @@ export function assetUrl(assetName, { mirror = DEFAULT_MIRROR, customMirror = ''
  *
  * 为什么要按主机收紧，而不是「github.com 系的域都带上」：代理节点是共享出口 IP
  * 时，匿名请求按 IP 限流（60 次/小时），带 Token 后按 Token 计额度（5000 次/小时）
- * —— 这正是这个设置项存在的理由。但 Token 是用户凭据，只能交给 GitHub 自己。
+ *，这正是这个设置项存在的理由。但 Token 是用户凭据，只能交给 GitHub 自己。
  *
  * ⚠️ 不能靠「URL 里含 github.com」判断：镜像站的前缀形态恰好是
  *    `https://镜像站/https://github.com/...`，按字符串匹配会把 Token 发给镜像站。
  *    必须按 URL 的 hostname 精确匹配。
- */
-export const GITHUB_AUTH_HOSTS = new Set([
+ */export const GITHUB_AUTH_HOSTS = new Set([
   'github.com',
   'api.github.com',
   'codeload.github.com',
@@ -230,7 +221,7 @@ export function githubToken() {
  *
  * 下载会被 302 到 `objects.githubusercontent.com` / `release-assets.githubusercontent.com`
  * 这些资产域（仍是 GitHub 的），所以它们也在白名单里；镜像站与自定义前缀
- * 一律返回 null —— 一个字节的凭据都不外发。
+ * 一律返回 null，一个字节的凭据都不外发。
  *
  * @param {URL|string} target
  * @param {string} token
@@ -269,10 +260,10 @@ export function sha256OfFile(file) {
  * 找解压用的 tar。
  *
  * 只认系统自带的 bsdtar（libarchive）。GNU tar 读不了 7z/zip，而 Git for
- * Windows 会把自己的 GNU tar 放进 PATH —— 所以不能用裸名，必须写死 System32。
+ * Windows 会把自己的 GNU tar 放进 PATH，所以不能用裸名，必须写死 System32。
  *
  * 非 Windows 平台返回裸名，但当前只有 Windows 安装路径会调用它：Linux 的
- * zip 由 extractSingleZipEntry 处理（Linux 的 `tar` 通常是 GNU tar，解不了 zip）。
+ * zip 由 extractSingleZipEntry 处理。
  */
 export function tarPath() {
   if (process.platform === 'win32') {
@@ -312,8 +303,8 @@ function run(cmd, args, timeoutMs = 180000) {
  * 全解出来既慢又多写盘。bsdtar 的 --include 是 glob 匹配完整条目名，
  * 包内路径固定形如 `ffmpeg-9.0.2-essentials_build/bin/ffmpeg.exe`。
  *
- * 这里的前提是「Windows 包内一定有 bin/ 目录」。Linux 包不是这个结构，
- * 也不走 tar（见文件头的「Linux 为什么不用 tar」），由 extractSingleZipEntry 处理。
+ * 前提是「Windows 包内一定有 bin/ 目录」。Linux 包不是这个结构，
+ * 由 extractSingleZipEntry 处理。
  */
 async function extractBinaries(pkgFile, destDir) {
   const tar = tarPath();
@@ -367,8 +358,6 @@ const ZIP_SIG_LOCAL = 0x04034b50;
  * 只认「包内恰好一个文件且名字等于 baseName」：riedl 的包就是单条目 zip，
  * 多条目或名字对不上说明下载到了别的东西，直接失败而不是猜。
  *
- * @param {string} zipFile
- * @param {string} destDir
  * @param {string} baseName  期望的条目名（'ffmpeg' / 'ffprobe'）
  * @returns {string} 解出的文件路径
  */
@@ -413,7 +402,7 @@ function extractSingleZipEntry(zipFile, destDir, baseName) {
   const dest = path.join(destDir, baseName);
   fs.mkdirSync(destDir, { recursive: true });
   fs.writeFileSync(dest, data);
-  // 必须**在这里**给执行位，不能等到 installBinaries：调用方紧接着要 spawn
+  // 必须在这里给执行位，不能等到 installBinaries：调用方紧接着要 spawn
   // 这个文件跑 -version 做验证，没有执行位会直接 EACCES，把一次正常安装判成
   // "解压出来的 ffmpeg 无法运行"。zip 条目本身不携带执行位。
   fs.chmodSync(dest, 0o755);
@@ -467,7 +456,7 @@ function succeed() {
 /**
  * 下载并安装 ffmpeg。
  *
- * 返回 { ok, error?, code?, path?, version?, source? }。失败不会抛 —— 调用方是
+ * 返回 { ok, error?, code?, path?, version?, source? }。失败不会抛，调用方是
  * HTTP 路由，抛错会变成 500 且 UI 拿不到分步原因。
  *
  * `code` 用于区分失败类别：'use_package_manager' 表示该平台不支持程序内
@@ -487,7 +476,7 @@ export async function downloadAndInstallFfmpeg(opts = {}) {
   const mirror = String(opts.mirror || cfg?.media?.downloadMirror || DEFAULT_MIRROR);
   const customMirror = String(opts.customMirror ?? cfg?.media?.customMirror ?? '');
   // 镜像 / 自定义源只对 Windows 的 GyanD 资产有意义（Linux 的 riedl 地址自带
-  // 完整 URL），所以 Linux 上不拿它拦人 —— 否则一个写坏的自定义源会让本来
+  // 完整 URL），所以 Linux 上不拿它拦人，否则一个写坏的自定义源会让本来
   // 跟它无关的 Linux 下载也启动不了。
   if (process.platform === 'win32' && mirror === 'custom' && !isValidMirrorPrefix(customMirror)) {
     return { ok: false, error: '自定义下载源格式不对，应形如 https://git.yylx.win/' };
@@ -544,8 +533,7 @@ async function installWindows({ work, mirror, customMirror }) {
  * 不复用 tryInstallFormat 的原因：那里的资产是「同一份内容的两种压缩格式」，
  * 这里是「两个不同的文件」，进度、失败语义（任一失败即整体失败）都不同。
  *
- * 为什么只下 zip 不试 7z：riedl 只提供 zip，且 Linux 上的 GNU tar 解不了
- * 7z（bsdtar 未必安装）。解压用 extractSingleZipEntry，不依赖外部工具。
+ * 只下 zip 不试 7z：riedl 只提供 zip，且 Linux 上的 GNU tar 解不了 7z。
  */
 async function installLinux({ work }) {
   const assets = platformAssets('linux');
@@ -605,7 +593,7 @@ async function installLinux({ work }) {
     }
   }
 
-  // ffprobe 在 Linux 上是**必需**的：它是单独下载的，缺了说明流程本身出了问题，
+  // ffprobe 在 Linux 上是必需的：它是单独下载的，缺了说明流程本身出了问题，
   // 不能像 Windows 那样"旧包没有就跳过"。
   return installBinaries(found);
 }
@@ -625,7 +613,7 @@ async function tryInstallFormat(fmt, { work, mirror, customMirror }) {
     state.step = `下载 ffmpeg ${FFMPEG_VERSION}（${fmt}，约 ${Math.round(asset.bytes / 1048576)}MB）· ${route.reason}`;
     state.channel = route.reason;
     // GitHub Token 只发给 GitHub 自己的主机，逐跳判断（见 githubAuthHeaders）。
-    // 镜像站是第三方，把 Token 递过去等于把凭据交给它 —— 这也是为什么不能
+    // 镜像站是第三方，把 Token 递过去等于把凭据交给它，这也是为什么不能
     // 统一传 headers：safeFetchBinaryToFile 每一跳都会复用同一份请求头。
     const ghToken = githubToken();
     const headersForHost = ghToken ? (u) => githubAuthHeaders(u, ghToken) : null;
@@ -691,7 +679,7 @@ function installBinaries(found) {
   fs.mkdirSync(staging, { recursive: true });
   const destFfmpeg = path.join(staging, exeName('ffmpeg'));
   fs.copyFileSync(found.ffmpeg, destFfmpeg);
-  // Linux 上 zip 条目未必带执行位，copyFile 会原样保留该属性 —— 不显式 chmod
+  // Linux 上 zip 条目未必带执行位，copyFile 会原样保留该属性，不显式 chmod
   // 就会出现"文件在、-version 跑不起来"。Windows 没有执行位概念，no-op。
   fs.chmodSync(destFfmpeg, 0o755);
   if (found.ffprobe) {
@@ -700,7 +688,7 @@ function installBinaries(found) {
     fs.chmodSync(destFfprobe, 0o755);
   }
 
-  // 旧目录先挪开，成功后删除；失败则挪回 —— 不能让用户从"能用"变成"没有"
+  // 旧目录先挪开，成功后删除；失败则挪回，不能让用户从"能用"变成"没有"
   const backup = `${destDir}.old-${process.pid}-${Date.now().toString(36)}`;
   let hadOld = false;
   try {

@@ -1,18 +1,16 @@
-// 开发工单的执行器 —— 「开发模式」的一轮对话。
+// 开发工单的执行器：「开发模式」的一轮对话。
 //
-// 与旧版（单次产出 + dev_finish）的关键差别：**这是一场持续的对话**。
+// 这是一场持续的对话，不是单次产出：
 //   · 上下文 = 系统提示 + 历史对话（文本轮） + 本轮用户消息；
 //   · 模型边聊边改：文件工具 + dev_run（在项目根执行命令）；
 //   · 模型停下（不再调工具）时的文字 = 本轮的回复（会被直接发到 QQ / 显示在页面）。
 //
 // 权限立场（用户明确要求：白名单就是最大的信任）：
-//   · 文件工具以**项目根**为界 —— 项目内任意路径可读可写（含 data/、.workbuddy/）；
+//   · 文件工具以**项目根**为界：项目内任意路径可读可写（含 data/、.workbuddy/）；
 //   · dev_run 在项目根**启动 shell 执行任意命令**。
-//     ⚠️ cwd 只是**起始目录，不是沙箱**：命令能 cd 到别处、按绝对路径读写项目外文件、
-//     执行任意程序、连任意主机。所以"不越出项目目录"**只对文件工具有效，对 dev_run 不成立**。
-//     （2026-10-08 第三轮审查纠正：此前这里与 plugin.json / 系统提示词都写着
-//      "硬边界 = 不越出项目根"，会让人误以为 dev_run 也被限制在项目内。）
-//   · 防御纵深上，文件工具还缺 realpath 校验（junction 可绕过），见审查报告 P0-1。
+//     cwd 只是**起始目录，不是沙箱**：命令能 cd 到别处、按绝对路径读写项目外文件、
+//     执行任意程序、连任意主机。所以"不越出项目目录"只对文件工具有效。
+//   · 文件工具还缺 realpath 校验（junction 可绕过），属已知缺口。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -28,47 +26,38 @@ import { unzipToModuleDir } from '../../zip-install.js';
 const MAX_FILE_BYTES = 1024 * 1024;        // 单文件 1MB
 const MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 const MAX_FILE_COUNT = 120;
-// ⚠️ 这几个"单次工具结果"的上限直接决定**缓存命中率**（2026-10-09 实测）：
-//   前缀缓存只在"重复的前缀"上命中，**每一轮新塞进上下文的字符 100% 是 miss**。
-//   日志实测：每轮新增的中位数只有 586 字符，但 p90 是 20947 —— 极少数几轮
-//   把读文件/命令输出的大块塞进来，就把 miss 预算全吃掉了（代理命中率 53.5%）。
-//   级联模拟（真实数据）：单轮新增压到 8k → 命中率 53.5%→66.2%，总 prompt 还少 19%
-//   （省的是真金白银）。所以：**读文件改成"分页"**（模型只取需要的那段），
-//   并把命令输出/网页的上限一并下调。
-const MAX_READ_CHARS = 8000;               // 单页最多多少字符（原 60000 —— 一次就把整轮预算吃光）
+// 这几个"单次工具结果"的上限直接决定**缓存命中率**：前缀缓存只在重复的前缀上命中，
+// 每一轮新塞进上下文的字符 100% 是 miss。实测每轮新增的中位数只有 586 字符，
+// 但 p90 是 20947：极少数几轮把读文件/命令输出的大块塞进来，就把 miss 预算吃光了。
+// 所以读文件改成分页（模型只取需要的那段），命令输出与网页上限一并下调。
+const MAX_READ_CHARS = 8000;               // 单页最多多少字符
 const MAX_READ_LINES = 400;                // 单页最多多少行
-const MAX_RUN_OUTPUT = 6000;               // 命令输出（原 18000）
-const MAX_FETCH_CHARS = 12000;             // 网页正文（原 24000）
+const MAX_RUN_OUTPUT = 6000;               // 命令输出
+const MAX_FETCH_CHARS = 12000;             // 网页正文
 // 单轮（一次模型回复触发的所有工具调用的结果合计）最多往上下文里塞多少字符。
-// 为什么需要：单个工具的上限管不住"一轮里连读 3 个文件" —— 3×8k 又是 24k。
-// 这一层直接对应上面那张模拟表（单轮新增 8k → 命中率 66%）。
-// 超了就地截断并告诉模型"用更精确的取法"（offset / findstr），不是静默丢弃。
+// 单个工具的上限管不住"一轮里连读 3 个文件"。超了就地截断并告诉模型用更精确的取法
+// （offset / findstr），不是静默丢弃。
 const MAX_ROUND_ADD_CHARS = 10000;
 const DEFAULT_RUN_TIMEOUT = 60;            // 秒
 
-// ── 上下文预算（2026-10-15 加）──────────────────────────────────────────────
+// ── 上下文预算 ─────────────────────────────────────────────────────────────
 //
-// 背景（用户报「随着会话量增多，他爆了，并且只能记单次对话」）：
-//   开发模式的上下文是**追加式**的（上一轮结束时的完整消息数组 + 本轮新增），
-//   这是为了前缀缓存命中率（见 runTurn 里的长注释）。代价是它会一直长：
-//     · 轮末 saveCtx 只在 >40 万字符时才压一次，而**单轮**最多能加
-//       maxRounds(120) × MAX_ROUND_ADD_CHARS(10k) = 120 万字符 ——
-//       也就是说一轮跑到一半就可能超模型窗口，上游返回 400
-//       context_length_exceeded，而 400 在 isRetryableError 里判为不可重试
-//       → 这一轮直接失败，且**没有自愈路径**（会话就此卡住）；
-//     · 压完之后只剩最近 CTX_KEEP_TAIL(40) 条 —— 连"最初那句需求"都丢了，
-//       于是表现成"只能记单次对话"。
-// 现在两道闸：
+// 开发模式的上下文是**追加式**的（上一轮结束时的完整消息数组 + 本轮新增），
+// 这是为了前缀缓存命中率（见 runTurn 里的长注释）。代价是它会一直长：
+//   单轮最多能加 maxRounds(120) × MAX_ROUND_ADD_CHARS(10k) = 120 万字符，
+//   跑到一半就可能超模型窗口，上游返回 400 context_length_exceeded，
+//   而 400 在 isRetryableError 里判为不可重试 → 这一轮直接失败且没有自愈路径。
+// 两道闸：
 //   ① 每次请求前按预算裁（落点对齐到 user 消息，系统提示与"当前这一轮的 user
-//      消息及其之后"永远保留），并把"最初的需求"写进省略提示里 —— 任务本身不丢；
-//   ② 万一还是撞了 context_length_exceeded → 预算减半再试一次（自愈，不再硬失败）。
-// 预算默认 40 万字符（沿用 2026-10-09 用户"别压"的拍板），可在
-// harness → 开发工单 → 模型设置 里调小；环境变量 QQ_AGENT_DEV_CTX_BUDGET 也可覆盖。
+//      消息及其之后"永远保留），并把"最初的需求"写进省略提示，任务本身不丢；
+//   ② 万一还是撞了 context_length_exceeded → 预算减半再试一次。
+// 预算默认 40 万字符（用户拍板"别压"），可在 harness → 开发工单 → 模型设置 里调小；
+// 环境变量 QQ_AGENT_DEV_CTX_BUDGET 也可覆盖。
 const DEV_CTX_CHAR_BUDGET_DEFAULT = 400 * 1024;
 // 读配置时的下限（防止有人把预算填成 100 字符）；撞超限后自愈时可以降得更低
 const DEV_CTX_MIN_BUDGET = 32 * 1024;
 const DEV_CTX_RESCUE_MIN = 8 * 1024;
-// 裁到预算的多少 —— 留出余量，否则每加一轮就再裁一次，前缀每轮都断（缓存全 miss）
+// 裁到预算的多少：留出余量，否则每加一轮就再裁一次，前缀每轮都断（缓存全 miss）
 const DEV_CTX_TRIM_TARGET = 0.7;
 export const CTX_NOTE_PREFIX = '【上下文压力】';
 
@@ -94,10 +83,10 @@ function ctxNoteText(dropped, requirement) {
  * 把消息数组裁到字符预算内。
  *
  * 规则（每一条都有原因，别随手改）：
- *   · 系统提示（role:system）永远保留 —— 它是行为约定，丢了模型就不是它了；
+ *   · 系统提示（role:system）永远保留：它是行为约定，丢了模型就不是它了；
  *   · 从最前面丢，**落点必须是 user 消息**：从 assistant(tool_calls) 中间开始会让
  *     "带 tool_calls 的 assistant 后面没有对应 tool 结果"，API 直接 400；
- *   · **最后一条 user 消息及其之后的内容永远保留** —— 那是"当前这一轮在干什么"；
+ *   · **最后一条 user 消息及其之后的内容永远保留**：那是"当前这一轮在干什么"；
  *   · 被丢掉的部分用一条 user 提示代替，并把最初的需求带上（防"失忆"）。
  *
  * @param {Array} msgs
@@ -109,9 +98,9 @@ export function trimMessagesToBudget(msgs, budget, reserve = 0) {
   const list = Array.isArray(msgs) ? msgs : [];
   const sizeOf = (a) => { try { return JSON.stringify(a).length; } catch { return 0; } };
   const overhead = Math.max(0, Number(reserve) || 0);
-  // ⚠️ 这里**只做 1KB 的防呆**，不套用 DEV_CTX_MIN_BUDGET —— 下限属于"读配置"的地方
-  //   （executor 的 budgetNow / index.js 的 ctxBudget）。套在这里会让"预算减半重试"
-  //   这类调用悄悄被抬回 32K，自愈就失效了。
+  // 这里**只做 1KB 的防呆**，不套用 DEV_CTX_MIN_BUDGET：下限属于"读配置"的地方
+  // （executor 的 budgetNow / index.js 的 ctxBudget）。套在这里会让"预算减半重试"
+  // 这类调用悄悄被抬回 32K，自愈就失效了。
   const limit = Math.max(1024, Number(budget) || DEV_CTX_CHAR_BUDGET_DEFAULT);
   const total = sizeOf(list) + overhead;
   if (total <= limit) return { messages: list, dropped: 0, chars: total, trimmed: false };
@@ -122,7 +111,7 @@ export function trimMessagesToBudget(msgs, budget, reserve = 0) {
   const oldNote = (head.length ? list.slice(1) : list).find(isCtxNote);
 
   // 按 user 消息切"段"：一段 = [user, ...这一轮的全部 assistant/tool 足迹]。
-  // 段的边界必须落在 user 上 —— 从 assistant(tool_calls) 中间开始会被 API 400。
+  // 段的边界必须落在 user 上：从 assistant(tool_calls) 中间开始会被 API 400。
   const segs = [];
   for (const m of body) {
     if (m?.role === 'user' || !segs.length) segs.push([m]);
@@ -169,7 +158,7 @@ export function trimMessagesToBudget(msgs, budget, reserve = 0) {
   const dropped = (body.length - kept.length);
   if (dropped <= 0) return { messages: list, dropped: 0, chars: total, trimmed: false };
 
-  // 「最初的需求」：**优先用旧提示里的** —— 裁剪会反复发生，用"当前还在的第一条 user"
+  // 「最初的需求」：**优先用旧提示里的**：裁剪会反复发生，用"当前还在的第一条 user"
   // 会让需求一轮一轮往后漂（第一次是任务本身，第三次就变成"第 25 轮的需求"了）。
   const firstUser = body.find((m) => m?.role === 'user' && typeof m.content === 'string' && m.content.trim());
   const requirement = (oldNote ? noteRequirement(oldNote.content) : '')
@@ -223,11 +212,10 @@ export function toolLabel(name, args = {}) {
 /**
  * 极简 HTML → 文本（查文档用：剥脚本/样式/标签，还原常见实体，压空白）。
  *
- * ⚠️ 必须**线性**实现：旧版用 `/<[^>]+>/g`、`/<script[\s\S]*?<\/script>/gi` 这类
- *   回溯正则，遇到"大量 `<` 而缺少 `>`"的输入会逐个位置回扫 —— 实测
- *   20k/40k/60k 个 `<` 耗时 207/837/1865 ms（约平方增长），20 万量级将到 ~20 秒。
- *   它跑在插件主进程，一次抓取就能冻住整个应用（QQ 收发全停）。
- *   改成手写单遍扫描后，任意输入都是 O(n)。
+ * 必须**线性**实现：用 `/<[^>]+>/g`、`/<script[\s\S]*?<\/script>/gi` 这类回溯正则，
+ * 遇到"大量 `<` 而缺少 `>`"的输入会逐个位置回扫。实测 20k/40k/60k 个 `<`
+ * 耗时 207/837/1865 ms（约平方增长），20 万量级将到约 20 秒。它跑在插件主进程，
+ * 一次抓取就能冻住整个应用（QQ 收发全停）。手写单遍扫描后任意输入都是 O(n)。
  */
 const MAX_HTML_CHARS = 200000;
 const BLOCK_TAGS = new Set(['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'tr', 'section', 'article', 'br']);
@@ -272,12 +260,11 @@ export function htmlToText(html) {
 /**
  * 把 safeFetch 的返回值渲染成给模型看的文本。
  *
- * ⚠️ safeFetch 返回的是**普通对象** `{ url, statusCode, truncated, body }`
- *   （见 src/safe-fetch.js），**不是** fetch 的 Response。
- *   2026-10-08 之前 dev_fetch 按 Response 消费（`res.headers.get()` / `res.text()`），
- *   每次都抛 `res.text is not a function`，被 catch 成"抓取失败" ——
- *   这个工具**从未真正工作过**。
- *   单独抽成纯函数，是为了能在测试里直接驱动（不依赖网络）。
+ * safeFetch 返回的是**普通对象** `{ url, statusCode, truncated, body }`
+ * （见 src/safe-fetch.js），**不是** fetch 的 Response。按 Response 消费
+ * （`res.headers.get()` / `res.text()`）会每次都抛 `res.text is not a function`，
+ * 被 catch 成"抓取失败"，这个工具就从未真正工作过。
+ * 单独抽成纯函数，是为了能在测试里直接驱动（不依赖网络）。
  */
 export function formatFetchedText(res, url) {
   const raw = String(res?.body ?? '');
@@ -295,14 +282,14 @@ export function formatFetchedText(res, url) {
     + (body.length > MAX_FETCH_CHARS ? `\n…（已截断到 ${MAX_FETCH_CHARS} 字符）` : '');
 }
 
-// ── 「正在连接 X…」（思考前提示，2026-10-08 用户要求）──────────────────────
+// ── 「正在连接 X…」（思考前提示）───────────────────────────────────────────
 //
-// 目的：开发模式一次回复可能要跑几十秒到几分钟，群里看不出机器人在不在干活。
+// 开发模式一次回复可能要跑几十秒到几分钟，群里看不出机器人在不在干活。
 // 每轮开始思考前先回一句，让人知道「它开始想了」。
 //
 // 厂商名规则：**英文品牌名保持原文**（Anthropic / OpenAI / Google / xAI …），
 // 中文厂商用中文（深度求索 / 智谱 / 通义千问…）；认不出来就回退到**模型名本身**
-// —— 宁可显示「正在连接 some-model…」也不瞎猜厂商。
+//。宁可显示「正在连接 some-model…」也不瞎猜厂商。
 const PROVIDER_RULES = [
   [/deepseek/i, '深度求索'],
   [/claude|anthropic/i, 'Anthropic'],
@@ -340,21 +327,21 @@ export function thinkingNoticeText(model) {
 /**
  * 思考前提示的节流判定（导出便于测试）。
  *
- * 第 0 轮**一定**发 —— 那才是"他开始思考了"的信号；
+ * 第 0 轮**一定**发。那才是"他开始思考了"的信号；
  * 之后按最小间隔节流：`maxRounds` 默认 120，一个复杂任务能连跑上百个工具轮，
- * 不加间隔会把群刷屏（2026-10-08 用户明确要求 20 秒）。
+ * 不加间隔会把群刷屏。
  */
 export function shouldSendNotice(round, lastAtMs, nowMs, gapMs) {
   if (!Number(round)) return true;
   return Number(nowMs) - Number(lastAtMs || 0) >= Math.max(0, Number(gapMs) || 0);
 }
 
-// ── 拓展广场（kondius.cn）搜索 / 拉取（2026-10-08 用户要求）─────────────────
+// ── 拓展广场（kondius.cn）搜索 / 拉取 ──────────────────────────────────────
 //
-// 为什么要它：做新插件时广场里很可能已经有实现得差不多的了（当前 144 个），
-// 从零搭纯属浪费。所以给开发 agent 一个"先搜广场 → 有就直接拉下来改"的入口。
+// 为什么要它：做新插件时广场里很可能已经有实现得差不多的了，从零搭纯属浪费。
+// 所以给开发 agent 一个"先搜广场 → 有就直接拉下来改"的入口。
 //
-// ⚠️ 拉取**只落开发沙箱**（`<会话>/pulled/`），不直接装进 `resources/app/plugins|skills/`：
+// 拉取**只落开发沙箱**（`<会话>/pulled/`），不直接装进 `resources/app/plugins|skills/`：
 //   · 装进去会被文件监听 + 热重载立刻加载，纯逻辑插件会**未经确认就生效**；
 //   · 第三方还要过准入闸（含 fs/网络的会被拦下等信任），体验也不顺。
 //   落沙箱 → 模型先读先改 → 采用时再把（改过的）文件写进 plugins/ 并重算基线。
@@ -417,7 +404,7 @@ function resolveShotUrl(raw, projectRoot) {
   return pathToFileURL(abs).href;
 }
 
-/** Electron 离屏窗口截图（懒加载 electron —— 纯 node 环境（测试）里会抛，工具层接住）。 */
+/** Electron 离屏窗口截图（懒加载 electron：纯 node 环境（测试）里会抛，工具层接住）。 */
 async function captureWithElectron(url, { width, height, waitMs }) {
   const mod = await import('electron');
   const BrowserWindow = mod?.BrowserWindow || mod?.default?.BrowserWindow;
@@ -443,7 +430,7 @@ async function captureWithElectron(url, { width, height, waitMs }) {
   }
 }
 
-/** 在项目根执行一条命令（异步 spawn —— 不阻塞主进程）。 */
+/** 在项目根执行一条命令（异步 spawn：不阻塞主进程）。 */
 function runCommand(command, cwd, timeoutMs) {
   return new Promise((resolve) => {
     let child;
@@ -477,7 +464,7 @@ function runCommand(command, cwd, timeoutMs) {
 }
 
 /**
- * 构造工具集（闭包绑死项目根与计数器 —— 工具自己不可能"忘了"边界）。
+ * 构造工具集（闭包绑死项目根与计数器：工具自己不可能"忘了"边界）。
  * @returns {{defs: Array, bag: object}}
  */
 export function buildDevTools(projectRoot, workDir) {
@@ -517,7 +504,7 @@ export function buildDevTools(projectRoot, workDir) {
           let body = all.slice(from, from + limit).join('\n');
           let cut = '';
           if (body.length > MAX_READ_CHARS) {
-            // 按"最后一个完整换行"截断 —— 这样 offset=下一页 能精确接上：
+            // 按"最后一个完整换行"截断：这样 offset=下一页 能精确接上。
             // 不给模型半行代码，也不会漏掉一行。
             const at = body.lastIndexOf('\n', MAX_READ_CHARS);
             body = at > 0 ? body.slice(0, at) : body.slice(0, MAX_READ_CHARS);
@@ -872,7 +859,7 @@ function buildSysPrompt(projectRoot, workDir) {
  * @returns {Promise<string>} 本轮的回复文本（模型的最后一段话；空则返回空串）
  */
 
-/** 只保留 API 认得的字段 —— 存盘再读回来时别夹带多余键（严格端点会 400）。 */
+/** 只保留 API 认得的字段：存盘再读回来时别夹带多余键（严格端点会 400）。 */
 function sanitizeMsg(m) {
   if (!m || typeof m !== 'object') return null;
   if (m.role === 'tool') return { role: 'tool', tool_call_id: m.tool_call_id, name: m.name, content: m.content };
@@ -890,13 +877,13 @@ export async function runTurn({ session, userText, userFrom, history, priorMessa
   const emit = (e) => { try { onEvent?.(e); } catch { /* 记录失败不影响执行 */ } };
   const { defs, bag } = buildDevTools(projectRoot, workDir);
   const openAiTools = toOpenAiTools(defs);
-  // 工具 schema 不在 messages 里，但真实请求体里有 —— 算预算时必须带上
+  // 工具 schema 不在 messages 里，但真实请求体里有：算预算时必须带上
   const toolsChars = (() => { try { return JSON.stringify(openAiTools).length; } catch { return 0; } })();
   // 本轮的上下文预算（可被"撞了超限"这一步减半，见下面的 catch）
   let budgetNow = Math.max(DEV_CTX_MIN_BUDGET,
     Number(ctxCharBudget) || Number(process.env.QQ_AGENT_DEV_CTX_BUDGET) || DEV_CTX_CHAR_BUDGET_DEFAULT);
 
-  // 模型凭据优先级（2026-10-08：开发模式对模型能力要求高，可单独指强模型）：
+  // 模型凭据优先级：开发模式对模型能力要求高，可单独指强模型。
   //   「开发工单 → 模型设置」（devApi） > 自检专用（doctorApi） > 全局聊天模型
   const cfg = getConfig();
   const pick = (o) => (o && o.enabled === true && String(o.model || '').trim() ? o : null);
@@ -912,11 +899,10 @@ export async function runTurn({ session, userText, userFrom, history, priorMessa
       ? '开发专用模型未填 model（harness → 开发工单 → 模型设置）'
       : '尚未配置聊天模型（设置 → 模型与搜索 → 模型 API）');
   }
-  // ⚠️ 与正常对话**共用同一个模型**时，两者的前缀缓存会互相挤占
-  //（前缀缓存的容量按账号/模型共享，谁的上下文大谁挤谁）。
-  // 开发模式的上下文现在更长（追加式），更容易把正常对话的前缀挤出去
-  // —— 2026-10-09 用户报"开发模式和正常对话互相影响，影响了正常对话的缓存命中率"。
-  // 给一个明确警告 + 指路（不强制：换模型是用户的选择）。
+  // 与正常对话**共用同一个模型**时，两者的前缀缓存会互相挤占
+  // （前缀缓存的容量按账号/模型共享，谁的上下文大谁挤谁）。开发模式的上下文
+  // 更长（追加式），更容易把正常对话的前缀挤出去。给一个明确警告 + 指路
+  // （不强制：换模型是用户的选择）。
   if (!overrides?.model || overrides.model === cfg.api?.model) {
     log(`⚠️ 开发模式与正常对话共用模型「${modelName}」—— 两者的前缀缓存会互相挤占。`
       + '建议在 harness → 开发工单 → 模型设置 里给开发模式配一个**不同的模型**（缓存池就分开了）。');
@@ -924,11 +910,10 @@ export async function runTurn({ session, userText, userFrom, history, priorMessa
 
   const messages = [{ role: 'system', content: buildSysPrompt(projectRoot, workDir) }];
   // ── 上下文 = **上一次请求的完整消息数组**（含 assistant/tool），只在尾部追加 ──
-  // 为什么这样写（2026-10-09，借鉴 DSH）：前缀缓存只认"严格扩展"——
+  // 为什么这样写（借鉴 DSH）：前缀缓存只认"严格扩展"。
   //   请求 N+1 必须是请求 N 的前缀 + 新尾部，才会命中。
-  //   原来这里用 `loadHistory` 的 {role,text} 文本历史重建 messages，**把 tool 消息全丢了**
-  //   → 每一轮的前缀都在 `user_N` 处断掉，上一轮整段工具足迹白付；
-  //   再加上每轮塞进来的大块，命中率就只剩 55%。
+  //   用 `loadHistory` 的 {role,text} 文本历史重建 messages 会**把 tool 消息全丢了**
+  //   → 每一轮的前缀都在 `user_N` 处断掉，上一轮整段工具足迹白付。
   //   DSH 是同一条路走到底：整段对话作为只追加的事件流一直带着
   //   （实测它的 context 46 万 token、cacheRead 2.45 亿 / uncached 39.6 万 = 99.84%）。
   // 兼容：调用方只给老的文本历史时（首轮迁移），映射进来。
@@ -957,9 +942,9 @@ export async function runTurn({ session, userText, userFrom, history, priorMessa
 
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), Math.max(30, Number(timeoutSec) || 300) * 1000);
-  // 把"中止"这个动作交给调用方（界面的「中止」按钮）—— 没有它，跑飞的一轮只能干等
+  // 把"中止"这个动作交给调用方（界面的「中止」按钮）。没有它，跑飞的一轮只能干等
   // 最长 turnTimeoutSec（默认 1 小时），而且全局单飞会把**其它**会话一起堵住，
-  // 用户看到的就是"卡死"（2026-10-08 报障）。
+  // 用户看到的就是"卡死"。
   if (abortBox && typeof abortBox === 'object') {
     abortBox.abort = (reason) => {
       try { ac.abort(reason instanceof Error ? reason : new Error(String(reason || '用户中止'))); } catch { /* ignore */ }
@@ -1016,7 +1001,7 @@ export async function runTurn({ session, userText, userFrom, history, priorMessa
         });
       } catch (e) {
         if (e?.code === 'context_length_exceeded') {
-          // 自愈：预算减半、丢掉更早的历史再试一次 —— 不再硬失败（见 DEV_CTX_CHAR_BUDGET 的注释）
+          // 自愈：预算减半、丢掉更早的历史再试一次，不再硬失败（见 DEV_CTX_CHAR_BUDGET 的注释）
           const smaller = Math.max(DEV_CTX_RESCUE_MIN, Math.floor(budgetNow / 2));
           const fit = trimMessagesToBudget(messages, smaller, toolsChars);
           if (!fit.trimmed) throw e;      // 连"当前这一轮"都装不下 → 只能如实报错
@@ -1060,7 +1045,7 @@ export async function runTurn({ session, userText, userFrom, history, priorMessa
         turnUsage.completionTokens += Number(u.completion_tokens) || 0;
         turnUsage.cachedTokens += Number(u.prompt_tokens_details?.cached_tokens) || 0;
         turnUsage.totalTokens += Number(u.total_tokens) || 0;
-        // 逐轮打一行缓存命中 —— 没有它，开发模式的命中率根本没法定位
+        // 逐轮打一行缓存命中。没有它，开发模式的命中率根本没法定位
         //（查"是第几轮掉的、那一轮新增了什么大块"，见 MAX_READ_CHARS 上的注释）
         const pt = Number(u.prompt_tokens) || 0;
         const ct = Number(u.prompt_tokens_details?.cached_tokens) || 0;
@@ -1073,7 +1058,7 @@ export async function runTurn({ session, userText, userFrom, history, priorMessa
       }
       const calls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
       if (!calls.length) {
-        // 模型停下 = 本轮结束。把这条 assistant 回复也并进上下文 ——
+        // 模型停下 = 本轮结束。把这条 assistant 回复也并进上下文，
         // 否则下一轮的请求里"看不到自己上一轮说了什么"（既丢连续性，也让前缀断在这里）。
         if (typeof msg.content === 'string' && msg.content) messages.push({ role: 'assistant', content: msg.content });
         break;
@@ -1129,9 +1114,9 @@ export async function runTurn({ session, userText, userFrom, history, priorMessa
   } finally {
     clearTimeout(timer);
     if (abortBox && typeof abortBox === 'object') abortBox.abort = null;   // 收干净，别留悬空句柄
-    // 用量在这里统一交出去：**失败/中止也要交** —— 那些 token 是真花了的
+    // 用量在这里统一交出去：**失败/中止也要交**。那些 token 是真花了的
     if (usageBox && typeof usageBox === 'object') Object.assign(usageBox, turnUsage);
-    // 把"这一轮结束时的完整消息数组（不含 system）"交出去 —— 下次请求直接接在它后面，
+    // 把"这一轮结束时的完整消息数组（不含 system）"交出去，下次请求直接接在它后面，
     // 这样每次请求都是上一次的严格扩展，前缀缓存才能一路命中。
     if (ctxOut && typeof ctxOut === 'object') {
       try { ctxOut.messages = messages.slice(1).map(sanitizeMsg).filter(Boolean); } catch { /* ignore */ }

@@ -1,4 +1,4 @@
-// 开发工单（dev-orders）—— 「开发模式」：白名单直接对话，聊天就是开发。
+// 开发工单（dev-orders）：开发模式，白名单直接对话，聊天就是开发。
 //
 // ── 定位 ──
 //   白名单成员发「开发 xxx」→ 该会话（群/私聊）进入**开发模式**：
@@ -10,9 +10,9 @@
 // ── 权限立场（用户明确要求：白名单就是最大的信任）──
 //   · 文件工具以**项目根**为界：项目内（含 data/、.workbuddy/、resources/app/…）全读写；
 //   · dev_run：在项目根**启动 shell 执行任意命令**（构建/测试/git…）。
-//     ⚠️ cwd 只是起始目录、**不是沙箱** —— 命令能 cd 出去、按绝对路径读写项目外文件、
-//     执行任意程序、连任意主机。所以"不越出项目目录"只对文件工具成立，对 dev_run 不成立。
-//   ⚠️ 这个模式等价于"把开发机交给白名单账号"：账号被盗 = 机器被接管（并可越出项目目录）。
+//     cwd 只是起始目录、**不是沙箱**：命令能 cd 出去、按绝对路径读写项目外文件、
+//     执行任意程序、连任意主机。所以"不越出项目目录"只对文件工具成立。
+//   这个模式等价于"把开发机交给白名单账号"：账号被盗 = 机器被接管（并可越出项目目录）。
 //
 // ── 红线 ──
 //   状态只写 <DATA_DIR>/plugin-data/dev-orders/（state.json / sessions/ / transcripts/）。
@@ -23,8 +23,8 @@ import { fileURLToPath } from 'node:url';
 import { DATA_DIR } from '../../config.js';
 import { runTurn, trimMessagesToBudget, isCtxNote, CTX_NOTE_PREFIX } from './executor.js';
 
-// 内置化（2026-10-21）：本文件在 <appRoot>/src/harness/dev/，层级比插件期深一层。
-// 三个根改成可写，setup 时优先采用宿主注入的 api.appRoot（见 src/harness/index.js）。
+// 内置化后本文件在 <appRoot>/src/harness/dev/，层级比插件期深一层。
+// 三个根都可写，setup 时优先采用宿主注入的 api.appRoot（见 src/harness/index.js）。
 let APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 let PROJECT_ROOT = path.resolve(APP_ROOT, '..', '..');
 const SANDBOX_NAME = 'dev-sandbox';
@@ -116,23 +116,21 @@ function transcriptPathFor(id) { return path.join(transcriptDir, `${id}.jsonl`);
 function historyPathFor(id) { return path.join(historyDir, `${id}.json`); }
 function ctxPathFor(id) { return path.join(ctxDir, `${id}.json`); }
 
-// ── 追加式上下文（2026-10-09，借鉴 DSH 把命中率做到 99% 的做法）────────────
+// ── 追加式上下文（借鉴 DSH 把命中率做到 99% 的做法）──────────────────────
 //
 // 前缀缓存只认"严格扩展"：请求 N+1 必须是请求 N 的前缀 + 新尾部才命中。
 // 所以这里存的是**上一轮结束时的完整消息数组**（含 assistant 的 tool_calls 与 role:tool 结果），
-// 下次请求直接接在它后面 —— 而不是像以前那样用 {role,text} 文本历史重建（把工具足迹全丢了）。
-// 代价：上下文会一直长 → 超过预算就压一次（只保留最近若干轮），
-// 压缩会让前缀断一次（一次全价），之后又稳定 —— 这是"长会话"绕不开的取舍。
-// ⚠️ 上限默认维持 40 万字符（2026-10-09 用户拍板：**开发用量不小，别压；隔离靠换模型**）——
+// 下次请求直接接在它后面，而不是用 {role,text} 文本历史重建（那会把工具足迹全丢了）。
+// 代价：上下文会一直长 → 超过预算就压一次，压缩会让前缀断一次（一次全价），
+// 之后又稳定。这是"长会话"绕不开的取舍。
+// 上限默认 40 万字符（用户拍板：开发用量不小，别压；隔离靠换模型）。
 //   前缀缓存的容量按「账号 + 模型」共享，挤占问题用「开发模式配一个不同的模型」治本
 //   （executor 有同模型警告、模型设置弹窗有提示），而不是砍开发模式的上下文。
-//   但 2026-10-15 用户报「会话量一多就爆了、只能记单次对话」：40 万字符对窗口较小的
-//   模型（以及中文/代码混合的上下文）本来就可能超。所以现在：① 预算可在
-//   harness → 开发工单 → 模型设置 里调小；② 请求前/每轮前都按预算裁（见 executor）；
-//   ③ 撞了 context_length_exceeded 会自动减半重试。
+//   预算可在 harness → 开发工单 → 模型设置 里调小；请求前/每轮前都按预算裁（见 executor）；
+//   撞了 context_length_exceeded 会自动减半重试。
 const CTX_MAX_CHARS = 400000;
-// 2026-10-15 起不再使用（压实改由 executor 的 trimMessagesToBudget 统一处理，
-// 它按预算裁而不是按固定条数）。保留常量只为兼容旧测试引用。
+// 不再使用：压实改由 executor 的 trimMessagesToBudget 统一处理（按预算裁而非按固定条数）。
+// 保留常量只为兼容旧测试引用。
 const CTX_KEEP_TAIL = 40;
 
 function loadCtx(id) {
@@ -149,12 +147,10 @@ function saveCtx(id, messages, opts = {}) {
     const cap = Math.max(1000, Number(opts.maxChars) || CTX_MAX_CHARS);
     let msgs = Array.isArray(messages) ? messages : [];
     let compacted = 0;
-    // ⚠️ 2026-10-15：压实改成调 executor 里的**同一个** trimMessagesToBudget。
-    //   原来这里另写了一份"先按条数、再按大小"的逻辑，和请求侧的预算各说各话 ——
-    //   结果就是"请求侧早就该压了，这里却还没压"，每一轮都拿超限的上下文去撞上游
-    //   400（用户报「随着会话量增多，他爆了」）。而且旧逻辑只保最近 40 条、
-    //   把"最初那句需求"一起丢了 → 「只能记单次对话」。
-    //   现在统一：落点对齐 user 消息、保留最近一轮、并把最初的需求写进省略提示。
+    // 压实调 executor 里的**同一个** trimMessagesToBudget。另写一份"先按条数、再按大小"
+    // 的逻辑会和请求侧的预算各说各话。结果就是"请求侧早就该压了，这里却还没压"，
+    // 每一轮都拿超限的上下文去撞上游 400。统一后：落点对齐 user 消息、保留最近一轮、
+    // 并把最初的需求写进省略提示。
     const fit = trimMessagesToBudget(msgs, cap);
     if (fit.trimmed) { msgs = fit.messages; compacted = fit.dropped; }
     fs.mkdirSync(ctxDir, { recursive: true });
@@ -227,14 +223,14 @@ function extractRequirement(text) {
 
 /**
  * 收工指令：「退出/结束/关闭/停止」+ 可选的「开发（模式）」。
- * ⚠️ 单独的「结束」「退出」也算 —— 但只在"白名单 + 该会话正处于开发模式"时生效，
+ * ⚠️ 单独的「结束」「退出」也算，但只在"白名单 + 该会话正处于开发模式"时生效，
  * 不会影响普通聊天；整句必须就是这个指令（可带标点），不能是句子里的一小段。
  */
 const EXIT_RE = /^(?:退出|结束|关闭|停止)\s*(?:开发(?:模式)?\s*)?[。!！~]?$/;
 
 /**
  * 重开旧工单：「开发#6」「开发 #6」，后面还能带一句话（重开后直接当作需求发给它）。
- * ⚠️ 必须在 extractRequirement **之前**判定 —— 否则「开发#6」会被当成新需求，
+ * ⚠️ 必须在 extractRequirement **之前**判定，否则「开发#6」会被当成新需求，
  * 建出一个标题叫「#6」的新会话（那就永远回不去了）。
  */
 const REOPEN_RE = /^\s*[/]?\s*开发\s*[#＃]\s*(\d+)\s*[:：,，]?\s*([\s\S]*)$/;
@@ -248,7 +244,7 @@ function todaySessionCount() {
 /**
  * 重开旧工单（「开发#6」/ 界面的「重开」按钮）。
  *
- * 为什么可行：追加式上下文（ctx/<id>.json）一直都在 —— 重开后模型能**接着上次的
+ * 为什么可行：追加式上下文（ctx/<id>.json）一直都在：重开后模型能**接着上次的
  * 工具足迹继续干**，这是这个功能真正有价值的地方（不是把标题翻出来，是续上工作现场）。
  * 规则：同 chat 的其它活跃工单先归档（保持"同 chat 活跃会话唯一"）；
  *       工单属于别的群时不允许跨群重开；本机工单被群里重开则转入该群。
@@ -313,16 +309,15 @@ function sessionView(s) {
     status: s.status,
     createdAt: s.createdAt || 0,
     updatedAt: s.updatedAt || 0,
-    // ⚠️ 只给短预览：sessionView 会被 dev.snapshot 带上**所有**会话、界面每秒拉一次；
-    //    原来这里带的是 2000 字的完整回复，会话一多快照就是几百 KB 的纯浪费
-    //    （用户报「随着会话量增多，他爆了」的一半原因）。列表本来只渲染 title/时间/状态。
+    // 只给短预览：sessionView 会被 dev.snapshot 带上**所有**会话、界面每秒拉一次；
+    // 带 2000 字的完整回复会让快照变成几百 KB 的纯浪费。列表本来只渲染 title/时间/状态。
     lastReply: String(s.lastReply || '').slice(0, 200),
     // 命中率口径与项目其它地方一致：cachedTokens / promptTokens（llm.js cacheHitRate）
     usage: u ? { ...u, hitRate: u.promptTokens ? Math.min(1, (u.cachedTokens || 0) / u.promptTokens) : 0 } : null
   };
 }
 
-/** 把一轮的用量并进会话（**失败/中止也并** —— 那些 token 是真花了）。 */
+/** 把一轮的用量并进会话（**失败/中止也并**。那些 token 是真花了）。 */
 function mergeUsage(session, u) {
   if (!session || !u || !Number(u.calls)) return;
   const cur = session.usage || { promptTokens: 0, completionTokens: 0, cachedTokens: 0, totalTokens: 0, calls: 0, turns: 0 };
@@ -465,9 +460,9 @@ async function runOneTurn(sessionId) {
       log,
       onEvent: (evt) => appendTranscript(sessionId, evt),
       // 「正在连接 X…」的出口：QQ 会话直发回群（走统一发送队列：限频/去重/留档）；
-      // 本机会话没有收件人 —— 提示只进 transcript，由 harness 页面显示。
-      // ⚠️ dedupe: false —— 提示文案每轮都一模一样，走默认去重会被 8 秒窗口静默吃掉
-      //   （表现就是"有时有提示、有时没有"）。限流由 executor 的 20 秒节流负责。
+      // 本机会话没有收件人：提示只进 transcript，由 harness 页面显示。
+      // dedupe: false，因为提示文案每轮都一模一样，走默认去重会被 8 秒窗口静默吃掉
+      // （表现就是"有时有提示、有时没有"）。限流由 executor 的 20 秒节流负责。
       notify: session.chatKey ? (text) => safeSend(session.chatKey, text, { dedupe: false }) : null,
       noticeEnabled: cfgNow.thinkingNotice !== false,
       noticeGapSec: Number(cfgNow.noticeMinGapSec),
@@ -577,13 +572,12 @@ function handleIncoming({ chatKey, senderId, senderName, text, mid, send }) {
 /**
  * 从 transcript（JSONL，append-only）里读一段**完整的记录行**。
  *
- * ⚠️ 2026-10-15 新增。原实现是 `readFileSync(整个文件).split('\n').filter(Boolean)`，
- *   而界面在跑单时每秒拉一次增量 —— 文件越大越慢，最后把主线程拖死（用户报
- *   「调用次数一多，自动刷新就暴毙」）。这里只读需要的那一段，开销与文件大小无关。
+ * 界面在跑单时每秒拉一次增量，整文件读取会随文件变大越来越慢，最后把主线程拖死。
+ * 这里只读需要的那一段，开销与文件大小无关。
  *
  * @param {string} file  transcript 文件路径
  * @param {number} cursor 已读**字节偏移**；0（或已失效）→ 返回文件尾部窗口。
- *   ⚠️ 契约：cursor 必须是本函数上次返回的 nextFrom（或 0）。自己算的偏移如果没落在
+ *   契约：cursor 必须是本函数上次返回的 nextFrom（或 0）。自己算的偏移如果没落在
  *   行首，开头会多出半条记录（本函数不做行首对齐探测，省一次读）。
  * @returns {{raw:string[], from:number, nextFrom:number, hasMore:boolean, size:number}}
  *   raw = 原始 JSONL 行；from = 这批第一行的字节偏移；nextFrom = 不透明游标（原样回传）
@@ -718,7 +712,7 @@ export const providers = {
   'dev.snapshot': ({ selected = '' } = {}) => {
     // state.sessions 是创建序（旧→新）；界面要"新的在前"，所以末尾 reverse。
     const all = state.sessions.slice();
-    // ── 跨会话累计口径（2026-10-15 修：原来只有单会话 usage，跨会话总量在架构上不存在）──
+    // ── 跨会话累计口径（单会话 usage 之外，界面还要看全局）──
     const usageTotal = all.reduce((acc, s) => {
       const u = s.usage;
       if (!u) return acc;
@@ -733,12 +727,11 @@ export const providers = {
     usageTotal.hitRate = usageTotal.promptTokens
       ? Math.min(1, usageTotal.cachedTokens / usageTotal.promptTokens) : 0;
 
-    // ── 列表截断：界面每秒全量拉一次，payload 必须有上限 —— 只给最新 100 条 ──
+    // ── 列表截断：界面每秒全量拉一次，payload 必须有上限，只给最新 100 条 ──
     const SNAPSHOT_SESSION_CAP = 100;
     const out = all.slice(-SNAPSHOT_SESSION_CAP).reverse().map(sessionView);   // 新的在前
     // 选中兜底：选中的不在最新 100 条里 → 追加在列表**末尾**（前 100 条排序不变）。
-    // 没有这段，客户端"选中项不在列表就复位"的逻辑会每秒把用户的选中清空
-    // （2026-10-15 交付前自审发现的回归，已带针对性回归测试）。
+    // 没有这段，客户端"选中项不在列表就复位"的逻辑会每秒把用户的选中清空。
     const sel = String(selected ?? '').trim();
     if (sel && !out.some((x) => x.id === sel)) {
       const hit = all.find((x) => x.id === sel);
@@ -781,10 +774,10 @@ export const providers = {
   /**
    * 对话视图：增量读一个会话的开发记录。
    *
-   * ⚠️ from 的语义是**已读字节偏移**（不透明游标，前端原样回传 nextFrom 即可）。
-   *   from=0（刚打开 / 刷新页面）→ 直接给文件**尾部**窗口：页面要的是
-   *   "它现在在干什么"，而不是从第一行开始一秒 400 行地往前追。
-   *   具体切窗口的规则见 readTranscriptWindow（含"半行怎么办"的说明）。
+   * from 的语义是**已读字节偏移**（不透明游标，前端原样回传 nextFrom 即可）。
+   * from=0（刚打开 / 刷新页面）→ 直接给文件**尾部**窗口：页面要的是
+   * "它现在在干什么"，而不是从第一行开始一秒 400 行地往前追。
+   * 具体切窗口的规则见 readTranscriptWindow（含"半行怎么办"的说明）。
    */
   'dev.order-detail': ({ id, from = 0, before = 0 } = {}) => {
     const s = findSession(id);
@@ -842,11 +835,11 @@ export const providers = {
   'dev.close': ({ id } = {}) => closeSession(id),
 
   /**
-   * 中止**正在跑**的那一轮（2026-10-08 加）。
+   * 中止**正在跑**的那一轮。
    *
-   * 为什么必须有：一轮最长可跑 turnTimeoutSec（默认 1 小时），而调度是**全局单飞** ——
+   * 一轮最长可跑 turnTimeoutSec（默认 1 小时），而调度是**全局单飞**：
    * 跑飞的那一轮不结束，**所有**会话都排队等着，界面只显示"模型正在干活…"，
-   * 用户唯一的出路是等。实测报障："安排它做一个查日历写计划的插件，卡死了"。
+   * 用户唯一的出路是等。
    * 中止只是打断当前轮（模型调用/工具执行都会收到 abort），会话本身保持 active，
    * 可以接着发新指令。顺带把这轮**排队中**还没跑的消息丢掉，否则一中止马上又开始下一轮。
    */
@@ -892,7 +885,7 @@ export const providers = {
 
 // ── 钩子 ─────────────────────────────────────────────────────────────────
 //
-// onMessage：消息入库时（app.js ingestMessage）每条都过 —— 识别 / 路由 / 记住发送通道。
+// onMessage：消息入库时（app.js ingestMessage）每条都过：识别 / 路由 / 记住发送通道。
 // 与 dev.route 能力共用 handleIncoming（按 mid 去重），谁先谁后都只处理一次。
 
 export const hooks = {

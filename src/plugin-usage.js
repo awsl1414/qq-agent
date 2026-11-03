@@ -1,28 +1,27 @@
 // 插件用量归因：把 token 花在「哪个插件、哪个功能」上算清楚，并估算对缓存命中率的影响。
 //
-// ── 为什么需要它 ──────────────────────────────────────────────────────────
 // 用量页原有三张表（按天 / 按会话 / 按模型）回答的是"花了多少"，
-// 但用户最常问的是"是谁花的"——装了一堆插件后，光看总数根本判断不出
-// 某个插件值不值、哪个功能在偷偷吃 token。本模块把三块成本拆开：
+// 但用户最常问的是"是谁花的"：装了一堆插件后，光看总数判断不出某个插件值不值、
+// 哪个功能在偷偷吃 token。本模块把三块成本拆开：
 //
 //   ① 固定开销（每次 LLM 调用都要付）
-//      · 提示词片段：插件 prompt.sections / promptSections() 注入系统提示或
+//      - 提示词片段：插件 prompt.sections / promptSections() 注入系统提示或
 //        用户提示末尾的那些字；
-//      · 工具定义：每个工具的 description + parameters JSON，随请求发给模型；
+//      - 工具定义：每个工具的 description + parameters JSON，随请求发给模型；
 //   ② 调用开销（真的用了才付）：工具返回结果（toolCall.result）进对话后
 //      每一轮都会作为历史重发，是最容易被忽视的一块；
 //   ③ 缓存影响：易变片段（prompt.js 的 isVolatileSection）每轮都可能变，
-//      它们要么在缓存断点之后（deferVolatile），要么直接击穿系统提示前缀——
-//      两者都意味着这部分 token **每轮按全价重算**。
+//      它们要么在缓存断点之后（deferVolatile），要么直接击穿系统提示前缀，
+//      两者都意味着这部分 token 每轮按全价重算。
 //
-// ── 口径与已知边界 ────────────────────────────────────────────────────────
-//   · token 是**估算值**（字符数 / 2.5），与 llm.js 的 LCP 日志同口径。
-//     中文为主的提示词下误差不大，但别拿它对账账单——精确值看用量页的
+// 口径与已知边界：
+//   - token 是估算值（字符数 / 2.5），与 llm.js 的 LCP 日志同口径。
+//     中文为主的提示词下误差不大，但别拿它对账账单，精确值看用量页的
 //     usage（provider 返回的真实 token）。
-//   · 调用统计来自 data/sessions/*.json 里每条 message.toolCall{name,result}。
+//   - 调用统计来自 data/sessions/*.json 里每条 message.toolCall{name,result}。
 //     会话文件会被裁剪（store.keepSessionFiles），所以"全部"范围也只覆盖
-//     磁盘上还在的会话；这是已知且可接受的边界（账本只存总量，没有工具维度）。
-//   · 「影响命中率」是**归因估算**：易变片段 token / 单次调用平均输入。
+//     磁盘上还在的会话。这是已知且可接受的边界（账本只存总量，没有工具维度）。
+//   - 「影响命中率」是归因估算：易变片段 token / 单次调用平均输入。
 //     真实命中率由 provider 的 cached_tokens 决定，两者不必然相加等于 100%。
 
 import fs from 'node:fs';
@@ -85,8 +84,8 @@ export function collectToolUsage({ since = 0, maxFiles = 5000 } = {}) {
     llmCalls += Number(s.usage?.calls) || 0;
     promptTokens += Number(s.usage?.promptTokens) || 0;
     cachedTokens += Number(s.usage?.cachedTokens) || 0;
-    // 本轮「新进来的那几句话」——群友发的新消息（triggerText）。
-    // 注意：它只是每轮输入里最小的一块（几十字符），真正吃 token 的是它进入
+    // 本轮「新进来的那几句话」：群友发的新消息（triggerText）。
+    // 它只是每轮输入里最小的一块（几十字符），真正吃 token 的是它进入
     // 对话历史后被一轮轮重发。两者分开统计，页面才不会让人误判"少说话就省钱"。
     newTextChars += String(s.triggerText || '').length;
     for (const m of (s.messages || [])) {
@@ -100,7 +99,7 @@ export function collectToolUsage({ since = 0, maxFiles = 5000 } = {}) {
       const text = typeof result === 'string' ? result : JSON.stringify(result ?? '');
       g.resultChars += String(text || '').length;
       // errors 两种来源：工具本身报错（isError），以及"部分成功"（failed>0）。
-      // 后者以前不计 —— 发送被 QQ 拒（result=241）时控制台仍显示 0 错误（体检 F8）。
+      // 后者以前不计，发送被 QQ 拒（result=241）时控制台仍显示 0 错误。
       if (tc.isError || Number(tc.failed) > 0) g.errors++;
       tools.set(key, g);
     }
@@ -121,7 +120,7 @@ export function computeFootprints(context = {}) {
     return bySkill.get(key);
   };
 
-  // ① 提示词片段（只统计**当前生效**的模块 —— skillManager 已按 enabled/可用性过滤）
+  // ① 提示词片段（只统计当前生效的模块，skillManager 已按 enabled/可用性过滤）
   let sections = [];
   try { sections = skillManager.getPromptSections(context) || []; } catch { sections = []; }
   for (const s of sections) {
@@ -133,10 +132,10 @@ export function computeFootprints(context = {}) {
   }
 
   // ② 工具定义（description + parameters 的 JSON 是随请求发出去的真实体积）
-  // ⚠️ 必须按 getToolAvailability 过滤（2026-10-19 修）：buildToolDefs() 返回的是
-  //    **全部已注册工具**，包括已关闭插件/被单工具开关关掉的。这些工具**不会**发给
-  //    模型，算进"固定开销"会让"已关"的插件仍显示 354 tok/次 —— 数字和状态自相矛盾。
-  //    可用性判定必须与运行时同一口径（同一个函数、同一份 context）。
+  // 必须按 getToolAvailability 过滤：buildToolDefs() 返回的是全部已注册工具，
+  // 包括已关闭插件/被单工具开关关掉的。这些工具不会发给模型，算进"固定开销"
+  // 会让"已关"的插件仍显示 354 tok/次，数字和状态自相矛盾。
+  // 可用性判定必须与运行时同一口径（同一个函数、同一份 context）。
   let defs = [];
   try { defs = buildToolDefs() || []; } catch { defs = []; }
   const defChars = new Map();
@@ -170,12 +169,12 @@ export function buildPluginUsage({ range = '7', context = {} } = {}) {
   const usage = collectToolUsage({ since });
   const { bySkill } = computeFootprints(context);
 
-  // 插件元信息（名称/版本/开关）——只列已注册的；(`(core)` 单独一行)
+  // 插件元信息（名称/版本/开关），只列已注册的；`(core)` 单独一行
   const skills = (() => { try { return skillManager.list(context) || []; } catch { return []; } })();
   const meta = new Map(skills.map((s) => [s.id, s]));
 
   // 工具维度：按前缀归到插件
-  // 中文显示名（如「收藏表情」）从注册表补上 —— 明细弹窗里给普通人看的是这个名字，
+  // 中文显示名（如「收藏表情」）从注册表补上，明细弹窗里给普通人看的是这个名字，
   // 工具 id（sticker__collect_sticker）只作为副标题。
   const toolNameOf = new Map();
   try { for (const t of listTools()) toolNameOf.set(String(t.id), String(t.name || '')); } catch { /* 忽略 */ }
@@ -225,8 +224,7 @@ export function buildPluginUsage({ range = '7', context = {} } = {}) {
       fixedPerCall,
       periodFixed,
       // 区间总消耗 = 固定部分（每次都有）× 调用次数 + 工具结果。
-      // 这是"这个插件这段时间实际花掉多少"的估算：只排固定开销会漏掉"用得越频繁越贵"
-      // 与"工具返回内容"，用户反馈要的就是这半边。
+      // 只排固定开销会漏掉"用得越频繁越贵"与"工具返回内容"，用户要的就是这半边。
       periodTotal: periodFixed + resultTokens,
       toolCalls: tools.reduce((a, t) => a + t.calls, 0),
       resultTokens,
@@ -256,14 +254,14 @@ export function buildPluginUsage({ range = '7', context = {} } = {}) {
     },
     summary: {
       fixedPerCall: fixedAll,
-      // 只算插件（排除核心工具）—— 卡片上的「插件固定开销」用这个口径，
-      // 否则把 23 个核心工具的体积算成"插件开销"，数字会吓人且不准。
+      // 只算插件（排除核心工具），卡片上的「插件固定开销」用这个口径：
+      // 把 23 个核心工具的体积算成"插件开销"，数字会吓人且不准。
       pluginFixedPerCall: plugins.filter((p) => p.id !== '(core)').reduce((a, p) => a + p.fixedPerCall, 0),
       coreFixedPerCall: plugins.filter((p) => p.id === '(core)').reduce((a, p) => a + p.fixedPerCall, 0),
       volatilePerCall: sum('promptVolatile'),
       periodFixed: sum('periodFixed'),
       periodTotal: sum('periodTotal'),
-      // 只算插件（排除核心工具）的区间口径 —— 摘要行用的是这组，
+      // 只算插件（排除核心工具）的区间口径，摘要行用的是这组：
       // 否则"插件固定消耗"不含核心、而"区间总消耗"含核心，两个数对不上。
       pluginPeriodFixed: plugins.filter((p) => p.id !== '(core)').reduce((a, p) => a + p.periodFixed, 0),
       pluginResultTokens: plugins.filter((p) => p.id !== '(core)').reduce((a, p) => a + p.resultTokens, 0),
@@ -272,12 +270,12 @@ export function buildPluginUsage({ range = '7', context = {} } = {}) {
       resultTokens: sum('resultTokens'),
       pluginCount: plugins.filter((p) => p.id !== '(core)' && p.fixedPerCall > 0).length,
 
-      // ── 对话侧的输入（2026-10-19 用户明确要求补上）─────────────────────────
+      // 对话侧的输入。
       // 口径：每次输入的真实 token（provider 返回的 promptTokens 平均值）减去已归因的
-      // 固定开销（插件说明 + 工具说明），剩下的就是**聊天记录、人设、运行时状态**这些
+      // 固定开销（插件说明 + 工具说明），剩下的就是聊天记录、人设、运行时状态这些
       // "对话本身"的东西。是倒推值，但总量用的是最真实的那个数，所以不会低估。
-      // 单独拎出来的意义：让「插件占 22%」这句话有个参照——剩下 65% 是聊天内容，
-      // 而且里面绝大部分是**之前聊过的内容在被一轮轮重发**，不是本轮新说的那几句。
+      // 单独拎出来的意义：让「插件占 22%」这句话有个参照，剩下 65% 是聊天内容，
+      // 而且里面绝大部分是之前聊过的内容在被一轮轮重发，不是本轮新说的那几句。
       chatPerCall: Math.max(0, avgInputPerCall - fixedAll),
       chatPeriod: Math.max(0, usage.promptTokens - fixedAll * llmCalls),
       chatSharePct: avgInputPerCall > 0

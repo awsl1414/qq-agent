@@ -1,8 +1,8 @@
 // 巩固：把新消息压成小时块，再把老的小时块合成日块，最后淘汰没人想起的块。
 //
-// 这一层完全确定性 —— 不调模型、不花 token，所以模型想忽略也忽略不掉。
-// （内置版的"整理"是调 LLM 做的，每整理一位群友要一次请求；这里不做 LLM 整理：
-//   代价太高、还引入幻觉风险。压缩靠的是分块 + 权重 + 时间衰减，都是本地计算。）
+// 这一层完全确定性，不调模型、不花 token，所以模型想忽略也忽略不掉。
+// 内置版的"整理"是调 LLM 做的，每整理一位群友要一次请求；这里不做 LLM 整理，
+// 代价太高且引入幻觉风险。压缩靠的是分块 + 权重 + 时间衰减，都是本地计算。
 import fs from 'node:fs';
 import path from 'node:path';
 import {
@@ -14,11 +14,9 @@ const PLACEHOLDER_RE = /^\[(图片|表情|贴图|语音|视频)\]$/;
 
 /**
  * 日块碎片上限。
- * 日块是"一天的摘要"，不是"一天的全文"——所以它比小时块的
- * maxSnippetsPerBlock（默认 120）收得紧。原来这是个散在 rollupChat 里的
- * 魔法数 40；提成常量至少让"这是刻意收窄的"有据可查。
- * ⚠️ 不做成设置项：它和 maxSnippetsPerBlock 是同一个语义的两个刻度，
- *    多一个滑块只会让人困惑。真要调，改这个常量。
+ * 日块是"一天的摘要"，不是"一天的全文"，所以它比小时块的 maxSnippetsPerBlock
+ * （默认 120）收得紧。不做成设置项：它和 maxSnippetsPerBlock 是同一个语义的
+ * 两个刻度，多一个滑块只会让人困惑。真要调，改这个常量。
  */
 const DAY_SNIPPETS_MAX = 40;
 
@@ -39,14 +37,13 @@ function statMessages(messagesDir, chatKey) {
 /**
  * 读原始消息（真相源，永不改写）。
  *
- * ── 两种读法，别混 ────────────────────────────────────────────────────────
- *   · `tail: true`  —— 取**最后** cap 条。归档用（要的是"最近的记录"）。
- *   · 默认（fromId）—— 取 id > fromId 的**前** cap 条。巩固用，配合水位线
- *     一条条往前推。
+ * 两种读法，别混：
+ *   · `tail: true`  取最后 cap 条。归档用（要的是"最近的记录"）。
+ *   · 默认（fromId）取 id > fromId 的前 cap 条。巩固用，配合水位线一条条往前推。
  *
- * ⚠️ 巩固**不能**用 tail 读法：会话超过 cap 条时，`all` 永远只是文件末尾那一段，
- *    而水位线又只会往前走 —— 早期消息于是**永远进不了记忆库**，而且不报错。
- *    这是只有"消息数超过 consolidateBatchMax 的会话"才会暴露的静默丢失。
+ * 巩固不能用 tail 读法：会话超过 cap 条时，`all` 永远只是文件末尾那一段，
+ * 而水位线又只会往前走，早期消息于是永远进不了记忆库，而且不报错。
+ * 这是只有"消息数超过 consolidateBatchMax 的会话"才会暴露的静默丢失。
  */
 export function loadMessages(messagesDir, chatKey, { batchMax = 20000, fromId = 0, tail = false } = {}) {
   try {
@@ -72,10 +69,10 @@ function isWorthKeeping(msg) {
 }
 
 /**
- * 碎片权重：只根据**可判定的结构信号**决定谁更值得留。
+ * 碎片权重：只根据可判定的结构信号决定谁更值得留。
  *
  * 长度（信息量）、提问/约定/链接（可执行内容）、展开的转发（成块的信源）。
- * 刻意**不解读情绪、不猜意图** —— 一靠启发式给"激动的话"加权就会悄悄
+ * 刻意不解读情绪、不猜意图：一靠启发式给"激动的话"加权就会悄悄
  * 改变整套记忆的取舍，而寒暄与日常恰恰是记忆的主体。
  */
 function weightOf(msg) {
@@ -95,8 +92,8 @@ function snippetOf(m) {
     mid: m.mid ?? null,
     localId: m.id ?? null,
     who: m.self ? '我' : (m.senderName || m.senderId || '?'),
-    // ⚠️ 昵称会改，uid 不会。多线索检索（"在场的人"）必须按 uid 匹配，
-    //    否则同一个人在块里叫"阿甲"、在触发消息里叫"阿甲（新）"，就永远对不上。
+    // 昵称会改，uid 不会。多线索检索（"在场的人"）必须按 uid 匹配，
+    // 否则同一个人在块里叫"阿甲"、在触发消息里叫"阿甲（新）"，就永远对不上。
     uid: String(m.senderId ?? ''),
     self: !!m.self,
     text: String(m.text || '').replace(/\s+/g, ' ').trim().slice(0, 180),
@@ -109,8 +106,8 @@ function snippetKey(s) {
 }
 
 /**
- * 合并共激活链接（v1.7.0）：计数相加、邻居数封顶。
- * 口径与 store.js 的 #linkTogether 保持一致（计数上限 20、邻居上限 12）——
+ * 合并共激活链接：计数相加、邻居数封顶。
+ * 口径与 store.js 的 #linkTogether 保持一致（计数上限 20、邻居上限 12），
  * 两处对不上会出现"rollup 之后 links 比索引里的还多"的漂移。
  */
 function mergeLinks(a, b, maxNeighbors = 12, maxCount = 20) {
@@ -183,11 +180,11 @@ export class Consolidator {
     this.store = store;
     this.messagesDir = path.resolve(messagesDir);
     this.settings = settings;
-    /** 梗概墓碑。可选 —— 没有它一切照旧，只是淘汰后不留线索。 */
+    /** 梗概墓碑。可选：没有它一切照旧，只是淘汰后不留线索。 */
     this.gist = gist;
     /**
      * 每写成一个小时块就回调一次（index.js 用它喂语义卡）。
-     * ⚠️ 回调抛错绝不能影响巩固 —— 抽卡只是附带产物。
+     * 回调抛错绝不能影响巩固：抽卡只是附带产物。
      */
     this.onBlock = typeof onBlock === 'function' ? onBlock : null;
   }
@@ -218,11 +215,10 @@ export class Consolidator {
     const start = force ? 0 : Math.max(0, Number(state.lastIndexedId) || 0);
     const stat = statMessages(this.messagesDir, chatKey);
 
-    // 文件没动过就不读了 —— 定时器每 10 分钟把一个几 MB 的 JSON 读进来再 parse
+    // 文件没动过就不读了：定时器每 10 分钟把一个几 MB 的 JSON 读进来再 parse
     // 一遍是巩固里最贵的一步，而绝大多数 tick 其实没有新消息。
-    // ⚠️ 但 `state.backlog` 为真时必须继续读：那表示上一批被 batchMax 截断了、
-    //    后面还有历史没扫完。只看"文件没变"会把回填卡死在第一批 ——
-    //    这正是历史回填上线后立刻踩到的坑（只巩固了第一批就再也不动了）。
+    // 但 state.backlog 为真时必须继续读：那表示上一批被 batchMax 截断了、
+    // 后面还有历史没扫完。只看"文件没变"会把回填卡死在第一批。
     // 注意只跳过"读消息"这一步；下面的汇总/淘汰是时间驱动的，照跑。
     const unchanged = !force && !state.backlog && stat
       && Number(state.fileSize) === stat.size
@@ -231,9 +227,9 @@ export class Consolidator {
     let added = 0;
     let touched = 0;
     // 「出生即超龄」的小时块（回填的历史）不落盘，先进这个桶，再由 rollupChat
-    // 一次性合成日块。⚠️ 否则首日回填要给每个历史小时块做 写→读→删 三次文件
-    // 操作，而它们下一秒就被合并成日块 —— 实测本机 rmSync ≈ 21ms/次，
-    // 720 个历史小时块光删除就 15s+（soak 基准 tools/bench-soak.mjs 实测）。
+    // 一次性合成日块。否则首日回填要给每个历史小时块做 写→读→删 三次文件操作，
+    // 而它们下一秒就被合并成日块：实测 rmSync ≈ 21ms/次，
+    // 720 个历史小时块光删除就 15s+（见 tools/bench-soak.mjs）。
     /** @type {Map<string, Array<{id: string, block: object, onDisk: boolean}>>} */
     const rollupPending = new Map();
     const afterDays = num(s.rollupAfterDays, 7, 0, 36500);
@@ -254,13 +250,12 @@ export class Consolidator {
 
         for (const [hourKey, msgs] of byHour) {
           const blockId = hourBlockId(chatKey, hourKey);
-          // ⚠️ 增量必须与已有块**合并**，不能整块覆盖：同一自然小时内分两次巩固，
-          //   后者只带着新消息就把块重写，此前已巩固的碎片会从索引里永久消失
-          //   （内置版踩过这个坑，见其 consolidator 的 H3 注释）。
+          // 增量必须与已有块合并，不能整块覆盖：同一自然小时内分两次巩固，
+          // 后者只带着新消息就把块重写，此前已巩固的碎片会从索引里永久消失。
           const existing = this.store.readBlock(chatKey, blockId);
           const merged = new Map();
           for (const sn of existing?.snippets || []) merged.set(snippetKey(sn), sn);
-          // 只有这一轮**新加进来**的碎片才算新 —— 否则每巩固一次就把整块的碎片
+          // 只有这一轮新加进来的碎片才算新：否则每巩固一次就把整块的碎片
           // 重喂一遍语义卡，同一张卡的 hits 会被反复 +1 而虚高。
           const freshSnips = [];
           for (const m of msgs) {
@@ -287,7 +282,7 @@ export class Consolidator {
             consolidatedAt: Date.now()
           };
           // 「出生即超龄」：回填出来的历史小时块直接进日汇总桶，不落盘。
-          // onDisk = 之前某轮巩固时它还年轻、已经写过盘 —— 那种仍要照常清理。
+          // onDisk = 之前某轮巩固时它还年轻、已经写过盘，那种仍要照常清理。
           const aged = afterDays > 0 && block.when <= rollupCutoff;
           if (aged) {
             const day = block.dayKey;
@@ -301,8 +296,8 @@ export class Consolidator {
               kind: 'hour', dayKey: block.dayKey, when: block.when
             });
           }
-          // 附带产物：从**新增**碎片里抽语义卡（失败忽略）。
-          // ⚠️ 走桶的块也要抽 —— 语义卡是碎片的派生属性，与块落不落盘无关。
+          // 附带产物：从新增碎片里抽语义卡（失败忽略）。
+          // 走桶的块也要抽：语义卡是碎片的派生属性，与块落不落盘无关。
           if (this.onBlock && freshSnips.length) {
             try {
               this.onBlock(String(chatKey), { ...block, snippets: freshSnips });
@@ -313,7 +308,7 @@ export class Consolidator {
         }
       }
 
-      // 水位线推到这一批的最后一条 —— 哪怕这一批被 batchMax 截断，
+      // 水位线推到这一批的最后一条：哪怕这一批被 batchMax 截断，
       // 下一轮也会从这条之后接着读，最终把整个会话扫完。
       const last = batch[batch.length - 1];
       if (last) {
@@ -341,7 +336,7 @@ export class Consolidator {
       try {
         // 墓碑也要会忘，只是慢得多（默认 3 年）
         this.gist.sweep();
-        // 节流落盘（30 秒）：remember 只标 dirty，真正写盘在这里 ——
+        // 节流落盘（30 秒）：remember 只标 dirty，真正写盘在这里，
         // 让"任何走巩固的路径"都能把墓碑带上盘，而不只是定时器那条。
         this.gist.save({ force: false });
       } catch { /* 清理/落盘失败不影响巩固 */ }
@@ -349,7 +344,7 @@ export class Consolidator {
     const pruned = this.store.pruneVocab(chatKey, {
       maxVocab: num(s.maxVocabPerChat, 100000, 500, 1000000),
       // 上限允许到 1 = 不剪（调参/排障时用）。注意块数少的时候，
-      // 大部分词本来就会出现在多数块里 —— 这时 0.9 也可能剪得很凶。
+      // 大部分词本来就会出现在多数块里，这时 0.9 也可能剪得很凶。
       dfCutoffRatio: num(s.dfCutoffRatio, 0.7, 0.2, 1)
     });
 
@@ -393,7 +388,7 @@ export class Consolidator {
       if (!byDay.has(day)) byDay.set(day, []);
       byDay.get(day).push(entry);
     };
-    // ① 内存桶（没落过盘的历史小时块）在前 —— 内容按 mid 去重，先后无所谓
+    // ① 内存桶（没落过盘的历史小时块）在前，内容按 mid 去重，先后无所谓
     if (pending && pending.size) {
       for (const [day, list] of pending) for (const e of list) push(day, e);
     }
@@ -409,20 +404,19 @@ export class Consolidator {
     for (const [day, entries] of byDay) {
       const dayId = dayBlockId(chatKey, day);
       const merged = new Map();
-      // ⚠️ 顺带把被合并小时块的"记忆强度"接过来。
-      //    否则"某天被反复想起的那段"一合并成日块就被打回出厂权重 score=1/hits=0，
-      //    越重要的记忆反而越容易被 forgetSweep 清掉 —— 正好反了。
+      // 顺带把被合并小时块的"记忆强度"接过来。
+      // 否则"某天被反复想起的那段"一合并成日块就被打回出厂权重 score=1/hits=0，
+      // 越重要的记忆反而越容易被 forgetSweep 清掉，正好反了。
       let score = 1;
       let hits = 0;
       let lastHitAt = 0;
-      // S（稳定性）与 passiveHits 同理要接过来：
-      // ⚠️ 漏掉 S 的话，一个"每两周被想起一次、稳定性已经长到 200 天"的老块，
-      //    在第 7 天滚成日块时 S 会被重置回全局默认 45 天 —— 越老的块滚得越多、
-      //    稳定性丢得越狠，等于"记得越久反而越快被忘掉"。passiveHits 只是计数，
-      //    但一起接过来免得它每次 rollup 都归零、变成一个永远长不大的数字。
+      // S（稳定性）与 passiveHits 同理要接过来：漏掉 S 的话，一个"每两周被想起
+      // 一次、稳定性已经长到 200 天"的老块，在第 7 天滚成日块时 S 会被重置回
+      // 全局默认 45 天，越老的块滚得越多、稳定性丢得越狠，等于"记得越久反而越快
+      // 被忘掉"。passiveHits 只是计数，但一起接过来免得它每次 rollup 都归零。
       let S = 0;
       let passiveHits = 0;
-      // 共激活链接（v1.7.0）与上次重演时间：小时块一合并就没了，
+      // 共激活链接与上次重演时间：小时块一合并就没了，
       // 不接过来的话"那天和哪些事一起被想起"连同重演冷却一起归零。
       let links = {};
       let lastReplayAt = 0;
@@ -443,16 +437,15 @@ export class Consolidator {
           for (const sn of block?.snippets || []) merged.set(snippetKey(sn), sn);
         } else {
           // 内存桶里的块从没落过盘：没有 meta（权重本就是出厂值），
-          // 也没有索引条目/文件要清理 —— 它唯一的去处就是并进这个日块。
+          // 也没有索引条目/文件要清理，它唯一的去处就是并进这个日块。
           for (const sn of entry.block?.snippets || []) merged.set(snippetKey(sn), sn);
         }
       }
-      // ⚠️⚠️ B1 修复（2026-10-14）：**已存在的日块必须一起合并**。
-      //    迟到的旧时间戳消息（历史回放 / 二次补拉 / 时钟偏差）会在某天汇总成日块
-      //    **之后**才进来，形成该天新的小时块；下一次汇总若只合并这批新小时块，
-      //    就会用它们**整块覆盖**已存在的日块 —— 该日此前汇总的碎片从索引与块文件
-      //    里静默消失（无墓碑、无日志，连 forgetSweep 都没参与）。
-      //    真实群消息乱序概率低（实测 0/156），但静默丢失 + 修复只要几行，必须堵。
+      // 已存在的日块必须一起合并。迟到的旧时间戳消息（历史回放 / 二次补拉 /
+      // 时钟偏差）会在某天汇总成日块之后才进来，形成该天新的小时块；下一次汇总
+      // 若只合并这批新小时块，就会用它们整块覆盖已存在的日块，该日此前汇总的
+      // 碎片从索引与块文件里静默消失（无墓碑、无日志，连 forgetSweep 都没参与）。
+      // 真实群消息乱序概率低（实测 0/156），但静默丢失 + 修复只要几行，必须堵。
       const existingDay = this.store.readBlock(chatKey, dayId);
       if (existingDay) {
         const dayMeta = index.blocks[dayId];
@@ -503,7 +496,7 @@ export class Consolidator {
         hits,
         lastHitAt,
         // S=0 表示"子块都没有 S"，此时 stabilityOf 会回落到全局 decayHalfLifeDays。
-        // 不能写成全局默认值 —— 那会让"本来就没 S"和"显式设成 45"不可区分。
+        // 不能写成全局默认值，那会让"本来就没 S"和"显式设成 45"不可区分。
         S,
         passiveHits,
         links,
@@ -523,10 +516,9 @@ export class Consolidator {
   }
 
   /**
-   * 按墓碑重建一个块 —— 节省效应的落地。
+   * 按墓碑重建一个块，节省效应的落地。
    *
-   * ── 为什么这件事在本插件里特别划算 ──────────────────────────────────────
-   * 块只是 `messages/` 的一个**索引视图**，而 `messages/` 是只读完整真相源。
+   * 块只是 messages/ 的一个索引视图，而 messages/ 是只读完整真相源，
    * 所以"删块"从来没有真的丢过数据，丢的是"知道去哪儿找"。
    * 墓碑补上这条线索之后，"想不起来细节"就变成"稍微费点劲就能想起来"。
    *
@@ -545,11 +537,11 @@ export class Consolidator {
       return blockId;
     }
 
-    // ⚠️ 复活要读整个会话文件（JSON.parse 是同步的，会阻塞事件循环）。
-    //    在 5 秒钩子预算里读一个几十 MB 的文件足以把这一轮对话拖垮，
-    //    所以超过上限就**只给要旨**，不重建 —— 用户仍然能看到"有这么回事"。
-    //    ⚠️ 这一条**不记失败**：它是配置问题（gistReviveMaxMb 太小），
-    //    用户把上限调大之后这条墓碑还能救回来，不该被永久判死。
+    // 复活要读整个会话文件（JSON.parse 是同步的，会阻塞事件循环）。
+    // 在 5 秒钩子预算里读一个几十 MB 的文件足以把这一轮对话拖垮，
+    // 所以超过上限就只给要旨，不重建，用户仍然能看到"有这么回事"。
+    // 这一条不记失败：它是配置问题（gistReviveMaxMb 太小），
+    // 用户把上限调大之后这条墓碑还能救回来，不该被永久判死。
     const s = this.settings();
     const stat = statMessages(this.messagesDir, key);
     const maxBytes = num(s.gistReviveMaxMb, 24, 0.01, 512) * 1024 * 1024;
@@ -587,7 +579,7 @@ export class Consolidator {
     if (!snippets.length) { this.gist?.markReviveFail(key, blockId); return null; }
 
     const hk0 = hourKeyOf(snippets[snippets.length - 1].ts);
-    // 墓碑记的是日块就重建日块，记的是小时块就重建小时块 —— 不能张冠李戴，
+    // 墓碑记的是日块就重建日块，记的是小时块就重建小时块，不能张冠李戴，
     // 否则 indexBlock 会把块 id 和块内容对不上，检索回来的东西是错位的。
     const kind = gist.kind === 'day' ? 'day' : 'hour';
     const block = kind === 'day'
@@ -626,12 +618,12 @@ export class Consolidator {
 
     this.store.writeBlock(key, block);
     // 把当初攒下的记忆强度还给它：被想起过的老事复活之后不该从头开始。
-    // ⚠️ 但 lastHitAt 用**现在** —— 复活本身就是一次成功的提取（测试效应），
-    //    衰减从这一刻重新起算才合理。
-    // ⚠️ 先 noteBlock 再 indexBlock：#indexInto 会从 state 里把权重读回来，
-    //    顺序反了的话，复活出来的块在索引里是 score=1 / hits=0 / S=0 ——
-    //    攒下的记忆强度白攒，而且下一次 forgetSweep 会立刻把它当"低权重老块"删掉。
-    //    （rollupChat 里也是这个顺序，别只改一处。）
+    // 但 lastHitAt 用现在：复活本身就是一次成功的提取（测试效应），
+    // 衰减从这一刻重新起算才合理。
+    // 先 noteBlock 再 indexBlock：#indexInto 会从 state 里把权重读回来，
+    // 顺序反了的话，复活出来的块在索引里是 score=1 / hits=0 / S=0，
+    // 攒下的记忆强度白攒，而且下一次 forgetSweep 会立刻把它当"低权重老块"删掉。
+    // （rollupChat 里也是这个顺序，别只改一处。）
     this.store.noteBlock(key, blockId, {
       kind: block.kind,
       dayKey: block.dayKey,
@@ -649,13 +641,12 @@ export class Consolidator {
   }
 
   /**
-   * 磁盘上有哪些会话 —— 真相源是 `messages/`，**不是索引**。
+   * 磁盘上有哪些会话。真相源是 messages/，不是索引。
    *
-   * ⚠️ 这一条是端到端测试逼出来的：`store.listChatKeys()` 只知道"索引里已经有的"
-   *    会话（state.chats + 块目录），而全新安装时这两处都是空的 —— 于是定时器
-   *    调 consolidateAll() 会拿到空列表、什么都不做，插件永远不会自己启动。
-   *    离线自测之所以没发现，是因为它每次都直接调 consolidateChat(某个 chatKey)，
-   *    从来没走过"从零自举"这条路径。
+   * store.listChatKeys() 只知道"索引里已经有的"会话（state.chats + 块目录），
+   * 而全新安装时这两处都是空的，于是定时器调 consolidateAll() 会拿到空列表、
+   * 什么都不做，插件永远不会自己启动。离线自测没发现，是因为它每次都直接调
+   * consolidateChat(某个 chatKey)，从来没走过"从零自举"这条路径。
    */
   listMessageChatKeys() {
     try {

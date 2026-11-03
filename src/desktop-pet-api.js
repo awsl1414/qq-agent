@@ -1,4 +1,4 @@
-// Called only AFTER app.js has applied its standard API authorization/origin checks.
+// 只在 app.js 完成标准的 API 鉴权 / origin 校验之后被调用。
 import { skillManager } from './skills/manager.js';
 
 export async function handleDesktopPetRequest({ req, res, url, readBody, json, desktopHost, emit }) {

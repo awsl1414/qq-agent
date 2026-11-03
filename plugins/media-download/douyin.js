@@ -1,44 +1,33 @@
-﻿// 抖音访问与下载公共库
+﻿// 抖音访问与下载公共库（与 bili.js 同构）。
 //
-// 供 data/plugins/ 下抖音相关插件共用（与 src/bili.js 同构）：
-//   · douyin-video  —— 群友分享抖音视频（链接/卡片/口令文案）→ 自动下载发送
-// 下载逻辑排查只改这里，不用在插件里各改一遍。
-//
-// ── 接口实测结论（2026-09-11，全部在本机实测通过）──
+// 接口实测结论：
 //   ① 老办法已死：`iesdouyin.com/share/video/{id}/` 页面里的
 //      `window._ROUTER_DATA → loaderData → videoInfoRes.item_list[0]` 现在只返回 32KB
-//      空壳页（含 "special-case" 兜底标记），有效视频与失效视频返回完全一致。
-//      视频数据改由签名 API 投递（需 a_bogus / X-Bogus），匿名不可得。
-//   ② yt-dlp（2026.08.19，含 curl_cffi）仍报 `Fresh cookies (not necessarily logged
-//      in) are needed`：其 tiktok.py 里的 DouyinIE 打 `www.douyin.com` 的 detail 接口
-//      拿到的是**空响应体**（`Expecting value in '': line 1 column 1`），
-//      即使给了 ttwid + __ac_nonce + --impersonate chrome 也不行。
-//   ③ ✅ 可用路径（无需签名、无需登录、无需 yt-dlp / ffmpeg）：
+//      空壳页，有效视频与失效视频返回完全一致。视频数据改由签名 API 投递
+//      （需 a_bogus / X-Bogus），匿名不可得。
+//   ② yt-dlp（含 curl_cffi）仍报 `Fresh cookies (not necessarily logged in) are needed`：
+//      它打 `www.douyin.com` 的 detail 接口拿到的是空响应体，即使给了
+//      ttwid + __ac_nonce + --impersonate chrome 也不行。
+//   ③ 可用路径（无需签名、无需登录、无需 yt-dlp / ffmpeg）：
 //        GET https://www.douyin.com/aweme/v1/web/aweme/detail/
 //            ?device_platform=webapp&aid=6383&channel=channel_pc_web
 //            &aweme_id={id}&pc_client_type=1&version_code=170400&version_name=17.4.0
 //            &cookie_enabled=true&screen_width=1920&screen_height=1080
 //            &browser_language=zh-CN&browser_platform=Win32
 //            &browser_name=Chrome&browser_version=120.0.0.0
-//        → 200，约 60KB JSON，`aweme_detail` 完整（desc/duration/ratio/video/author）
-//      对照实验（同 URL、仅换 Cookie 头）：
-//          无 cookie        → 200 空体（len=0）
-//          仅 __ac_nonce    → 200 空体
-//          仅 ttwid         → 200 len=60104，aweme_detail ✓
-//          ttwid+__ac_nonce → 200 len=60105，aweme_detail ✓
-//          假 ttwid         → 200 空体
-//      ⇒ 唯一硬依赖是 **ttwid**（无效值一律空体，无法用假值蒙混）。
+//        → 200，约 60KB JSON，`aweme_detail` 完整（desc/duration/ratio/video/author）。
+//      对照实验（同 URL、仅换 Cookie 头）：无 cookie / 仅 __ac_nonce / 假 ttwid 都是
+//      200 空体；仅 ttwid 或 ttwid+__ac_nonce 正常返回。唯一硬依赖是 ttwid，
+//      无效值一律空体，无法用假值蒙混。
 //   ④ ttwid 可完全自助获取：请求 `https://www.iesdouyin.com/share/video/{id}/`
-//      的 Set-Cookie 就会带 ttwid（有效期约 2 年，2027-09 到期）。
-//      `douyin.com` 各页只给 __ac_nonce，不给 ttwid。
-//   ⑤ 播放地址：`video.download_addr.url_list[0]` 已是**无水印**（不含 playwm），
+//      的 Set-Cookie 就会带 ttwid（有效期约 2 年）。`douyin.com` 各页只给
+//      __ac_nonce，不给 ttwid。
+//   ⑤ 播放地址：`video.download_addr.url_list[0]` 已是无水印（不含 playwm），
 //      直接是 MP4，无需 ffmpeg 转封装。仍保留 playwm→play 替换作为历史兜底（当前为无害 no-op）。
 //   ⑥ 短链 `v.douyin.com/{code}/` 用 safeFetch 跟重定向即可，最终 URL 形如
 //      `https://www.douyin.com/video/{id}?previous_page=app_code_link`。
 //
-// 依赖：
-//   · safe-fetch（防 SSRF；抖音 CDN 是公网不会拦）
-//   · 无需 ffmpeg、无需 yt-dlp、无需登录凭证
+// 依赖：safe-fetch（防 SSRF；抖音 CDN 是公网不会拦）。无需 ffmpeg、yt-dlp、登录凭证。
 //
 // 安全：公共库供管理员放入 data/plugins/ 的可信插件调用，与内置工具同信任级。
 import fs from 'node:fs';
@@ -51,8 +40,8 @@ import { DATA_DIR } from '../../src/config.js';
 
 /**
  * 发一批媒体段：优先走核心的发送队列（限频 / 去重 / 留档），
- * 没有 sender 时才退回直发 —— 直发分支只为让本模块能独立复用，
- * 在正式链路里**不该**走到（会跳过限频与留档，媒体会把文字配额吃光）。
+ * 没有 sender 时才退回直发。直发分支只为让本模块能独立复用，
+ * 在正式链路里不该走到（会跳过限频与留档，媒体会把文字配额吃光）。
  */
 async function sendMediaSegments({ onebot, sender, kind, chatId }, segments, { label }) {
   if (sender?.sendMedia) {
@@ -62,7 +51,7 @@ async function sendMediaSegments({ onebot, sender, kind, chatId }, segments, { l
   if (onebot?.sendSegments) await onebot.sendSegments(kind, chatId, segments);
 }
 
-// 缓存根目录与核心同一真源（src/config.js 的 DATA_DIR，2026-10-10 去 cwd 兜底）
+// 缓存根目录与核心同一真源（src/config.js 的 DATA_DIR，不回落 cwd）
 const DATA_ROOT = DATA_DIR;
 export const CACHE_DIR = path.join(DATA_ROOT, 'media-cache', 'douyin');
 // 小件（参数解包/文件名安全化/目录清扫/失败通知）收口在 media-common.js，这里 re-export 保持插件契约
@@ -106,7 +95,7 @@ export function dyHeaders(referer, ttwid) {
 }
 
 // ── ttwid：进程级内存缓存 + 磁盘缓存 ──────────────────────────────────────
-// 磁盘缓存文件 data/dy-cache/ttwid.json：机器人重启后不用重新走一次 iesdouyin。
+// 磁盘缓存文件 ttwid.json：机器人重启后不用重新走一次 iesdouyin。
 // 有效期 2 年，这里按 30 天判过期重取（保守，代价只是一次轻量请求）。
 
 const COOKIE_CACHE_FILE = path.join(CACHE_DIR, 'ttwid.json');
@@ -207,7 +196,7 @@ export function extractDouyinUrls(text) {
 
 /**
  * 会话触发消息的抖音分享特征判定（onSessionStart 用）。
- * 只认「分享/视频/短视频」等意图字样或真实链接标记——
+ * 只认「分享/视频/短视频」等意图字样或真实链接标记，
  * 防止群里随口提到「抖音」（如「抖音今天咋了」）误触发自动下载。
  */
 export function looksLikeDouyinShare(text) {
@@ -227,7 +216,7 @@ async function resolveShortUrl(url) {
 }
 
 /**
- * 把模型传入的参数解析成 aweme id。与 src/bili.js 的 resolveBvid 同构：
+ * 把模型传入的参数解析成 aweme id。与 bili.js 的 resolveBvid 同构：
  *   args.messageId → 调 getMsg 拿原始消息段 → 从所有段数据提取链接
  *   args.url       → 直接从链接/裸 id 提取；v.douyin.com 短链自动跟重定向
  *
@@ -301,14 +290,14 @@ async function getAwemeDetail(awemeId, ttwid) {
 
 /** 判断是否为图文帖（图集 / 笔记）。
  *
- * 实测（2026-09-11，aweme_id=7684204009624689578，来自真实群分享）：
+ * 实测（真实群分享）：
  *   · aweme_type = 68（视频帖为 0）
- *   · is_image_post = undefined —— **该字段不可靠，不能依赖**
+ *   · is_image_post = undefined，该字段不可靠，不能依赖
  *   · images = 图片数组（非空）
- *   · video 对象**存在**但 duration = 0，且 video.play_addr 指向的是 **BGM 的 MP3**
+ *   · video 对象存在但 duration = 0，且 video.play_addr 指向的是 BGM 的 MP3
  *
- * ⚠️ 不识别就往下走的后果：pickPlayUrl 会把 BGM 当视频地址返回，下载下来是 ID3 音频，
- * 被 MP4 魔数校验拦下后报「下载内容不是视频」，再被 briefFailure 误报成「可能被风控」——
+ * 不识别就往下走的后果：pickPlayUrl 会把 BGM 当视频地址返回，下载下来是 ID3 音频，
+ * 被 MP4 魔数校验拦下后报「下载内容不是视频」，再被 briefFailure 误报成「可能被风控」，
  * 群友会以为是网络问题，实际上是图文帖。
  */
 export function isImagePost(detail) {
@@ -318,16 +307,16 @@ export function isImagePost(detail) {
   return imgs.length > 0 && !(Number(detail.video?.duration) > 0);
 }
 
-/** 从图文帖里取**无水印**的图片直链列表。
+/** 从图文帖里取无水印的图片直链列表。
  *
- * 实测（2026-09-11，aweme_id=7684204009624689578）：
+ * 实测：
  *   · images[n].url_list          → 无水印（~tplv-dy-aweme-images-v2）
  *   · images[n].download_url_list → 有水印（~tplv-dy-water-v10）
  *
- * ⚠️ 与视频**正好相反**：视频的 download_addr 才是无水印的，别沿用 preferDownloadAddr。
- *   直链已带 x-signature 预签名，无需 Referer；但带 x-expires（约 1 个月，过期后需重新查 detail）。
- * 另：images[n].video.play_addr 是嵌套字段，那是动图/livephoto 的表示，**静图也有这个字段**，
- * 本实现按静图处理，忽略嵌套视频。
+ * 与视频正好相反：视频的 download_addr 才是无水印的，别沿用 preferDownloadAddr。
+ * 直链已带 x-signature 预签名，无需 Referer；但带 x-expires（约 1 个月，
+ * 过期后需重新查 detail）。images[n].video.play_addr 是动图/livephoto 的表示，
+ * 静图也有这个字段，本实现按静图处理，忽略嵌套视频。
  */
 export function pickImageUrls(detail) {
   const imgs = Array.isArray(detail?.images) ? detail.images : [];
@@ -342,7 +331,7 @@ export function pickImageUrls(detail) {
 }
 
 /** 图片魔数判定，返回扩展名（无魔数返回 null）。
- * 存盘时按**实际内容**命名而不是 URL 声称的格式 —— CDN 换格式/缓存过期时不错名。
+ * 存盘时按实际内容命名而不是 URL 声称的格式，CDN 换格式/缓存过期时不错名。
  * 抖音图片 CDN 实测返回 WEBP（`RIFF....WEBP`）。
  */
 export function imageMagicType(buffer) {
@@ -387,7 +376,7 @@ function readHead(p, n = 64) {
 }
 
 /**
- * 下载图文帖的全部图片，并作为**一条多图片消息**发出（QQ 原生图文形态：一个气泡、多张可滑动）。
+ * 下载图文帖的全部图片，并作为一条多图片消息发出（QQ 原生图文形态：一个气泡、多张可滑动）。
  *
  * 下载走 3 路并发（图多时提速约 3 倍）；files 按下标存放，消息内图片顺序不变。
  *
@@ -439,7 +428,7 @@ async function downloadImagePost(detail, awemeId, { onebot, sender = null, kind,
     // 与视频同策略：keepFile=true 时保留供排查，否则 2 分钟后清
     if (resolveParam(params, 'keepFile', false) !== true) {
       const doomed = [...ordered];
-      // L 级（2026-10-14）：unref（见上，清理定时器不该拖退出）
+      // L 级：unref（见上，清理定时器不该拖退出）
       const dyCleanupTimer1 = setTimeout(() => { for (const f of doomed) { try { fs.unlinkSync(f); } catch { /* 两分钟后清理；文件已不在也算正常 */ } } }, 120000);
       dyCleanupTimer1.unref?.();
     }
@@ -458,7 +447,7 @@ const inFlight = new Set();
  * 下载抖音视频/图文并以消息发出（自动分流）。
  *
  * 图文帖走 downloadImagePost（images[] → 一条多图片消息）；视频帖走原视频路径。
- * 必须在此分流：图文的 video 对象存在但 duration=0，且 play_addr 指向 BGM 的 MP3 ——
+ * 必须在此分流：图文的 video 对象存在但 duration=0，且 play_addr 指向 BGM 的 MP3，
  * 不分流会把背景音乐当视频下载，再被 MP4 魔数校验拦成「不是视频」。
  *
  * @param {string} awemeId 抖音内容 id（15-25 位数字）
@@ -509,7 +498,7 @@ export async function downloadAndSend(awemeId, { onebot, sender = null, kind, ch
     const baseName = `${safeName(title)}_${awemeId}`;
     const outPath = path.join(CACHE_DIR, `${baseName}.mp4`);
 
-    // ③ 下载（抖音直接给 MP4，无需 ffmpeg）——流式落盘，内存占用与视频大小无关
+    // ③ 下载（抖音直接给 MP4，无需 ffmpeg）。流式落盘，内存占用与视频大小无关
     const { bytes, contentType } = await safeFetchToFile(playUrl, outPath, maxBytes, {
       timeoutMs: 240000,
       headers: { 'User-Agent': DY_UA, 'Referer': 'https://www.douyin.com/' },
@@ -547,7 +536,7 @@ export async function downloadAndSend(awemeId, { onebot, sender = null, kind, ch
 /** 把下载错误压成一句人话（给群友看，不带技术细节） */
 export function briefFailure(e) {
   const m = String(e?.message ?? e ?? '');
-  // 截断/坏 JSON：接口响应过大被截、返回风控页等——重试可能好
+  // 截断/坏 JSON：接口响应过大被截、返回风控页等，重试可能好
   if (/截断|Unterminated|not valid JSON|Unexpected token|Unexpected end/i.test(m)) return '抖音那边返回的数据不完整，稍后再试一次';
   if (/大小上限/.test(m)) return '这个视频太大了，超出下载大小上限，下不了';
   if (/ttwid|空响应|cookie/i.test(m)) return '抖音视频解析不了（接口凭证过期了），稍后再试或让管理员更新插件配置里的 cookie';

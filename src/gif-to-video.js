@@ -1,6 +1,5 @@
 // GIF → 视频转换：有人发动态表情（GIF）时，把它转成模型可读的 mp4。
 //
-// ── 为什么需要这个模块 ────────────────────────────────────────────────
 // "支持图片输入"和"能读 GIF"是两回事，"支持视频输入"和"能读 GIF"也是两回事：
 //   · 多数视觉 API 对 GIF 要么按第一帧处理、要么直接拒收；
 //   · 全模态模型多数能读 mp4，却读不了 GIF。
@@ -8,19 +7,16 @@
 // 图片原样发，而是先用 ffmpeg 转成 mp4，再按 video 部件发给模型
 // （llm.js 的 specializedModelFor 会自动切到 videoModel）。
 //
-// ── 防"压缩炸弹"（decompression bomb）────────────────────────────────
-// GIF 是无损索引色格式，一个几 MB 的 GIF 解开可能是上万帧超大画布，
-// 转出来的 mp4 会大到把模型 token 预算炸穿（甚至拖垮网关）。
-// 强约束（写死，不做成配置 —— 这是安全上限，不是口味）：
+// 防"压缩炸弹"（decompression bomb）：GIF 是无损索引色格式，一个几 MB 的 GIF
+// 解开可能是上万帧超大画布，转出来的 mp4 会大到把模型 token 预算炸穿。
+// 强约束写死、不做成配置，因为这是安全上限，不是口味：
 //   · 转换后长宽的最大边 ≤ 480 像素
 //   · 转换后的总帧数 ≤ 24 帧
 // ffmpeg 一次调用同时做到：先按需缩放，再均匀重采样帧（fps=帧数/时长），
-// 最后 -frames:v 兜底截断 —— 即使 GIF 元数据撒谎也能被第三道闸拦住。
+// 最后 -frames:v 兜底截断，即使 GIF 元数据撒谎也能被第三道闸拦住。
 //
-// ── 与项目其它 ffmpeg 用法的关系 ─────────────────────────────────────
-// 路径解析统一走 `ffmpeg-resolve.js`（全项目唯一入口）：它负责「手填 > 环境变量 >
-// 设置页下载的 > 旧随包 > PATH/注册表/WinGet」这条链，本模块只保留自己的
-// **超时口径**（转换 45s、探测 10s）——那才是当初不该共享的东西。
+// 路径解析统一走 `ffmpeg-resolve.js`（全项目唯一入口）。本模块只保留自己的
+// 超时口径（转换 45s、探测 10s），那才是当初不该共享的东西。
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -77,7 +73,6 @@ export async function gifToVideoDataUrl(buffer) {
     fs.writeFileSync(tmpIn, buffer);
     // ffmpeg 参数：
     //   -ignore_loop 0        GIF 是循环格式；不忽略 loop 的话某些版本会无限读帧
-    //   fps=24/duration ...   见下：需要先知道时长才能均匀采到 ≤24 帧
     //   scale                  最长边 ≤480，等比缩小（小图不放大）
     //   -frames:v 24           帧数兜底闸：即使 fps 估算被恶意元数据骗过，
     //                          输出也绝不可能超过 24 帧
@@ -85,17 +80,16 @@ export async function gifToVideoDataUrl(buffer) {
     //   -movflags +faststart   mp4 索引前置：模型网关多数是流式读，不用等全文件
     //   -pix_fmt yuv420p       多数解码器只认 420p；GIF 的调色板格式直转会被拒
     //
-      // fps 的取法（防炸弹的核心）：
-      //   GIF 的帧延时可以任意小（1ms），直接 -r 抽采样会先解码全部帧再丢，
-      //   上万帧的炸弹 GIF 会让 ffmpeg 跑几分钟。所以分两步：
-      //   第一步 ffprobe 拿真实时长；第二步 fps = 24 / duration（每帧间隔都保留）。
-      //   拿不到时长就退回 fps=12 的保守值 —— 24 帧上限由 -frames:v 保证。
-      //
-      // force_divisible_by=2（2026-09-19 修"勾了视频输入 GIF 依旧按图片发"）：
-      //   yuv420p + libx264 只吃偶数宽高。QQ 表情 GIF 常见 640x361 这种奇数高，
-      //   转换会以 "Error while opening encoder" 失败，gifToVideoDataUrl 返回
-      //   null，调用方静默回退到按图片发 —— 表现为「视频输入勾了却永远不生效」。
-      //   整除 2 最多让画面偏 1px，比转换失败强得多。
+    // fps 的取法（防炸弹的核心）：
+    //   GIF 的帧延时可以任意小（1ms），直接 -r 抽采样会先解码全部帧再丢，
+    //   上万帧的炸弹 GIF 会让 ffmpeg 跑几分钟。所以分两步：
+    //   第一步 ffprobe 拿真实时长；第二步 fps = 24 / duration（每帧间隔都保留）。
+    //   拿不到时长就退回 fps=12 的保守值，24 帧上限由 -frames:v 保证。
+    //
+    // force_divisible_by=2：yuv420p + libx264 只吃偶数宽高。QQ 表情 GIF 常见
+    //   640x361 这种奇数高，转换会以 "Error while opening encoder" 失败，
+    //   gifToVideoDataUrl 返回 null，调用方静默回退到按图片发，表现为
+    //   「视频输入勾了却永远不生效」。整除 2 最多让画面偏 1px，比转换失败强。
       const duration = await probeDuration(tmpIn, ffmpeg, resolved.ffprobe);
       const fps = duration > 0 ? Math.min(24, Math.max(1, 24 / duration)) : 12;
       const okRun = await runOk(ffmpeg, [
@@ -240,7 +234,7 @@ function runStdout(cmd, args, timeoutMs = 15000) {
 /**
  * 当前配置下 GIF 应该走哪条路。**纯函数**，便于测试。
  *
- * 规则矩阵（2026-09-19 按用户定稿重写；vision = api.vision，video = api.video）：
+ * 规则矩阵（vision = api.vision，video = api.video）：
  *   vision=F, video=F → 'image'      所有图片（含动图）按 [图片] 占位符（看图工具整体不存在）
  *   vision=T, video=F → 'gif-image'  GIF 直接按图片发（读不了 GIF 的模型报错时，由调用方取首帧重试）
  *   vision=F, video=T → 'image'      图片输入没开：视频输入只管视频，图片一律占位符
@@ -255,9 +249,8 @@ export function resolveGifRoute({ vision = true, video = false } = {}) {
 }
 
 /**
- * GIF 首帧提取：把动图的第一帧转成静态 PNG/JPEG 的 dataUrl。
- * 用途：resolveGifRoute 走 'gif-image' 时，模型/网关读不了 GIF 报错的**降级重试**——
- * "报错则取首帧输入模型，此流程写进代码而不靠模型调用"（用户定稿）。
+ * GIF 首帧提取：把动图的第一帧转成静态 PNG 的 dataUrl。
+ * 用途：resolveGifRoute 走 'gif-image' 时，模型/网关读不了 GIF 报错的降级重试。
  * 提取失败（没 ffmpeg / 文件异常）返回 null，调用方退回原样发送。
  */
 export async function gifFirstFrameDataUrl(buffer) {

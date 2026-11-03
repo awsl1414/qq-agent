@@ -23,13 +23,13 @@ const FETCH_TIMEOUT_MS = 8000;
 let blocklist = new Set();
 let loaded = false;
 let syncPromise = null;
-// r92：blocklist 版本号 —— 每次被赋值（readCache/sync/update）就 +1，
+// blocklist 版本号：每次被赋值（readCache/sync/update）就 +1，
 // 供 getGlobalBlocklist 的最终结果缓存判失效。
 let blocklistVersion = 0;
-// r92：写互斥。syncGlobalBlocklist 与 updateGlobalBlocklist 都是"读快照 →
-// 网络请求 → 整体覆盖写回"，原实现只有 syncPromise 防同步并发，防不住用户
-// 更新与同步交错：用户移除某号码（t1 完成）会被一个 t0 发出、t2 才回来的
-// 同步用旧快照覆盖回配置（最长约 5 分钟后下一次同步才自愈）。
+// 写互斥。syncGlobalBlocklist 与 updateGlobalBlocklist 都是"读快照 →
+// 网络请求 → 整体覆盖写回"，只靠 syncPromise 防不住用户更新与同步交错：
+// 用户移除某号码（t1 完成）会被一个 t0 发出、t2 才回来的同步用旧快照
+// 覆盖回配置（最长约 5 分钟后下一次同步才自愈）。
 let communityWriteMutex = Promise.resolve();
 function withCommunityWrite(fn) {
   const run = communityWriteMutex.then(fn, fn);
@@ -94,7 +94,7 @@ async function request(pathname, options = {}) {
  *
  * ⚠️ 为什么需要：keyless 解除只改本地，云端名单仍含该 id。曾经直接把
  *   config.globalBlocklist 改成"移除后的集合"，但 5 分钟一次的
- *   syncGlobalBlocklist({pushLocal}) 发现它与云端不一致就用云端整体覆盖 ——
+ *   syncGlobalBlocklist({pushLocal}) 发现它与云端不一致就用云端整体覆盖，
  *   本机解除被悄悄回滚。豁免名单存在独立字段 communityExemptions，
  *   同步流程不写它，解除因此能跨同步存活。
  */
@@ -114,11 +114,10 @@ export function getCommunityExemptionsForTest() {
  *   否则会出现"设置里明明拉黑了、消息还是被处理"的回归。
  *   取并集（而非云端覆盖本地）是刻意的 fail-closed：云端拉不到时宁可多拦。
  *
- * r92：最终结果按「配置签名 + blocklist 版本」缓存。isGloballyBlocked 是
- *   **每条入站消息**的热路径（app.js ingestMessage 直接调），原实现每次全量
- *   重建：两次 normalizeIds（上限 2 万条）+ 并集 Set + filter，大名单 + 高频
- *   群消息时是 O(2万) 的重复计算。缓存判重 = 配置两个字段的对象引用 + 长度
- *   （updateConfig 全部走深合并/整体替换，引用必变；长度兜底防同引用被原地改）。
+ * 最终结果按「配置签名 + blocklist 版本」缓存。isGloballyBlocked 是每条入站消息
+ * 的热路径（app.js ingestMessage 直接调），每次全量重建要跑两次 normalizeIds
+ * （上限 2 万条）+ 并集 Set + filter。缓存判重 = 配置两个字段的对象引用 + 长度
+ * （updateConfig 全部走深合并/整体替换，引用必变；长度兜底防同引用被原地改）。
  */
 let _blFinalCache = null;
 export function getGlobalBlocklist() {
@@ -154,8 +153,8 @@ export function isGloballyBlocked(userId) {
 export async function syncGlobalBlocklist({ pushLocal = true } = {}) {
   if (syncPromise) return syncPromise;
   syncPromise = withCommunityWrite(async () => {
-    // r92：local 快照挪进互斥内取 —— 在外面取的话，等互斥的这段时间里配置
-    // 可能已被用户更新改掉，写回时就会把用户的改动覆盖掉（正是要修的竞态）。
+    // local 快照在互斥内取。在外面取的话，等互斥的这段时间里配置
+    // 可能已被用户更新改掉，写回时就会把用户的改动覆盖掉。
     const local = getGlobalBlocklist();
     const remote = await request('/blocklist');
     let ids = normalizeIds(remote?.ids);
@@ -175,8 +174,8 @@ export async function syncGlobalBlocklist({ pushLocal = true } = {}) {
     // 本地配置只作兼容缓存；主数据源是云端。
     if (pushLocal) {
       const old = normalizeIds(getConfig().globalBlocklist);
-      // r92：按集合比较，不按顺序 —— 原实现 join(',') 顺序比较，服务端返回
-      // 顺序变化就触发多余的 updateConfig 写盘。
+      // 按集合比较，不按顺序。用 join(',') 比顺序的话，服务端返回顺序
+      // 一变就触发多余的 updateConfig 写盘。
       const oldSet = new Set(old);
       const sameList = old.length === ids.length && ids.every((id) => oldSet.has(id));
       if (!sameList) updateConfig({ globalBlocklist: { __replace__: ids } });
@@ -190,13 +189,13 @@ export async function syncGlobalBlocklist({ pushLocal = true } = {}) {
  * 更新云端共享屏蔽名单。
  *
  * 分工（重要）：
- *   · 追加屏蔽走公开接口 POST /blocklist/add —— 每个安装实例都能举报骚扰者，
+ *   · 追加屏蔽走公开接口 POST /blocklist/add，每个安装实例都能举报骚扰者，
  *     共享名单才真的"一个群拉黑，所有群生效"。
- *   · 删除/整体覆盖必须带管理密钥 PUT /blocklist —— 否则任何访客都能清空名单。
+ *   · 删除/整体覆盖必须带管理密钥 PUT /blocklist，否则任何访客都能清空名单。
  *   · 没有密钥时，删除只在本机生效，并返回 warning 让上层提示用户。
  */
 export async function updateGlobalBlocklist(ids, { mode = 'replace' } = {}) {
-  // r92：整段包进写互斥（含开头的 local 快照）—— 与 syncGlobalBlocklist
+  // 整段包进写互斥（含开头的 local 快照），与 syncGlobalBlocklist
   // 串行化，杜绝"用户更新 vs 在途同步"的读-改-写交错覆盖。
   return withCommunityWrite(async () => {
     const local = getGlobalBlocklist();
@@ -228,7 +227,7 @@ export async function updateGlobalBlocklist(ids, { mode = 'replace' } = {}) {
         actual = actual.filter((id) => !toRemove.includes(id));
         warning = '本机已解除屏蔽，但云端移除需要有效的社区管理密钥，其它实例仍会屏蔽这些号码';
         // keyless 解除写进持久化豁免名单（独立字段，不会被 5 分钟一次的
-        // 云端同步覆盖 —— 曾经写 globalBlocklist，下个同步周期就被回滚）
+        // 云端同步覆盖，曾经写 globalBlocklist，下个同步周期就被回滚）
         const exemptions = new Set(getCommunityExemptions());
         for (const id of toRemove) exemptions.add(id);
         updateConfig({ communityExemptions: { __replace__: [...exemptions] } });

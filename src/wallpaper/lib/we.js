@@ -8,7 +8,7 @@
 //     创建的窗口标题精确等于 <title>；-width/-height 不可靠（要 1920x1080
 //     只给你 1280x720），所以开窗后必须 SetWindowPos 重新定尺寸。
 //   - WE 已在运行时，spawn 出来的进程只是把命令经 IPC 转发给老进程就退出，
-//     窗口属于老进程 —— proc 只做诊断，句柄以窗口枚举结果为准。
+//     窗口属于老进程，proc 只做诊断，句柄以窗口枚举结果为准。
 //   - 关窗必须走 `-control closeWallpaper -playInWindow <title>`，杀进程留窗。
 //   - FindWindowW 在 PowerShell 字符串编组下对这些窗口失灵（EnumWindows
 //     能看到、FindWindowW 返回 0），所以用 EnumWindows 精确匹配标题。
@@ -207,7 +207,7 @@ export async function recordSceneWindow(handle, out, opts, ffmpegPath) {
   const client = await measureClientRect(handle.hwnd, handle.title);
   const { x, y, width, height } = client;
   // 编码走硬件（NVENC/AMF）：ddagrab 抓帧本来就在 GPU，软编码反而要把
-  // 每帧搬回 CPU 压——硬件编码整条链路留在显卡上。探测失败自动回 libx264。
+  // 每帧搬回 CPU 压，硬件编码整条链路留在显卡上。探测失败自动回 libx264。
   const enc = await resolveHwEncoder(ffmpegPath);
   const args = [
     '-y', '-hide_banner', '-loglevel', 'warning',

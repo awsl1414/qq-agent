@@ -1,20 +1,15 @@
-// 〔启动 loading 壳 / 就绪体检 / 状态栏〕——M9 拆分第 2 段
+// 〔启动 loading 壳 / 就绪体检 / 状态栏〕
 'use strict';
 // ── 状态栏 ──
-// r94：写入签名。refreshStatus 被高频调用 —— 状态轮询（默认 15s，设置页下限 1s）、
-// 每条 SSE 的 status / onebot-status / chat-update（**每条消息都发**）/ snowluma-status /
-// qq-portable-status / session-start / session-end，外加切回设置页。旧实现每一轮都
-// 无条件重写顶栏 10 个节点、并调 renderBanner()（横幅可见时 innerHTML 整块重建，
-// 两个按钮连同监听器一起重造）。值没变也重写 = 无意义的样式失效与重绘；
-// 横幅那条最明显：暂停中、或一直没连上 OneBot 时，横幅每轮闪一次。
-// 做法与 14-chrome.js 的 syncIdentity（R80 / BUG-14）一致：签名不变就跳过 DOM 写入。
+// refreshStatus 被高频调用：状态轮询、每条消息的 SSE、切回设置页都会触发。
+// 无条件重写顶栏会让横幅（innerHTML 整块重建）每轮闪一次，所以这里用签名短路：
+// 值没变就跳过 DOM 写入。做法与 14-chrome.js 的 syncIdentity 一致。
 // ⚠️ state.* 仍然每轮更新（其它模块读它），只有 DOM 那一层被短路。
 let lastStatusSig = null;
 
-// ⚠️（2026-10-17 修 M6）连续失败计数 + 顶栏"过期"标记。
-//   本函数由 15 秒轮询驱动（02-sse-sessions.js）。原来 catch 里只有一句
-//   `/* 忽略瞬时错误 */` —— 如果 /api/status **持续**失败，顶栏就会一直显示上一次的
-//   "已连接 / 今日 N 次运行"，用户以为一切正常，实际后端早已不响应。
+// ⚠️ 连续失败计数 + 顶栏"过期"标记。
+//   本函数由 15 秒轮询驱动（02-sse-sessions.js）。如果 /api/status 持续失败，
+//   顶栏会一直显示上一次的"已连接 / 今日 N 次运行"，用户以为一切正常，实际后端早已不响应。
 //   **显示过期数据比显示错误更危险**（信息是错的，不是缺的）。
 //   连续 3 次（≈45 秒，足够滤掉一次网络抖动）仍失败 → 顶栏改口径。
 const STATUS_FAIL_THRESHOLD = 3;
@@ -36,9 +31,8 @@ function markStatusStale() {
       label.title = `控制台已连续 ${STATUS_FAIL_THRESHOLD} 次拿不到 /api/status 的响应，顶栏显示的是过期数据。请确认后端进程是否还在运行。`;
     }
   } catch (e) { /* 顶栏结构异常也不该把轮询本身搞崩 */ }
-  // 2026-10-23（P1-3）：renderBanner 平时只在 /api/status 成功路径里被调 ——
-  // 持续失败时它压根不会跑，横幅就永远停在旧内容。这里主动补一次，
-  // 让"和控制台失去联系"的横幅在 stale 置位后立刻亮出来。
+  // renderBanner 平时只在 /api/status 成功路径里被调，持续失败时它压根不会跑，
+  // 横幅就永远停在旧内容。这里主动补一次，让"和控制台失去联系"的横幅立刻亮出来。
   try { renderBanner(); } catch (e) { /* 横幅模块未就绪不阻塞 */ }
 }
 
@@ -54,13 +48,13 @@ async function refreshStatus() {
     state.status = await api('/api/status');
     const s = state.status;
     // ⚠️ 复位必须在**签名短路之前**：恢复后数据可能与失败前一字不差，
-    //   放在后面就会被下面的 `sig === lastStatusSig` 提前 return 掉 ——
+    //   放在后面就会被下面的 `sig === lastStatusSig` 提前 return 掉，
     //   顶栏会永远停在"状态未知（后端未响应）"。clearStatusStale 顺带把签名置空，
     //   保证恢复后的第一轮一定真正重写一次 DOM。
     statusFailStreak = 0;
     clearStatusStale();
     // 签名只取"参与渲染的标量"：不含对象引用（否则每轮必变，短路永远不生效）。
-    // 成本/命中率取整后再入签名 —— 它们是浮点，末位抖动不该算变化。
+    // 成本/命中率取整后再入签名，它们是浮点，末位抖动不该算变化。
     const cfg = state.config || {};
     const sig = JSON.stringify([
       s.onebot?.connected, s.onebot?.everConnected, s.onebot?.self?.nickname,
@@ -84,13 +78,10 @@ async function refreshStatus() {
     lastStatusSig = sig;
     const dot = $('#onebot-dot');
     const label = $('#onebot-label');
-    // 2026-10-23：原「自动注入已暂停（点此恢复）」整块删除 —— 协议端解耦后
-    // QQ Agent 不再注入 QQ，"停止接入/恢复接入"这个单向锁随注入一起消失。
     dot.className = 'dot ' + (s.onebot.connected ? 'dot-on' : (s.onebot.everConnected ? 'dot-wait' : 'dot-off'));
-    // 未连接时展示后端诊断（2026-09-19）：区分「协议端没起 / 没登录账号 / 令牌不匹配」，
-    // 不再让用户面对一句干巴巴的"未连接"猜原因。
-    // 2026-10-20：状态条是常驻可见的，术语换成"机器人上线"——「OneBot 未连接」
-    //   对新用户等于没说。诊断原文（后端给的）照旧透出，那里面的技术词是必要信息。
+    // 未连接时展示后端诊断：区分「协议端没起 / 没登录账号 / 令牌不匹配」，
+    // 不让用户面对一句干巴巴的"未连接"猜原因。
+    // 状态条常驻可见，术语用"机器人上线"，诊断原文（后端给的）照旧透出。
     label.textContent = s.onebot.connected
       ? `机器人已上线${s.onebot.self ? `（${s.onebot.self.nickname}）` : ''}`
       : (s.onebot.diagnosis || '机器人没连上');
@@ -110,8 +101,7 @@ async function refreshStatus() {
     renderBanner();
     updateReadinessDots(s);
   } catch (e) {
-    // ⚠️（M6）不能静默吞掉 —— 见 statusFailStreak 上方的注释。
-    //   单次失败仍然是"忽略"（瞬时错误不该打扰用户），只累计；连够次数才改口径。
+    // 单次失败忽略（瞬时错误不该打扰用户），只累计；连够次数才改口径。
     statusFailStreak += 1;
     if (statusFailStreak >= STATUS_FAIL_THRESHOLD) markStatusStale();
   }
@@ -124,18 +114,17 @@ function updateReadinessDots(s) {
 
   const qq = s?.qqPortable || {};
   const qqRunning = !!qq.running;
-  // 协议端是否在运行 —— 判据是 WS 端口在不在监听（协议端由用户自装，我们只能看端口）。
+  // 协议端是否在运行，判据是 WS 端口在不在监听（协议端由用户自装，我们只能看端口）。
   const protoUp = !!s?.protocol?.portOpen;
   const obConnected = !!s?.onebot?.connected;
   const cfg = state.config || {};
   const cfgReady = !!(cfg.api?.baseUrl && cfg.api?.model && (cfg.allow?.groups?.length || cfg.allow?.private?.length || cfg.allowAllWhenEmpty));
 
-  // 2026-10-18：四项统一由这张表驱动。ok → 只有圆点（保持简洁）；未就绪 → 圆点旁边
-  // 补一个极短缩写（⚠QQ / ⚠SL / ⚠OB / ⚠配置），不用悬停也知道缺哪一项；OneBot 在
-  // "协议端起着但还没连上"时是 wait（橙点 + OB…），全称仍在 title 里。
-  // 缩写刻意压到 1~2 个字 + 前缀符号：四项全异常时也只占 ~176px，不会撑破账号卡。
-  // QQ/协议端两项同时认 OneBot 已连接（2026-10-18 用户反馈）：OneBot 连上就是
-  // "QQ 侧 + 协议端实际已就绪"最硬的证据，不该因为探测不到进程而亮红字。
+  // 四项统一由这张表驱动。ok 时只有圆点；未就绪时圆点旁补一个极短缩写
+  // （⚠QQ / ⚠连接 / ⚠配置），不用悬停也知道缺哪一项。缩写压到 1~2 个字加前缀符号，
+  // 四项全异常时也只占约 176px，不会撑破账号卡。
+  // QQ/协议端两项同时认 OneBot 已连接：OneBot 连上就是"QQ 侧 + 协议端实际已就绪"
+  // 最硬的证据，不该因为探测不到进程而亮红字。
   const defs = [
     {
       ok: qqRunning || obConnected,
@@ -146,9 +135,7 @@ function updateReadinessDots(s) {
     },
     {
       ok: protoUp || obConnected,
-      // 2026-10-20：缩写原为「⚠SL」—— SL 是 SnowLuma 的首字母，只有开发者认得出。
-      // 2026-10-23：再改成「⚠QQ」—— 设置分区已改名「连接 QQ」，对小白来说这一项就是
-      // QQ 连接组件，出问题直接标 QQ 比标「网关」直观；四项缩写统一用中文短词。
+      // 协议端这一项也标 QQ：对用户来说它就是 QQ 连接组件，比标「网关」直观。
       off: '⚠QQ',
       title: protoUp ? '协议端（SnowLuma / NapCat）在运行'
         : (obConnected ? '已连接外部 QQ 协议端'
@@ -190,7 +177,6 @@ $$('#readiness-dots .rdot-item').forEach((item) => {
 });
 
 // token 紧凑格式统一走 00-core.js 的 fmtTokShort（K/M/G 三档）。
-// 旧实现在 n >= 10000 时才折算且只到 k 档，1687 万会显示成「16871.7k tok」。
 function fmtTokens(n) {
   return `${fmtTokShort(n)} tok`;
 }
@@ -198,7 +184,7 @@ function fmtTokens(n) {
 /**
  * 缓存命中率文案（prompt 里命中前缀缓存的部分占比）。
  * 口径与后端 `src/llm.js` 的 `cacheHitRate()` 一致：cachedTokens / promptTokens，钳到 0~1。
- * ⚠️ 只有拿到 prompt 数据才显示 —— 等待中 / 从未调用模型的会话没有分母，
+ * ⚠️ 只有拿到 prompt 数据才显示，等待中 / 从未调用模型的会话没有分母，
  *    硬显示 "缓存 0%" 会让人误以为缓存失效。
  */
 function fmtCacheRate(usage) {
@@ -221,10 +207,9 @@ function countToolCalls(s) {
   return (s?.messages || []).filter((m) => m && m.toolCall).length;
 }
 
-// ⚠️（2026-10-17 修 H1）加 `?.`：本文件是 defer 脚本、语句按序执行，
-//   而 $() 查不到节点时返回 null —— 直接 .addEventListener 会抛 TypeError，
-//   把这个文件**后面的所有顶层语句**一起带走（顶栏初始化、状态轮询全哑，
-//   界面上表现为"顶栏永远空着"而没有任何报错线索）。
+// 加 `?.`：本文件是 defer 脚本、语句按序执行，而 $() 查不到节点时返回 null。
+// 直接 .addEventListener 会抛 TypeError，把这个文件后面的所有顶层语句一起带走
+// （顶栏初始化、状态轮询全哑，界面上表现为"顶栏永远空着"而没有任何报错线索）。
 $('#pause-btn')?.addEventListener('click', async () => {
   if (state.paused) {
     await resumePause({ skipBacklog: false });
@@ -236,15 +221,13 @@ $('#pause-btn')?.addEventListener('click', async () => {
 
 // ── 会话渲染合批 ──
 // 运行中的会话 SSE 事件非常密：每轮"正在思考…"开/关两次 + 每个工具调用一次。
-// 曾经来一条事件就全量重建一次会话列表 + 会话详情（含大提示词的 esc/innerHTML），
-// 主线程被反复长阻塞，详情内容反而"更新缓慢"、还伴随滚动跳动。
-// 现在：patch 立即进 state（数据不延迟），渲染合并到短定时器一次；
-// 窗口内的多次事件只渲染最终状态（中间的 activity 翻转根本不必上屏）。
+// 来一条事件就全量重建会话列表和详情会让主线程反复长阻塞，详情内容反而"更新缓慢"，
+// 还伴随滚动跳动。现在 patch 立即进 state（数据不延迟），渲染合并到短定时器一次，
+// 窗口内的多次事件只渲染最终状态（中间的 activity 翻转不必上屏）。
 //
-// ⚠️ 用 setTimeout 而不是 requestAnimationFrame：
-//    窗口被遮挡/最小化时 Chromium 会完全停发 rAF，渲染全部积压到切回前台
-//    才一次性出现 —— 用户看到的就是"不手动刷新就不更新"。
-//    setTimeout 在后台页面仍会执行（最多被节流到 1s），远比不执行强。
+// ⚠️ 用 setTimeout 而不是 requestAnimationFrame：窗口被遮挡/最小化时 Chromium
+//    会完全停发 rAF，渲染全部积压到切回前台才一次性出现，用户看到的就是
+//    "不手动刷新就不更新"。setTimeout 在后台页面仍会执行（最多被节流到 1s）。
 const pendingSessionDetail = new Map();   // sessionId -> 合并后的 patch
 let sessionRenderScheduled = false;
 
@@ -259,7 +242,7 @@ function scheduleSessionRender() {
     pendingSessionDetail.clear();
     if (patch && state.tab === 'sessions') {
       // 详情用事件里的消息流渲染：HTTP 详情（systemPrompt 等）打底，SSE patch 覆盖动态字段。
-      // sent/finishReason 等收尾字段 patch 优先 —— 它们走 SSE 实时推，HTTP 详情里的是旧值。
+      // sent/finishReason 等收尾字段 patch 优先，它们走 SSE 实时推，HTTP 详情里的是旧值。
       renderSessionDetail({
         ...(state.sessionDetail || {}),
         ...patch,

@@ -1,11 +1,11 @@
 // 修复提案的 prompt 与解析。
 //
-// 分工与 triage.js 完全一致：**本模块只负责"拼 prompt + 解析回复"**，不调模型 ——
+// 分工与 triage.js 一致：**本模块只负责"拼 prompt + 解析回复"**，不调模型：
 // 调模型是 routes.js 的职责（插件层保持零 LLM 依赖）。
 // 这样"换模型渠道 / 加缓存 / billing tag"都只需动核心一处。
 //
-// ⚠️ 输出格式的所有权在定义 prompt 的这一方：改格式必须连解析一起改，
-//    否则会静默变成"提案解析出 0 条"（triage 踩过：只取 r.content 永远 undefined）。
+// 输出格式的所有权在定义 prompt 的这一方，改格式必须连解析一起改，
+// 否则会静默变成"提案解析出 0 条"（triage 踩过：只取 r.content 永远 undefined）。
 
 /** 协议条款（写进 prompt 的硬性要求，必须与 checks.js 的静态检查同口径）。 */
 export const PROTOCOL_CLAUSES = [
@@ -157,7 +157,7 @@ export function parseProposal(text) {
 
 /**
  * 把提案的 hunks 应用到原文，得到"改后文本"。
- * 为什么不让模型直接给整份新文件：整份重写会把无关行一起动掉（违反 P2），
+ * 不让模型直接给整份新文件：整份重写会把无关行一起动掉（违反 P2），
  * 而且长文件很容易被截断成半截。hunks 是"最小改动"在数据上的表达。
  */
 export function applyHunks(original, hunks) {

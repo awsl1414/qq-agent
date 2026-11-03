@@ -1,4 +1,4 @@
-// setu Pixiv 搜索基础设施（从 setu.js 提取）：搜索缓存、429 重试、多实例轮换、标签补全、候选取图。
+// setu Pixiv 搜索基础设施：搜索缓存、429 重试、多实例轮换、标签补全、候选取图。
 // 依赖：config.js（常量）、safe-fetch.js、downloader.js（fetchWithProxyFallback, sleep）、filters.js（过滤函数）
 import { safeFetch, safeFetchBinary } from '../../src/safe-fetch.js';
 import { fetchWithProxyFallback, sleep } from './downloader.js';
@@ -89,8 +89,8 @@ export async function fetchPixivSearch(cfg, word, page, order) {
       } catch (error) {
         const msg = String(error?.message ?? error);
         console.warn(`[setu] fetchPixivSearch 失败: ${msg}`);
-        // 可轮换/重试的故障 = 限流 429/403/5xx + 网络类失败 + 非法响应（HTML 错误页会让 JSON.parse 抛
-        // "Unexpected token"）。之前只认 HTTP 状态码 —— 主实例网络抖动一次就放弃所有备用实例与退避。
+        // 可轮换/重试的故障 = 限流 429/403/5xx + 网络类失败 + 非法响应（HTML 错误页会让 JSON.parse
+        // 抛 "Unexpected token"）。只认 HTTP 状态码的话，主实例网络抖动一次就会放弃所有备用实例与退避。
         if (!/429|403|500|502|503|timeout|timed out|超时|ECONN|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|fetch failed|socket hang up|非 JSON|Unterminated|Unexpected/i.test(msg)) throw error;
       }
     }
@@ -235,7 +235,7 @@ export async function lookupBooruTag(cfg, query, category) {
 // ── Booru 页面抓取 ──────────────────────────────────────────────────────────
 
 /**
- * 抓一页 Pixiv 搜索结果，返回**按质量排序**的原图 URL 列表。失败返回 []。
+ * 抓一页 Pixiv 搜索结果，返回按质量排序的原图 URL 列表。失败返回 []。
  */
 export async function fetchBooruPage(cfg, tags, limit, offset, soloOnly, femaleOnly, noHorror, singleCharacterOnly) {
   const { base } = pixivCfg(cfg.booru);
@@ -448,9 +448,8 @@ export async function fetchBooruCandidates(cfg, source, tags, want, soloOnly, fe
       const fresh = cached.urls.filter((u) => !source.isRecent(u));
       if (fresh.length > 0) {
         console.log(`[setu] 「${tags}」去重耗尽（已有${collected.length}条），附加标签「${word}」缓存命中 ${fresh.length} 条新鲜 URL`);
-        // L 级（2026-10-14）：缓存分支也要与已收集去重 —— 不同搜索词的图高度重叠，
-        // 重复 URL 会被下载两次、极端情况同一张图连发（searchWithWord 分支内部有去重，
-        // 这条缓存分支此前漏了）。
+        // 缓存分支也要与已收集去重：不同搜索词的图高度重叠，重复 URL 会被下载两次，
+        // 极端情况同一张图连发（searchWithWord 分支内部有去重，这条分支此前漏了）。
         for (const u of fresh) if (!collected.includes(u)) collected.push(u);
         continue;
       }

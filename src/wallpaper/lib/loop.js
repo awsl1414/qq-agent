@@ -8,7 +8,7 @@
 // 让 HTTP 流式起播更快。
 //
 // 曾经踩过的坑（原注释保留）：最初设计的 [b]trim=1 做 base、淡入头
-// setpts 平移到 [D-1..D] 的链路会整段丢掉 overlay 帧 —— overlay 输出随
+// setpts 平移到 [D-1..D] 的链路会整段丢掉 overlay 帧，overlay 输出随
 // 主输入结束，主输入末尾之后的帧永远不会被合成。
 import fs from 'node:fs';
 import path from 'node:path';
@@ -43,7 +43,7 @@ export async function makeSeamless(input, output, fadeSec, ffmpegPath, options =
   // 构造（2026-10-05 重构，输出语义与原版一致）：
   //   output = concat( overlay(尾段, 淡入的头段), 主体 )
   // 原版用 [0:v]split 双分支：尾段分支要等全片解完才开始消费，滤镜队列
-  // 里堆下整段视频的帧 —— 1080p30 的 15 秒场景 ~1.3GB 还能活，4K60 的
+  // 里堆下整段视频的帧，1080p30 的 15 秒场景 ~1.3GB 还能活，4K60 的
   // 30 秒视频 ~20GB 直接 "Cannot allocate memory"。改为**三次定向 seek
   // 输入**（尾段/头段/主体各自独立解码），队列只剩常数帧，任何分辨率
   // 与时长都不再爆内存。
@@ -61,7 +61,7 @@ export async function makeSeamless(input, output, fadeSec, ffmpegPath, options =
 
   fs.mkdirSync(path.dirname(path.resolve(output)), { recursive: true });
   // 编码走硬件（NVENC/AMF，弱 CPU 机器软编码要跑满核几分钟）；探测失败
-  // 自动回退 libx264。输入解码保持软件 —— 实测 -hwaccel auto 在双显卡/
+  // 自动回退 libx264。输入解码保持软件，实测 -hwaccel auto 在双显卡/
   // 虚拟显示器机器上会 "Failed to transfer data to output frame: -12"
   // 直接炸掉整个转码（这类机器的 D3D11VA 路径不可靠，本就是一次性任务，
   // 软解源文件完全可接受）。
@@ -93,7 +93,7 @@ export async function makeSeamless(input, output, fadeSec, ffmpegPath, options =
  *
  * ffprobe 的路径推导统一走 `ffmpeg-resolve.js` 的 `ffprobeFor()`，不要在这里
  * 自己 replace 文件名：那份实现会**先确认同目录文件真的存在**，没有就退回 PATH
- * 里的 ffprobe。手工推导只会得到"同目录应该有"的猜测 —— 用户把 ffmpeg 单独
+ * 里的 ffprobe。手工推导只会得到"同目录应该有"的猜测，用户把 ffmpeg 单独
  * 拷进某个目录（旧随包那份就是只有 ffmpeg 没有 ffprobe）时，猜出来的路径不存在，
  * 于是每次都要先失败一次才落到 `ffmpeg -i` 兜底，白起一个子进程。
  */

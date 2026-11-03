@@ -1,16 +1,6 @@
-// 计算器插件
-// 演示如何安全地执行数学表达式
-//
-// v1.1.0 新增：
-//   - 幂运算：x ^ y（在 calculate 的 expression 里用 ^，内部转成 **）
-//   - 平方根：sqrt(x)（在 calculate 的 expression 里直接用）
-//   - 进制转换：新增 base_convert 工具（十进制与二/八/十六进制互转）
-// 原有 calculate 工具的 id 与参数结构（expression）保持不变，四则运算行为不变。
+// 计算器插件：安全地执行数学表达式，并在进制之间转换。
 
 export function register(api) {
-  // ── 工具 1：calculate（原有工具，签名不变）────────────────────────────
-  // 在原有 + - * / % 括号 的基础上，额外支持 ^（幂）与 sqrt()（平方根）。
-  // 原来的合法表达式仍是合法表达式，行为完全一致。
   api.registerTool({
     id: 'calculate',
     name: '计算',
@@ -29,7 +19,6 @@ export function register(api) {
       if (!expr) return { content: '错误：请提供要计算的表达式', isError: true };
 
       // 安全检查：只允许数字、运算符、括号、小数点，以及 sqrt 这几个字母和逗号。
-      // 这是原白名单的超集，原有表达式不受影响。
       if (!/^[\d\s+\-*/%().^a-z,]+$/.test(expr)) {
         return { content: '错误：表达式包含不允许的字符（只允许数字和 + - * / % ( ) ^，以及 sqrt）', isError: true };
       }
@@ -37,7 +26,7 @@ export function register(api) {
       if (/[a-z]+/.test(expr.replace(/sqrt/g, ''))) {
         return { content: '错误：表达式包含不支持的函数或字母（目前只支持 sqrt）', isError: true };
       }
-      // 幂运算：把 ^ 换成 JS 的 **
+      // 幂运算：^ 换成 JS 的 **
       const jsExpr = expr.replace(/\^/g, '**');
 
       try {
@@ -59,7 +48,6 @@ export function register(api) {
     }
   });
 
-  // ── 工具 2：base_convert（v1.1.0 新增）──────────────────────────────
   api.registerTool({
     id: 'base_convert',
     name: '进制转换',

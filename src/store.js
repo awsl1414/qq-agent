@@ -21,26 +21,25 @@ import { logger } from './logger.js';
 import { atomicWriteJson } from './atomic-write.js';
 
 const MESSAGES_DIR = path.join(DATA_DIR, 'messages');
-// r92（R78-2）：内存缓存的会话数上限。120 个会话 × 单会话消息上限，是
-// "常驻内存不失控"与"活跃会话不反复读盘"的平衡点；被淘汰的会话下次访问
-// 重读磁盘（单文件毫秒级），行为无感。
+// 内存缓存的会话数上限。120 个会话 × 单会话消息上限，是"常驻内存不失控"
+// 与"活跃会话不反复读盘"的平衡点；被淘汰的会话下次访问重读磁盘（单文件毫秒级），行为无感。
 const MAX_CACHED_CHATS = 120;
 
 // 元信息里 lastText 的保留长度（见 getChatMeta 的注释）：它只用于列表预览，
 // 消费方最多取前 30 字。定 200 是给 UI 一行留足余量，同时给 4000 条缓存封顶。
 const CHAT_META_LAST_TEXT_MAX = 200;
 
-// ── 存档落盘节流（报告3 M5，2026-10-17）────────────────────────────────────
+// ── 存档落盘节流 ────────────────────────────────────────────────────────
 //
-// 问题：saveChat 是**同步全量重写**（writeFileSync + renameSync），而
-// appendIncoming / appendSelf 在 ingest 热路径上**每条消息**都无条件调用它。
-// 单群存档长到 1MB 时一次写约 5~15ms，全部记在主进程的 event loop 账上 ——
+// 问题：saveChat 是同步全量重写（writeFileSync + renameSync），而
+// appendIncoming / appendSelf 在 ingest 热路径上每条消息都无条件调用它。
+// 单群存档长到 1MB 时一次写约 5~15ms，全部记在主进程的 event loop 账上，
 // 群里连续来消息时，排在后面的 SSE 广播 / HTTP 响应 / agent 轮次一起被拖慢。
 //
-// 对照：sessions.js 早就为**会话文件**做了 2 秒节流（#persistThrottled），
-// 只有 store 的消息存档漏了 —— 属"修复覆盖不全面"，不是新问题。
+// 对照：sessions.js 早就为会话文件做了 2 秒节流（#persistThrottled），
+// 只有 store 的消息存档漏了。
 //
-// 语义：**节流（leading + trailing）而不是防抖**。
+// 语义：节流（leading + trailing）而不是防抖。
 //   窗口内第一次调用立刻写；窗口内的后续调用只登记"这份状态待写"，由尾随定时器
 //   在窗口结束时补写一次。若用防抖，一个持续来消息的群会把落盘无限推迟
 //   （每条消息都重置计时器），那不是节流，是"永远不写"。
@@ -75,7 +74,7 @@ function loadChat(chatKey) {
     text = fs.readFileSync(file, 'utf8');
   } catch (error) {
     // 文件不存在 = 真的新会话，正常返回空状态。
-    // 但其它读失败（权限、目录、文件锁）不能一律当"新会话"——
+    // 但其它读失败（权限、目录、文件锁）不能一律当"新会话"，
     // 那会让人以为聊天记录是空的，实际上是读不出来，且无处可查。
     if (error?.code !== 'ENOENT') {
       logger.error('store', `读取 ${file} 失败：${error?.message ?? error}`);
@@ -86,22 +85,20 @@ function loadChat(chatKey) {
   try {
     const parsed = JSON.parse(text);
     if (parsed && Array.isArray(parsed.messages)) {
-      // r92：合法 JSON 但缺 nextLocalId（或被手改坏）时兜底为 1。原实现原样
-      // 返回，`st.nextLocalId++` 产出 NaN，之后所有本地 id 都是 NaN ——
+      // 合法 JSON 但缺 nextLocalId（或被手改坏）时兜底为 1。原样返回的话，
+      // `st.nextLocalId++` 产出 NaN，之后所有本地 id 都是 NaN，
       // 消息去重、转发展开、金句引用全对不上。
       if (!Number.isFinite(Number(parsed.nextLocalId))) parsed.nextLocalId = 1;
       return parsed;
     }
     throw new Error('结构异常：缺少 messages 数组');
   } catch (error) {
-    // ⚠️ 损坏必须显式处理，不能静默回落成"新会话"（2026-10-07 修）。
-    //   原实现的 `catch { /* 新会话 */ }` 把「文件不存在」和「JSON 解析失败」
-    //   当成同一件事：文件损坏时返回空状态，而**下一条消息到达就会用
-    //   1 条内容覆盖写上去** —— 全部历史不可恢复、无日志、无备份。
-    //   实测：预先写入截断的 JSON，再 append 一条 → 文件变成 1 条，
-    //   损坏前的内容静默消失。
-    //   store 是「真相源、不可再生」（migrate.js 原话），所以这里照 config.js 的 `preserveSanitizedSecrets`
-    //   已有现成范式做：先备份成 .corrupt-<ts>，再回落，并明确告知用户去抢救。
+    // 损坏必须显式处理，不能静默回落成"新会话"。
+    // 把「文件不存在」和「JSON 解析失败」当成同一件事的话，文件损坏时返回空状态，
+    // 而下一条消息到达就会用 1 条内容覆盖写上去，全部历史不可恢复、无日志、无备份。
+    // 实测：预先写入截断的 JSON，再 append 一条，文件变成 1 条，损坏前的内容静默消失。
+    // store 是「真相源、不可再生」，所以照 config.js 的 `preserveSanitizedSecrets`
+    // 已有现成范式做：先备份成 .corrupt-<ts>，再回落，并明确告知用户去抢救。
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const backup = `${file}.corrupt-${stamp}`;
     try {
@@ -110,7 +107,7 @@ function loadChat(chatKey) {
     } catch (e) {
       logger.error('store', `${chatFile(chatKey)} 已损坏（${error?.message ?? error}），且备份失败：${e?.message ?? e}`);
     }
-    // 回落：损坏文件**保留在磁盘上不删**，只在内存里当作空会话。
+    // 回落：损坏文件保留在磁盘上不删，只在内存里当作空会话。
     // 绝不能在这里"顺手清理"，否则用户连抢救的原料都没有了。
     return { chatKey, nextLocalId: 1, messages: [], __corrupted: true, __corruptBackup: backup };
   }
@@ -118,27 +115,26 @@ function loadChat(chatKey) {
 
 /** 真正落盘一份存档（同步全量重写）。失败返回 false，不抛。 */
 function saveChatNow(state) {
-  // 2026-10-16（外部审查 #13）：改走 src/atomic-write.js 的统一实现（原来是本文件
-  // 自己写的一份 tmp+rename）。atomicWriteText 语义是其严格超集：同样的原子 rename，
-  // 另加失败时清掉临时文件 —— 写失败（磁盘满 / 权限）时不再往存档目录堆 .tmp 垃圾。
+  // 改走 src/atomic-write.js 的统一实现（原来是本文件自己写的一份 tmp+rename）。
+  // atomicWriteText 语义是其严格超集：同样的原子 rename，另加失败时清掉临时文件，
+  // 写失败（磁盘满 / 权限）时不再往存档目录堆 .tmp 垃圾。
   if (!atomicWriteJson(chatFile(state.chatKey), state, 1)) return false;
   return true;
 }
 
 /**
- * 落盘一份存档（**按会话节流**，见 SAVE_THROTTLE_MS 的注释）。
+ * 落盘一份存档（按会话节流，见 SAVE_THROTTLE_MS 的注释）。
  *
  * @param {object} state
  * @param {{immediate?: boolean}} [opts] immediate=true 跳过节流立刻写（测试 / 关键路径用）
  */
 function saveChat(state, { immediate = false } = {}) {
-  // ⚠️ 损坏判定必须在**写 tmp 之前**（2026-10-07 修）。
-  //   放在后面的话，损坏状态会在内存缓存里长期为真，于是**每条消息都会先写一个
-  //   <file>.<pid>.tmp 再被拒绝** → 磁盘上持续堆积无用文件。
+  // 损坏判定必须在写 tmp 之前。放在后面的话，损坏状态会在内存缓存里长期为真，
+  // 于是每条消息都会先写一个 <file>.<pid>.tmp 再被拒绝，磁盘上持续堆积无用文件。
   //
-  //   这里选择**拒绝写入并保留原文件**：宁可"这条消息暂时存不下"，
-  //   也不能悄悄毁掉别人整段群聊历史（原实现会静默覆盖成 1 条）。
-  //   注意这条判定**不参与节流**：它必须在每次调用时立刻生效。
+  // 这里选择拒绝写入并保留原文件：宁可"这条消息暂时存不下"，
+  // 也不能悄悄毁掉别人整段群聊历史（原实现会静默覆盖成 1 条）。
+  // 这条判定不参与节流，必须在每次调用时立刻生效。
   if (state.__corrupted) {
     logger.error('store', `会话 ${state.chatKey} 的存档此前已损坏，为避免覆盖原始内容，本次写入已被拒绝。请先处理备份文件 ${state.__corruptBackup || '(无)'}。`);
     return false;
@@ -159,7 +155,7 @@ function saveChat(state, { immediate = false } = {}) {
     return saveChatNow(state);
   }
 
-  // 窗口内：登记待写。同一会话只挂一个定时器 —— state 是**活对象**（缓存里那一份），
+  // 窗口内：登记待写。同一会话只挂一个定时器。state 是活对象（缓存里那一份），
   // 期间发生的后续改动会自动包含在这次写入里，不需要重新入队。
   const pend = savePending.get(key);
   if (pend) { pend.state = state; return true; }
@@ -175,10 +171,10 @@ function saveChat(state, { immediate = false } = {}) {
 }
 
 /**
- * 把所有待落盘的存档**立刻**写下去，返回写了几份。
+ * 把所有待落盘的存档立刻写下去，返回写了几份。
  *
  * 必须在进程退出前调用（app.js 的 stop()、以及 main.js 两条强制退出兜底）。
- * 不调的话，退出前最后 SAVE_THROTTLE_MS 毫秒内收到的消息会丢 ——
+ * 不调的话，退出前最后 SAVE_THROTTLE_MS 毫秒内收到的消息会丢，
  * 那正是用户"刚看到消息就关程序"的场景，丢得最容易被察觉。
  */
 export function flushPendingSaves() {
@@ -199,25 +195,24 @@ export function flushPendingSaves() {
 export class ChatStore {
   constructor(maxPerChat = 0, maxCachedChats = MAX_CACHED_CHATS) {
     this.maxPerChat = Math.max(0, Number(maxPerChat) || 0);
-    // r92（R78-2）：内存缓存上限。原实现只增不减，且 listChats() 把磁盘上**每个**
-    // 会话文件都读进缓存（/api/chats 走这条路，UI 每 15 秒轮询一次）→ 群多/运行久
-    // 时内存线性无界增长。最小 1，避免配成 0 后退化成"每次访问都读盘"。
+    // 内存缓存上限。只增不减、且 listChats() 把磁盘上每个会话文件都读进缓存
+    // （/api/chats 走这条路，UI 每 15 秒轮询一次）的话，群多/运行久时内存线性无界增长。
+    // 最小 1，避免配成 0 后退化成"每次访问都读盘"。
     this.maxCachedChats = Math.max(1, Number(maxCachedChats) || MAX_CACHED_CHATS);
     this.chats = new Map(); // chatKey -> state（按最近使用排序，见 #state）
-    // r93：会话**元信息**缓存（键 = chatKey，值 = { stamp, meta }）。
-    // 见 getChatMeta() 的注释 —— 这是本轮"卡界面"的主修之一。
+    // 会话元信息缓存（键 = chatKey，值 = { stamp, meta }）。
+    // 见 getChatMeta() 的注释，这是"卡界面"的主修之一。
     this.chatMeta = new Map();
     // 元信息缓存的条数上限。
     //
-    // ⚠️（2026-10-17 复核报告3 L4）报告说"4000 与相邻 MAX_CACHED_CHATS=120 差 33 倍，
-    //   像是拍的、不是推导的" —— 这个推断不成立，两个缓存服务的对象不同：
-    //     · chats（120）缓存**整个消息数组**，很贵；只让活跃会话留在内存。
-    //     · chatMeta（本项）缓存的是"文件 (mtime,size) → 摘要"，它的唯一用途是让
-    //       /api/chats 与 list-chats 不必对磁盘上**每个**会话 readFileSync + JSON.parse。
-    //       而那个循环天然要遍历磁盘上的全部会话（本机实测 2277 个），上限若压到 120
-    //       会让缓存每轮全部失配 → 退回每次轮询解析上千个文件，正是 r93 修掉的"界面卡死"。
-    //   所以 4000 是有依据的：要盖住"磁盘上所有会话"并给历史增长留余量。
-    //   单条目成本由 CHAT_META_LAST_TEXT_MAX 兜住（见 getChatMeta）。
+    // 4000 与相邻 MAX_CACHED_CHATS=120 差 33 倍，但两个缓存服务的对象不同：
+    //   - chats（120）缓存整个消息数组，很贵；只让活跃会话留在内存。
+    //   - chatMeta（本项）缓存的是"文件 (mtime,size) → 摘要"，唯一用途是让
+    //     /api/chats 与 list-chats 不必对磁盘上每个会话 readFileSync + JSON.parse。
+    //     而那个循环天然要遍历磁盘上的全部会话（本机实测 2277 个），上限若压到 120
+    //     会让缓存每轮全部失配，退回每次轮询解析上千个文件，正是修掉的那个"界面卡死"。
+    // 所以 4000 是有依据的：要盖住"磁盘上所有会话"并给历史增长留余量。
+    // 单条目成本由 CHAT_META_LAST_TEXT_MAX 兜住（见 getChatMeta）。
     this.maxChatMeta = 4000;
   }
 
@@ -228,14 +223,14 @@ export class ChatStore {
   /**
    * 失效某个会话的内存缓存（数据移植用）。
    * 磁盘上的 messages/<会话>.json 被外部改写后，内存里的旧状态会在下次
-   * saveChat 时**反向覆盖**导入内容 —— 必须先丢掉缓存，下次访问重读磁盘。
+   * saveChat 时反向覆盖导入内容，必须先丢掉缓存，下次访问重读磁盘。
    * @returns {boolean} 该会话此前是否在内存中
    */
   invalidate(chatKey) {
-    // r93：元信息缓存必须一起失效 —— 数据移植/外部改写后它记的是旧条数与旧末条。
+    // 元信息缓存必须一起失效：数据移植/外部改写后它记的是旧条数与旧末条。
     this.chatMeta.delete(String(chatKey));
-    // ⚠️（M5）待落盘的存档也必须取消：否则那个尾随定时器会在导入完成后
-    //   把**导入前的旧内容**写回去，把刚移植进来的数据当场盖掉。
+    // 待落盘的存档也必须取消：否则那个尾随定时器会在导入完成后
+    // 把导入前的旧内容写回去，把刚移植进来的数据当场盖掉。
     cancelPendingSave(String(chatKey));
     return this.chats.delete(String(chatKey));
   }
@@ -248,12 +243,12 @@ export class ChatStore {
   /**
    * 取（必要时读盘并缓存）某会话的状态。
    *
-   * r92（R78-2）：LRU 淘汰 + 键归一化。
-   *   · Map 的迭代顺序 = 插入顺序，所以"删掉再插回"即把该项移到最新端；
-   *     需要淘汰时从**头部**（最久未用）开始删。
-   *   · 键统一 String(chatKey)：invalidate() 本来就按 String 删，两处口径原本不一致
+   * LRU 淘汰 + 键归一化：
+   *   - Map 的迭代顺序 = 插入顺序，所以"删掉再插回"即把该项移到最新端；
+   *     需要淘汰时从头部（最久未用）开始删。
+   *   - 键统一 String(chatKey)：invalidate() 本来就按 String 删，两处口径原本不一致
    *     （非字符串键会漏删，留下一个永远不会被访问到的幽灵条目）。
-   *   · 损坏态（__corrupted）**不淘汰**：loadChat 每次读到坏文件都会再写一份
+   *   - 损坏态（__corrupted）不淘汰：loadChat 每次读到坏文件都会再写一份
    *     .corrupt-<ts> 备份，若把它反复淘汰/重读，就会不断产生备份文件。
    */
   #state(chatKey) {
@@ -278,24 +273,23 @@ export class ChatStore {
       if (this.chats.size <= this.maxCachedChats) return;
       if (key === justAdded) continue;
       if (st && st.__corrupted) continue;   // 见 #state 注释：损坏态必须常驻
-      // ⚠️（M5）有待落盘内容的会话不能淘汰：尾随定时器还持着这份 state 引用，
-      //   淘汰后它下次访问会从磁盘（还没含本次改动）重读，然后被延迟写入覆盖 ——
-      //   表现为"某条消息写了又没了"。等落盘完成后自然可淘汰。
+      // 有待落盘内容的会话不能淘汰：尾随定时器还持着这份 state 引用，
+      // 淘汰后它下次访问会从磁盘（还没含本次改动）重读，然后被延迟写入覆盖，
+      // 表现为"某条消息写了又没了"。等落盘完成后自然可淘汰。
       if (savePending.has(key)) continue;
       this.chats.delete(key);
     }
   }
 
   /**
-   * 列出**磁盘上**的全部会话（而不是"内存缓存里幸存的那些"）。
+   * 列出磁盘上的全部会话（而不是"内存缓存里幸存的那些"）。
    *
-   * ⚠️ r92：与 R78-2 的 LRU 上限成对落地。本方法若走"逐个 #state() 再返回
-   *    缓存 keys"，加上 120 的缓存上限后返回值会**悄悄**从"磁盘上全部会话"
-   *    变成"缓存里幸存的 ≤120 个"（这正是旧分支 R78→R86 踩过的回归：淘汰从
-   *    Map 头部开始、磁盘列目录是字典序，活下来的就成了字典序最大的 120 个，
-   *    与活跃度完全无关）。正确语义本就是"磁盘上的会话清单"，直接从文件名
-   *    还原即可：不读文件内容，也**不该借道缓存** —— 顺手还避免了"为了列个
-   *    清单把所有会话都灌进缓存再淘汰掉"。调用方拿到 key 后按需走 #state()。
+   * 本方法若走"逐个 #state() 再返回缓存 keys"，加上 120 的缓存上限后返回值会悄悄
+   * 从"磁盘上全部会话"变成"缓存里幸存的 ≤120 个"（曾踩过的回归：淘汰从 Map 头部
+   * 开始、磁盘列目录是字典序，活下来的就成了字典序最大的 120 个，与活跃度完全无关）。
+   * 正确语义本就是"磁盘上的会话清单"，直接从文件名还原即可：不读文件内容，
+   * 也不该借道缓存，顺手还避免了"为了列个清单把所有会话都灌进缓存再淘汰掉"。
+   * 调用方拿到 key 后按需走 #state()。
    */
   listChats() {
     try {
@@ -307,7 +301,7 @@ export class ChatStore {
       return out;
     } catch (error) {
       // 目录还不存在（一条消息都没收到过）→ 退回"缓存里已知的"，至少不是空。
-      // 其它失败（EACCES/EMFILE/占用）不能静默吞掉 —— 那会返回不完整的会话
+      // 其它失败（EACCES/EMFILE/占用）不能静默吞掉，那会返回不完整的会话
       // 列表且无任何日志。与 loadChat 的处理范式对齐。
       if (error?.code !== 'ENOENT') {
         logger.error('store', `列举会话目录失败：${error?.message ?? error}`);
@@ -319,17 +313,17 @@ export class ChatStore {
   /**
    * 会话摘要（条数 / 未读数 / 最后一条）。
    *
-   * ⚠️ r93：本方法原来是"纯读盘"—— `#state()` 对**不在 LRU 缓存里**的会话一律
-   * readFileSync + JSON.parse 一整份。而 /api/chats 与 list-chats 工具都是
-   * **对磁盘上每个会话**循环调用它（routes.js 的用量接口 / tools.js 的 `send_message`），UI 又每
-   * 15 秒轮询一次 /api/chats。于是历史会话一多（实测有 2277 个文件的实例，
-   * 单群存档可达 1MB），主进程每 15 秒就同步读+解析上千个文件 —— 事件循环被
-   * 占满，窗口/HTTP/agent 一起卡住，用户看到的就是"界面卡死不动"。
+   * 本方法原来是"纯读盘"：`#state()` 对不在 LRU 缓存里的会话一律 readFileSync +
+   * JSON.parse 一整份。而 /api/chats 与 list-chats 工具都是对磁盘上每个会话循环
+   * 调用它（routes.js 的用量接口 / tools.js 的 `send_message`），UI 又每 15 秒
+   * 轮询一次 /api/chats。于是历史会话一多（实测有 2277 个文件的实例，单群存档可达
+   * 1MB），主进程每 15 秒就同步读+解析上千个文件，事件循环被占满，
+   * 窗口/HTTP/agent 一起卡住，用户看到的就是"界面卡死不动"。
    *
-   * 修法：摘要只依赖文件内容，所以拿 **(mtimeMs, size)** 当版本号做缓存 ——
+   * 修法：摘要只依赖文件内容，所以拿 (mtimeMs, size) 当版本号做缓存。
    * 文件没变就直接返回（一次 statSync，比 read+parse 便宜两三个数量级）；
    * 文件变了（新消息落盘 / 数据移植）自然失效重算。stat 本身失败（文件还没
-   * 写过）时不缓存，走原来的实读路径，行为与 r92 一致。
+   * 写过）时不缓存，走原来的实读路径。
    */
   getChatMeta(chatKey) {
     const key = String(chatKey);
@@ -348,10 +342,10 @@ export class ChatStore {
     const st = this.#state(key);
     const unread = st.messages.filter((m) => !m.read).length;
     const last = st.messages[st.messages.length - 1] || null;
-    // lastText 是**每条**元信息里唯一不定长的字段，而条目上限 4000 —— 一条长消息
+    // lastText 是每条元信息里唯一不定长的字段，而条目上限 4000：一条长消息
     // （转发的合并聊天记录、长文）就是几千字符，乘 4000 是实打实的内存。
     // 它的用途只有两处：列表页的一行预览（CSS 本来就会截断）与 list-chats 工具的
-    // 前 30 字摘要，没有任何消费者需要全文。所以在**构建时**统一截断 ——
+    // 前 30 字摘要，没有任何消费者需要全文。所以在构建时统一截断，
     // 缓存命中与未命中两条路径走同一个 meta，不会出现"有时截有时不截"。
     const meta = {
       chatKey: key,
@@ -363,7 +357,7 @@ export class ChatStore {
     if (stamp) {
       this.chatMeta.set(key, { stamp, meta });
       // 超上限：按插入顺序淘汰最旧的（与 #evictIfNeeded 同一思路，但这里
-      // 没有"损坏态必须常驻"的例外 —— 元信息随时可重算，淘汰零风险）。
+      // 没有"损坏态必须常驻"的例外，元信息随时可重算，淘汰零风险）。
       while (this.chatMeta.size > this.maxChatMeta) {
         const oldest = this.chatMeta.keys().next().value;
         if (oldest === undefined || oldest === key) break;
@@ -389,8 +383,8 @@ export class ChatStore {
       media: Array.isArray(media) ? media : [],
       // 拍一拍事件：可作触发批（resolveContextTier 按 1 档响应），但不进【过去状态】
       isPoke: Boolean(isPoke),
-      // 2026-10-16：拍一拍**是不是拍机器人自己**（入库时的身份判定真值）。
-      // 档位判定用它而不是正则猜文本 —— 被拍者名字以"我"开头时
+      // 拍一拍是不是拍机器人自己（入库时的身份判定真值）。
+      // 档位判定用它而不是正则猜文本：被拍者名字以"我"开头时
       // （如"我还能哈气喵"）正则 /拍了拍\s*我/ 会误判成"拍我"。
       // null = 老存档（没有该字段），下游按正则兜底。
       ...(pokeSelf === null || pokeSelf === undefined ? {} : { pokeSelf: Boolean(pokeSelf) })
@@ -432,7 +426,7 @@ export class ChatStore {
   }
 
   /**
-   * 把当前所有未读标记为已读，**但不取走它们**。
+   * 把当前所有未读标记为已读，但不取走它们。
    *
    * 这是"档位控制是否响应"的关键：机器人判断"这次不回应"时调用它，
    * 消息就沉入历史（已读），不会产生会话、不消耗 token；
@@ -452,11 +446,11 @@ export class ChatStore {
   }
 
   /**
-   * 把时间窗内的**已读**消息重新标记为未读（手动重试失败会话用）。
+   * 把时间窗内的已读消息重新标记为未读（手动重试失败会话用）。
    *
    * 触发批当初被 drainUnread 置了已读；重试时按会话起止时间把它们翻回未读，
    * 唤醒流程就能重新取走它们。窗口向前放宽 5 分钟（容纳防抖聚批期），
-   * 向后到会话结束 —— 窗口外的不动，避免误翻后来真正已读的历史。
+   * 向后到会话结束。窗口外的不动，避免误翻后来真正已读的历史。
    * @returns {number} 恢复为未读的条数
    */
   markUnreadInWindow(chatKey, startedAt, endedAt) {
@@ -477,7 +471,7 @@ export class ChatStore {
     return st.messages.filter((m) => !m.read && !m.self).length;
   }
 
-  /** 查看当前未读消息（不置已读），用于“等待中”会话的触发摘要。 */
+  /** 查看当前未读消息（不置已读），用于"等待中"会话的触发摘要。 */
   peekUnread(chatKey, limit = 3) {
     const st = this.#state(chatKey);
     return st.messages.filter((m) => !m.read && !m.self).slice(0, Math.max(1, Number(limit) || 3));
@@ -515,8 +509,8 @@ export class ChatStore {
 
   /**
    * 按 QQ 消息 id 更新一条已存档消息（文本/补媒体），并落盘。
-   * 用途：read_forward 工具把"合并转发占位符"永久升级成展开后的文本
-   * —— 一次展开，以后谁（模型/存档页/金句）都直接读到内容。
+   * 用途：read_forward 工具把"合并转发占位符"永久升级成展开后的文本，
+   * 一次展开，以后谁（模型/存档页/金句）都直接读到内容。
    */
   updateByMid(chatKey, mid, { text, appendMedia = [] } = {}) {
     const st = this.#state(chatKey);
@@ -560,7 +554,7 @@ export class ChatStore {
    * 把某会话的本地 id 重排成 1..n（消除 removeByLocalIds 留下的空洞）。
    *
    * 用途：buildPastState 的窗口锚定把窗口起点对齐到本地 id 的整倍数上，
-   * 前提是 id 稠密。删除消息打出空洞后，锚定退化成滑动窗口 —— 历史块
+   * 前提是 id 稠密。删除消息打出空洞后，锚定退化成滑动窗口，历史块
    * 第一行每轮都在变，整个历史块无法命中前缀缓存（每轮多付 2~3K token）。
    * densify 一次即可让锚定恢复。
    *

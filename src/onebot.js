@@ -13,7 +13,7 @@ const SELF_INFO_RETRY_MS = 15000;
 /**
  * 正文 @ 规范化：把 `@昵称` 补成 `@昵称(QQ:xxx)`。
  * 走 `message.inline-at-normalize` 能力；没有提供者（Skill 未启用）时返回 null，
- * 调用方退回原文本 —— 保证"关掉 Skill 就不再有该效果"。
+ * 调用方退回原文本，保证"关掉 Skill 就不再有该效果"。
  */
 function normalizeInlineAt(text, atUserId, atName) {
   try {
@@ -49,7 +49,7 @@ async function transcribeVoice(record, onebot) {
 // ── OneBot HTTP 调用的超时与错误可读性 ────────────────────────────────────
 const CALL_TIMEOUT_MS = 15000;    // 查询类：够用
 const SEND_TIMEOUT_MS = 90000;    // 发送类：协议端要接收 body + 解码 + 上传腾讯，15 秒远不够
-// 只有**真的扛大 body** 的 action 才给宽容超时。
+// 只有真的扛大 body 的 action 才给宽容超时。
 //
 // 为什么不能简单写 `send_`：`send_poke`（拍一拍）、`friend_poke`、`group_poke`
 // 都是轻量交互，给它们 90 秒意味着协议端一旦不响应，用户要干等一分半才看到报错，
@@ -61,7 +61,7 @@ const SLOW_ACTION = /^(send_(group|private)|upload_|_send)/i;
 /**
  * 把 fetch 的 `cause` 链挖成人话。
  * fetch 网络层失败时 message 恒为 "fetch failed"，真因（ECONNREFUSED /
- * TimeoutError / socket hang up / 代理拦截）全在 cause 里 —— 不挖出来，
+ * TimeoutError / socket hang up / 代理拦截）全在 cause 里，不挖出来，
  * 上层和用户都只看到一句"fetch failed"，完全无法排查。
  */
 function describeCause(error, depth = 0) {
@@ -98,7 +98,7 @@ export class OneBotClient {
     this.#closedByUs = false;
     this.statusListeners = new Set();
     // HTTP 401 监听：WebSocket 的 status.error 只覆盖 WS 通道，
-    // 而 send_message / get_group_info 等全走 HTTP —— HTTP 401此前完全静默，
+    // 而 send_message / get_group_info 等全走 HTTP，HTTP 401 此前完全静默，
     // 表现为「群友说机器人不说话了」，日志里一条记录都没有。
     this.authErrorListeners = new Set();
   }
@@ -146,7 +146,7 @@ export class OneBotClient {
     const old = this.socket;
     this.socket = null;
     this.#closedByUs = false;
-    // ⚠️ 退避必须清零（2026-09-19）：reconnect 是"配置变了主动换连接"，不是失败。
+    // 退避必须清零：reconnect 是"配置变了主动换连接"，不是失败。
     // 之前不清零时，主动换 token 后的第一次连接仍背着旧循环涨到 30 秒的退避，
     // 表现为"切了正确令牌也要等半分钟才试"，多账号轮换恢复被人为拖慢。
     this.#failedAttempts = 0;
@@ -159,13 +159,13 @@ export class OneBotClient {
   }
 
   /**
-   * 换端点（2026-10-23，协议端解耦配套）。
+   * 换端点（协议端解耦配套）。
    *
    * 为什么需要：协议端改由用户自行安装（SnowLuma / NapCat），端点地址与令牌
    * 是用户第一次运行就要填的东西。构造时快照的 wsUrl/httpUrl 改不动，
-   * 旧做法是"改完配置重启应用"—— 对首次配置的人等于一次无谓的重启。
+   * 旧做法是"改完配置重启应用"，对首次配置的人等于一次无谓的重启。
    *
-   * 语义：**先换字段再走 reconnect()**，复用同一条"作废旧 socket → 清零退避 →
+   * 语义：先换字段再走 reconnect()，复用同一条"作废旧 socket → 清零退避 →
    * 重开连接循环"的路径，不另写一套连接逻辑。
    * 空值不覆盖（只传想改的字段），与 deepMerge 的口径一致。
    */
@@ -187,12 +187,12 @@ export class OneBotClient {
 
   #connectLoop() {
     // 单连接互斥：同一时刻只允许一个连接循环存活。
-    // ── 为什么需要它（2026-09-19 401 风暴复盘）────────────────────────────
+    // 为什么需要它（401 风暴复盘）：
     // 旧实现里每个 socket 的 close handler 都 setTimeout 一轮新的 connectLoop，
     // 而 app.js 的重连逻辑又会调 reconnect() 开另一轮。
     // 两轮循环并发后：一轮拿着正确令牌连上了（connected=true、UI 显示正常），
-    // 另一轮还攥着被 401 拒过的旧令牌每 30 秒撞一次门 —— SnowLuma 日志里就是
-    // 一片成对出现的 "rejected unauthorized WebSocket upgrade"，且**永远不停**，
+    // 另一轮还攥着被 401 拒过的旧令牌每 30 秒撞一次门。SnowLuma 日志里就是
+    // 一片成对出现的 "rejected unauthorized WebSocket upgrade"，且永远不停，
     // 因为 401 的 error 事件在 everConnected=true 时不再广播状态，没人去杀它。
     // 互斥做法：循环入口记录"代际号"；新一轮开始时把旧代际作废，旧循环的
     // 定时器醒来后发现代际不匹配就自行退出，不再创建 socket。
@@ -227,7 +227,7 @@ export class OneBotClient {
     } catch (error) {
       this.lastConnectError = String(error?.message ?? error);
       this.#setStatus(false);
-      // 指数退避：连续构造失败时间隔翻倍，封顶 RECONNECT_MAX_MS ——
+      // 指数退避：连续构造失败时间隔翻倍，封顶 RECONNECT_MAX_MS，
       // 曾经固定 RECONNECT_MIN_MS（3 秒一次重试风暴，RECONNECT_MAX_MS 形同虚设）
       this.#failedAttempts++;
       const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_MIN_MS * 2 ** (this.#failedAttempts - 1));
@@ -238,17 +238,16 @@ export class OneBotClient {
     const stale = this.socket;
     this.socket = socket;
     if (stale && stale !== socket) {
-      // ⚠️（2026-10-17 加固）**顺序即崩溃面**：必须先 close、再摘监听，而且摘监听
-      //    不能把 error 一起摘掉。
-      //    原因：ws 8.x 在 CONNECTING 状态调 close() 会**同步** `emit('error')`
-      //    （"WebSocket was closed before the connection was established"，
-      //    ws 库的 `emitErrorAndClose`）；更麻烦的是底层 net
-      //    socket 随后还会**异步**报 ECONNREFUSED/ECONNRESET，ws 内部同样走
-      //    emit('error')。旧写法先 removeAllListeners() 把 'error' 一起拆了 →
-      //    这两次 emit 都没有监听者 → EventEmitter 直接抛出 →
-      //    主进程 uncaughtException → 弹窗后 app.exit(1)（用户看到的就是"闪退"）。
-      //    实测复现：一次「端口边沿触发 reconnect」正好撞上仍在连接的 socket，
-      //    整个进程被这条 error 干掉。空 error 监听必须留到 socket 真正 close 之后。
+      // 顺序即崩溃面：必须先 close、再摘监听，而且摘监听不能把 error 一起摘掉。
+      // 原因：ws 8.x 在 CONNECTING 状态调 close() 会同步 `emit('error')`
+      // （"WebSocket was closed before the connection was established"，
+      // ws 库的 `emitErrorAndClose`）；更麻烦的是底层 net socket 随后还会异步报
+      // ECONNREFUSED/ECONNRESET，ws 内部同样走 emit('error')。旧写法先
+      // removeAllListeners() 把 'error' 一起拆了，这两次 emit 都没有监听者，
+      // EventEmitter 直接抛出 → 主进程 uncaughtException → 弹窗后 app.exit(1)
+      // （用户看到的就是"闪退"）。实测复现：一次「端口边沿触发 reconnect」正好
+      // 撞上仍在连接的 socket，整个进程被这条 error 干掉。
+      // 空 error 监听必须留到 socket 真正 close 之后。
       try { stale.on('error', () => { /* 已作废的 socket：错误一律吞掉 */ }); } catch { /* ignore */ }
       try { stale.close(); } catch { /* ignore */ }
     }
@@ -267,7 +266,7 @@ export class OneBotClient {
         console.error('[onebot] 获取登录信息失败:', error?.message ?? error);
         // get_login_info 失败不代表连接不可用（可能是 SnowLuma 还在启动中）。
         // 挂一个延迟补拉：连着但 selfInfo 一直空 → /api/status 的 self 恒为 null，
-        // UI 就"检测不到账号信息"（2026-09-19 排障记录）。
+        // UI 就"检测不到账号信息"。
         this.#refreshSelfInfoLater();
       }
     });
@@ -292,7 +291,7 @@ export class OneBotClient {
     socket.on('error', (error) => {
       if (!isCurrent(socket)) return;
       this.lastConnectError = String(error?.message ?? error);
-      // ⚠️ 广播状态不能只看 everConnected（2026-09-19）：曾经"连上过一次就不再广播
+      // 广播状态不能只看 everConnected：曾经"连上过一次就不再广播
       // 失败状态"，导致长连接断开后的持续 401 在 UI 上毫无感知（状态一直是"已连接"），
       // 令牌轮换的恢复钩子也收不到信号。现在每次 error 都广播，由监听方自行去重。
       this.#setStatus(false);
@@ -300,8 +299,8 @@ export class OneBotClient {
   }
 
   /** 连接活着但 selfInfo 为空时，定期补拉 get_login_info（SnowLuma 慢启动场景）。
-   *  ⚠️ 2026-09-25：原来只补拉一次 —— SnowLuma 挂账号超过 15 秒时 selfId 会
-   *  一直为空（@判定按 QQ 号、自我消息过滤都依赖它），直到下一次重连才恢复。
+   *  原来只补拉一次：SnowLuma 挂账号超过 15 秒时 selfId 会一直为空
+   *  （@判定按 QQ 号、自我消息过滤都依赖它），直到下一次重连才恢复。
    *  现在改为：只要还连着且没拿到，就按固定间隔一直补拉。 */
   #refreshSelfInfoLater() {
     if (this.#selfInfoTimer) return;
@@ -329,10 +328,10 @@ export class OneBotClient {
 
   /** OneBot HTTP API（发送与查询都走这里）。 */
   async call(action, params = {}, timeoutMs = null) {
-    // ── 超时按 action 分档（这里修过一个真实故障）──────────────────────────
-    // 原来一律 15 秒。查询类够用，但**发送类不够**：图片/视频以 base64 或大 body
+    // ── 超时按 action 分档 ─────────────────────────────────────────────────
+    // 一律 15 秒的话查询类够用，但发送类不够：图片/视频以 base64 或大 body
     // 发出去时，协议端要走完「接收 body → 解码 → 上传腾讯服务器 → 返回」，
-    // 实测 1.9MB 的图稳定超时、1.5MB 有时能过 —— 表现就是"图画出来了但发不出去"。
+    // 实测 1.9MB 的图稳定超时、1.5MB 有时能过，表现就是"图画出来了但发不出去"。
     // 而超时抛的是 `fetch failed`（真因在 cause 里），用户完全看不懂。
     // 发送是不幂等但"重试代价低"的操作，宁可多等，也不要误判失败。
     const limit = timeoutMs ?? (SLOW_ACTION.test(action) ? SEND_TIMEOUT_MS : CALL_TIMEOUT_MS);
@@ -348,7 +347,7 @@ export class OneBotClient {
         signal: AbortSignal.timeout(limit)
       });
     } catch (error) {
-      // fetch 只在网络层失败时抛，且 message 恒为 "fetch failed" —— 丢给上层
+      // fetch 只在网络层失败时抛，且 message 恒为 "fetch failed"，丢给上层
       // 只会得到一句没法排查的话。这里把 cause 链挖出来再抛。
       const cause = describeCause(error);
       const aborted = /timeout|abort/i.test(cause) || error?.name === 'TimeoutError' || error?.name === 'AbortError';
@@ -357,13 +356,13 @@ export class OneBotClient {
         : `OneBot ${action} 请求失败：${cause}`);
     }
     if (!res.ok) {
-      // 401 =令牌不对。HTTP 通道此前只抛错、既不通知也不轮换，
+      // 401 = 令牌不对。HTTP 通道此前只抛错、既不通知也不轮换，
       // 于是「令牌轮换」这个只挂在 WS status.error 上的恢复机制永远等不到触发，
       // 所有走 HTTP 的能力（取群名/表情库/发消息）全线 401，且日志一字不留。
       // 这里补一条日志 + 通知上层，让 WS/HTTP 两条通道共用同一套轮换逻辑。
       if (res.status === 401) {
         // 完全静默是这次排查最大的障碍（群友只能看到"机器人不说话了"），
-        // 所以这里必须落一条 warn —— 它是外部定位此故障的第一手证据。
+        // 所以这里必须落一条 warn，它是外部定位此故障的第一手证据。
         logger.warn('onebot', `HTTP 401：${action} 令牌无效（WS 与 HTTP 可能是不同令牌），已通知上层轮换`);
         this.#notifyAuthError({ action, status: 401 });
         throw new Error(`OneBot ${action} HTTP 401：访问令牌无效（已通知上层轮换令牌）`);
@@ -375,9 +374,9 @@ export class OneBotClient {
     }
     const body = await res.json().catch(() => ({}));
     if (body.status !== 'ok' && body.retcode !== 0) {
-      // ⚠️ 2026-10-21：retcode / wording 必须挂到错误对象上，不能只塞进 message 字符串。
-      //    上层要按 retcode 分流（例如 get_forward_msg 的 retcode=100 = 协议端拿不到
-      //    长消息内容，和"不是转发"是两回事），字符串匹配一旦文案改了就会静默失效。
+      // retcode / wording 必须挂到错误对象上，不能只塞进 message 字符串。
+      // 上层要按 retcode 分流（例如 get_forward_msg 的 retcode=100 = 协议端拿不到
+      // 长消息内容，和"不是转发"是两回事），字符串匹配一旦文案改了就会静默失效。
       const e = new Error(`OneBot ${action} 失败: retcode=${body.retcode ?? body.status} ${body.wording ?? ''}`);
       e.action = action;
       e.retcode = body.retcode ?? null;
@@ -407,11 +406,11 @@ export class OneBotClient {
   /**
    * reply/at 前置段的公共构造（sendText / sendSticker / sendImage 三处共用）。
    *
-   * 抽出来之前是三段逐行相同的复制粘贴 —— 任何一处单独改校验规则，
+   * 抽出来之前是三段逐行相同的复制粘贴，任何一处单独改校验规则，
    * 另外两处就会悄悄漂移（历史教训：sendText 修过"消息 id 可为负数"，
    * 另外两处当时各带着同样的旧正则）。这里统一三个约定：
-   *   · replyToMessageId：非零整数（消息 id 可为负数；空串=不引用）
-   *   · atUserId：正整数 QQ 号，禁止 "all"（全体成员用 CQ 码自己拼，不经此路径）
+   *   - replyToMessageId：非零整数（消息 id 可为负数；空串=不引用）
+   *   - atUserId：正整数 QQ 号，禁止 "all"（全体成员用 CQ 码自己拼，不经此路径）
    */
   static #replyAtSegments({ replyToMessageId = null, atUserId = null } = {}) {
     const segments = [];
@@ -444,9 +443,9 @@ export class OneBotClient {
    * 发送一张图片（独立气泡）。
    *
    * fileRef 支持三种形态，交给 OneBot 自己解释：
-   *   · base64://<b64>  —— 本地已下载好的图（send_image 走这条）
-   *   · http(s)://...   —— 远端图片地址（已收藏的表情走这条）
-   *   · 本地绝对路径     —— 不推荐（会把宿主路径暴露给协议端）
+   *   - base64://<b64>  本地已下载好的图（send_image 走这条）
+   *   - http(s)://...   远端图片地址（已收藏的表情走这条）
+   *   - 本地绝对路径     不推荐（会把宿主路径暴露给协议端）
    *
    * 段结构与 sendSticker 完全一样（都是 image 段），区别只是语义：
    * 那个是"发表情"，这个是"发一张图"。所以复用同一套 reply/at 处理。
@@ -516,14 +515,13 @@ function segmentsOfMessage(msg) {
 }
 
 /**
- * 拉取合并转发的节点数组。**必须优先用 forward 段自带的 id，别只传 message_id。**
+ * 拉取合并转发的节点数组。必须优先用 forward 段自带的 id，别只传 message_id。
  *
- * 0.4.8.7 实测（2026-10-21，本机 SnowLuma）：协议端 get_forward_msg 只在
- * `message_id > 0` 时才肯替我们"取原消息 → 翻出 forward 段 → 拿它的 id"；
- * message_id 为负数（QQ NT 里带转发的消息 id 经常是负的）时这个解析被跳过，
- * 负数被原样当成转发 res_id 去拉 → ForwardApi.fetch 抛
- * "download forward message payload is empty"，转发永远展开不出来。
- * 日志实证：10-18~10-20 共 11 次失败，11 次全是负数 message_id，正数 17/17 成功。
+ * 实测（本机 SnowLuma）：协议端 get_forward_msg 只在 `message_id > 0` 时才肯
+ * 替我们"取原消息 → 翻出 forward 段 → 拿它的 id"；message_id 为负数
+ * （QQ NT 里带转发的消息 id 经常是负的）时这个解析被跳过，负数被原样当成
+ * 转发 res_id 去拉，ForwardApi.fetch 抛 "download forward message payload is empty"，
+ * 转发永远展开不出来。日志实证：共 11 次失败，11 次全是负数 message_id，正数 17/17 成功。
  *
  * 所以：手上有 segments 就直接抠 id 传 `{ id }`（与协议端内部解析等价，且不受正负限制）；
  * 只有拿不到 id 时才退回 `{ message_id }`。没有 segments 时先用 get_msg 自己取一次。
@@ -540,10 +538,10 @@ export async function fetchForwardNodes(onebot, messageId, segments = null, time
   const attempts = [];
   const fwdId = forwardIdFromSegments(segs);
   // 原消息取到了、里面却没有 forward 段 → 这压根不是合并转发。
-  // 2026-10-21 实测：模型被引用块里的「[合并转发聊天记录]」勾着，拿**外层消息**的 mid
+  // 实测：模型被引用块里的「[合并转发聊天记录]」勾着，拿外层消息的 mid
   // 来展开，此处若继续退回 `{ message_id }`，协议端必然回 retcode=100
   // （wording: download forward message payload is empty），把「不是转发」伪装成
-  // 协议端故障 —— 报错指不到真原因，模型还会反复重试。直接明说。
+  // 协议端故障，报错指不到真原因，模型还会反复重试。直接明说。
   // 注意：有 forward 段但抠不出 id 的情况不算在内（那是真转发，只是得退回 message_id）。
   if (segs && !hasForwardSegment(segs)) {
     const e = new Error('这条消息不是合并转发，没有可展开的聊天记录');
@@ -567,8 +565,8 @@ export async function fetchForwardNodes(onebot, messageId, segments = null, time
 
 /**
  * 把 OneBot 消息段数组转成 AI 可读的纯文本。
- * resolveReply: async (mid) => { sender, text } | null —— 解析引用原文。
- * resolveAtName: async (qq) => string | null —— 把 @ 的 QQ 号解析成群名片。
+ * resolveReply: async (mid) => { sender, text } | null，解析引用原文。
+ * resolveAtName: async (qq) => string | null，把 @ 的 QQ 号解析成群名片。
  * onebot: OneBot 客户端，仅语音转写需要（`media.transcribe` 取语音文件用）；
  *         不传则语音保持 `[语音]` 占位。
  */
@@ -591,12 +589,12 @@ export async function segmentsToText(segments, { resolveReply = null, resolveAtN
           // 把 @昵称 补成 @昵称(QQ:xxx)，让模型能区分"同名不同人"。
           // 这里天然同时握有 QQ 号与解析出的名字，是最合适的接入点。
           let piece = normalizeInlineAt(base, qq, name) ?? base;
-          // ⚠️ 无论如何都要把 QQ 号带上（2026-09-24 修复）。
-          //    本函数是 @ 从「带 QQ 号的协议段」退化成「纯文本 @名字」的唯一环节：
-          //    一旦这里丢掉 QQ 号，下游就只能拿文本里的名字去和配置比对，
-          //    但群昵称（群名片）可以随时改、和配置的 botName/selfNickname 也常常不一致，
-          //    结果就是「群友明明艾特了机器人，却完全叫不醒」。
-          //    带上 QQ 号之后，艾特判定与名字彻底解耦 —— 顺带也让模型区分得清同名群友。
+          // 无论如何都要把 QQ 号带上。
+          // 本函数是 @ 从「带 QQ 号的协议段」退化成「纯文本 @名字」的唯一环节：
+          // 一旦这里丢掉 QQ 号，下游就只能拿文本里的名字去和配置比对，
+          // 但群昵称（群名片）可以随时改、和配置的 botName/selfNickname 也常常不一致，
+          // 结果就是「群友明明艾特了机器人，却完全叫不醒」。
+          // 带上 QQ 号之后，艾特判定与名字彻底解耦，顺带也让模型区分得清同名群友。
           if (!/\(QQ:\d+\)\s*$/.test(piece)) piece = `${piece}(QQ:${qq})`;
           out.push(piece);
         }
@@ -626,9 +624,9 @@ export async function segmentsToText(segments, { resolveReply = null, resolveAtN
                 ? `${info.sender}(QQ:${info.senderId})`
                 : info.sender;
               const head = [
-                // 被引用的那条本身是合并转发时，resolveReply 会带回**它自己**的 mid ——
+                // 被引用的那条本身是合并转发时，resolveReply 会带回它自己的 mid，
                 // 引用块里的内容只截了前 300 字，模型想看全就展开这个 #数字。
-                // 不带的话，模型只能用引用者那条的号去试，必然"不是合并转发"（21 日实测两次）。
+                // 不带的话，模型只能用引用者那条的号去试，必然"不是合并转发"（实测两次）。
                 info.mid ? `#${info.mid}` : '',
                 senderLabel
               ].filter(Boolean).join(' ');

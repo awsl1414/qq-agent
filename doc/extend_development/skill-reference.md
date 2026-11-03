@@ -1,6 +1,6 @@
 # 扩展 API 完整参考
 
-> **必读**。这一份是查表用的：字段名、签名、返回值、失败原因全在这里。
+> 查表用：字段名、签名、返回值、失败原因全在这里。
 > 「该做插件还是技能、怎么开始写」见 [plugin-development.md](plugin-development.md) / [skill-development.md](skill-development.md)；
 > 「整体结构」见 [skill-system.md](skill-system.md)。
 
@@ -11,8 +11,8 @@
 
 ## 1. 清单字段全表
 
-清单文件名：`skill.json`（优先）或 `plugin.json`（等价，``src/plugin-loader.js` 的 `readManifest``）。
-规范化入口：`normalizeManifest()`（``src/skills/manifest.js` 的 `normalizeManifest``）。
+清单文件名：`skill.json`（优先）或 `plugin.json`（等价，`src/plugin-loader.js` 的 `readManifest`）。
+规范化入口：`normalizeManifest()`（`src/skills/manifest.js` 的 `normalizeManifest`）。
 
 | 键 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
@@ -20,27 +20,27 @@
 | `name` | string | `id` | 显示名 |
 | `version` | string | `'0.0.0'` | 版本号 |
 | `apiVersion` | number | `1` | 高于当前支持值只记 problem，不阻断 |
-| `enabledByDefault` | boolean | `true` | **只有显式 `false` 才是 false** |
+| `enabledByDefault` | boolean | `true` | 只有显式 `false` 才是 false |
 | `category` | enum | `'utility'` | `model` / `message` / `knowledge` / `media` / `utility` / `fun` / `query`。非法值回退 `utility` |
 | `description` | string | `''` | 一句话介绍 |
 | `author` | string | `''` | 作者 |
-| `requires` | string[] | `[]` | **硬依赖**的能力名。缺了 → 本扩展不可用。自依赖会被剔除 |
-| `capabilities` | string[] | `[]` | 本扩展**声明提供**的能力名 |
+| `requires` | string[] | `[]` | 硬依赖的能力名。缺了 → 本扩展不可用。自依赖会被剔除 |
+| `capabilities` | string[] | `[]` | 本扩展声明提供的能力名 |
 | `permissions` | string[] | `[]` | 见 1.2 节 |
 | `configSchema` | object | `{}` | 设置表单的渲染依据（第 2 节） |
-| `settings` | object | `{}` | 设置的**默认值**（第 3 节） |
+| `settings` | object | `{}` | 设置的默认值（第 3 节） |
 | `prompt` | string \| object | `null` | 提示词片段（第 4 节） |
 | `deprecated` | boolean | `false` | 严格 `=== true` 才生效 |
 
-规范化产物还会多一个 **`panels`**（从 `configSchema` 摘出的界面入口，已校验、URL 已算好）。
+规范化产物还会多一个 `panels`（从 `configSchema` 摘出的界面入口，已校验、URL 已算好）。
 见 [panel-ui-contract.md](panel-ui-contract.md)。
 
 ### 1.1 数组字段的容错
 
-`requires` / `capabilities` / `permissions` 走 `asArray`（``src/skills/manifest.js` 的 `asArray``）：
+`requires` / `capabilities` / `permissions` 走 `asArray`（`src/skills/manifest.js` 的 `asArray`）：
 
 - `null` / `undefined` → `[]`
-- **字符串** → 单元素数组（`"permissions": "web_fetch"` 也能用，不会静默变成零权限）
+- 字符串 → 单元素数组（`"permissions": "web_fetch"` 也能用，不会静默变成零权限）
 - 数组 → 逐项 `String()` 后过滤空值，去重
 
 ### 1.2 `permissions` 只有两个值有意义
@@ -50,27 +50,27 @@
 | `web_fetch` | 让 `api.fetch` 变成真的 `globalThis.fetch` |
 | `qq_sticker` | 让 `api.qqCall` 可用 |
 
-没声明时这两个 API **存在但永远 reject**（``src/plugin-loader.js` 的 `createSkillApi``）。
+没声明时这两个 API 存在但永远 reject（`src/plugin-loader.js` 的 `createSkillApi`）。
 写别的值没有任何效果，也不报错。
 
 > 历史坑：早期 `permissions` 只认数组，写成字符串会静默变成"零权限"。
-> 现在有 `asArray` 兜住，但**能力名拼错**仍然只会表现为"fetch/qqCall 一直失败"。
+> 现在有 `asArray` 兜住，但能力名拼错仍然只会表现为"fetch/qqCall 一直失败"。
 
 ---
 
 ## 2. `configSchema` 的 type
 
-**加载器不校验 type**（除了 `action`，见 panel 契约）。type 的语义由渲染层定义
-（`ui/app/06-settings-render.js:1404-1440`）。
+加载器不校验 type（除了 `action`，见 panel 契约）。type 的语义由渲染层定义
+（`ui/app/06-settings-render.js` 的 `renderSkillSettingsModal`）。
 
 | type | 渲染成 | 可用字段 |
 |---|---|---|
 | `boolean` | 复选框（整行可点） | `label` `description` `default` |
 | `number` | 数字输入 | 同上 |
 | `string` | 文本框 | 同上 + `secret` `multiline` |
-| `enum` | 下拉 | 同上 + `values` **或** `options` |
-| `internal` | **不渲染输入框**，只在弹窗底部列出并说明去哪改 | `label` `description` |
-| `action` | **不是配置项**，是界面入口（渲染成按钮） | `label` `button` `panel` `description` `icon` |
+| `enum` | 下拉 | 同上 + `values` 或 `options` |
+| `internal` | 不渲染输入框，只在弹窗底部列出并说明去哪改 | `label` `description` |
+| `action` | 不是配置项，是界面入口（渲染成按钮） | `label` `button` `panel` `description` `icon` |
 
 ### 2.1 字段细节
 
@@ -79,7 +79,7 @@
 | `label` | 全部 | 字段标题，缺省用键名 |
 | `description` | 全部 | 字段说明 |
 | `default` | 全部 | UI 兜底默认值（`settings` 里没给时的最后一道） |
-| `secret` | string | 渲染成密码框 + `🔒`；**写入侧约定空串 / `'******'` = 不修改** |
+| `secret` | string | 渲染成密码框 + `🔒`；写入侧约定空串 / `'******'` = 不修改 |
 | `multiline` | string | 强制整行渲染（长文本字段窄列里会碎成一条） |
 | `values` | enum | `['off','auto','on']`：值即显示文本 |
 | `options` | enum | `[{value, label}]`：值与显示分离（如把 `0~3` 档显示成中文档位） |
@@ -88,7 +88,7 @@
 
 ### 2.2 `internal` 的用法
 
-列表 / 对象类设置（如账号池的账号列表）不该渲染成表单输入，但**必须在弹窗里列出来**，
+列表 / 对象类设置（如账号池的账号列表）不该渲染成表单输入，但必须在弹窗里列出来，
 否则用户会以为"这个设置根本不存在"。用 `internal` 就会出现在底部的
 「以下设置不在这里改」区块里。
 
@@ -96,27 +96,27 @@
 
 ## 3. `settings` 与 `configSchema` 的关系
 
-- **`settings` = 默认值来源**。运行时 `api.config()` 返回的是
+- `settings` 是默认值来源。运行时 `api.config()` 返回的是
   `manifest.settings` 被 `config.skills[id]` 覆盖后的结果
-  （``src/skills/manager.js` 的 `settingsOf``）。
-- **`configSchema` = 渲染依据**，决定弹窗里出现哪些字段、什么控件。
+  （`src/skills/manager.js` 的 `settingsOf`）。
+- `configSchema` 是渲染依据，决定弹窗里出现哪些字段、什么控件。
 - 保存白名单 = `Object.keys(settings) ∪ Object.keys(configSchema)`。
 
-⚠️ 两者可以不一致且**不报错**：
+⚠️ 两者可以不一致且不报错：
 
 | 情况 | 后果 |
 |---|---|
 | schema 有、settings 无 | 默认空串，能改能存 |
-| settings 有、schema 无 | **存得住但界面看不到、也改不了** |
+| settings 有、schema 无 | 存得住但界面看不到、也改不了 |
 | 只写了 configSchema，没写 settings | 正常（`default` 兜底） |
 
-推荐：**两者都写**，`settings` 给默认值，`configSchema` 给 label/description/控件类型。
+推荐两者都写：`settings` 给默认值，`configSchema` 给 label/description/控件类型。
 
 ---
 
 ## 4. `prompt` 字段
 
-`normalizePrompt()`（``src/skills/manifest.js` 的 `normalizePrompt``）：
+`normalizePrompt()`（`src/skills/manifest.js` 的 `normalizePrompt`）：
 
 ```jsonc
 // 形态 1：字符串，等价于 { instruction: "..." }
@@ -131,9 +131,9 @@
 ```
 
 - 每个 section 规范成 `{id, title, content, priority}`；`id` 缺省 `section-<序号>`；
-  `content` 裁剪后**为空则被过滤掉**；`priority` 被钳到 `min(99, 值 || 50)`。
+  `content` 裁剪后为空则被过滤掉；`priority` 被钳到 `min(99, 值 || 50)`。
 - 给了 `sections` 之外还给了 `instruction`，且 sections 为空 → 合成一个 `{id:'main', priority:50}`。
-- **全都为空 → 返回 `null`，提示词静默消失**（不报错）。
+- 全都为空 → 返回 `null`，提示词静默消失（不报错）。
 
 ### 旧式形态仍兼容
 
@@ -141,8 +141,8 @@
 "prompt": { "when": "…", "examples": ["…"], "instruction": "…" }
 ```
 
-由 `adaptLegacyPrompt()`（``src/plugin-loader.js` 的 `adaptLegacyPrompt``）适配成
-`{sections:[{id:'legacy', priority:50}]}`。**不写 `sections` 也不写 `instruction` 的旧形态会静默失效。**
+由 `adaptLegacyPrompt()`（`src/plugin-loader.js` 的 `adaptLegacyPrompt`）适配成
+`{sections:[{id:'legacy', priority:50}]}`。不写 `sections` 也不写 `instruction` 的旧形态会静默失效。
 
 ### 动态片段
 
@@ -160,15 +160,15 @@
 ```
 
 - `entry` 必须是目录内的相对路径；符号链接指到目录外会被拒。
-- 入口必须导出 `setup(api)` 或 `register(api)`，**或者**导出 `hooks` / `providers` / `activate`
-  ，否则报 `入口需导出 setup(api)/register(api) 或 hooks/providers`。
+- 入口必须导出 `setup(api)` 或 `register(api)`，**或者**导出 `hooks` / `providers` / `activate`，
+  否则报 `入口需导出 setup(api)/register(api) 或 hooks/providers`。
 - 入口文件用 ESM（`import` / `export`）。整个 app 是 `"type": "module"`。
 
 ---
 
 ## 6. `api` 对象全表
 
-构造于 `createSkillApi()`（``src/plugin-loader.js` 的 `createSkillApi``），在 `setup` 之前注入。
+构造于 `createSkillApi()`（`src/plugin-loader.js` 的 `createSkillApi`），在 `setup` 之前注入。
 
 | 成员 | 签名 | 说明 |
 |---|---|---|
@@ -177,7 +177,7 @@
 | `storage` | `{get, set, remove}` | 持久化 KV（第 7 节） |
 | `panel` | `{id, prefix, url, dataUrl}` | 界面只读 URL（见 panel 契约） |
 | `isSkillActive` | `(id, ctx?) => boolean` | 别的扩展是否生效 |
-| `capability` | `(name, args?) => any` | **软依赖**调用：取第一个生效提供者；无/异常 → `undefined` |
+| `capability` | `(name, args?) => any` | 软依赖调用：取第一个生效提供者；无/异常 → `undefined` |
 | `hasCapability` | `(name) => boolean` | 是否有真实实现的能力 |
 | `log` / `warn` / `error` | `(...args)` | 自动带 `[skill:<id>]` 前缀 |
 | `fetch` | `fetch` 或 reject 函数 | 需要 `permissions: ['web_fetch']` |
@@ -185,26 +185,26 @@
 | `utils.sleep` | `(ms) => Promise` | 定时 |
 | `utils.safeJsonParse` | `(text, fallback?) => any` | 解析失败返回 fallback |
 
-⚠️ `api.capability()` **只取第一个生效的提供者**，并且内部 try/catch 后返回 `undefined`，
+⚠️ `api.capability()` 只取第一个生效的提供者，并且内部 try/catch 后返回 `undefined`，
 调用方拿不到失败原因。要诊断用 `hasCapability()`。
 
 ---
 
 ## 7. `api.storage`
 
-落盘位置：**`<DATA_DIR>/plugin-data/<id>/storage.json`**
+落盘位置：`<DATA_DIR>/plugin-data/<id>/storage.json`
 （`DATA_DIR` 默认 `<项目>/data`，可用环境变量 `QQ_AGENT_DATA_DIR` 覆盖）。
 
 | 项 | 值 |
 |---|---|
-| 容量上限 | **1MB**（`SKILL_STORAGE_MAX_BYTES`，``src/plugin-loader.js` 的 `SKILL_STORAGE_MAX_BYTES``），超了 `set` **抛错** |
+| 容量上限 | 1MB（`SKILL_STORAGE_MAX_BYTES`，`src/plugin-loader.js`），超了 `set` 抛错 |
 | 键名 | 非空字符串；显式拒绝 `__proto__` / `constructor` / `prototype` |
-| 读写时机 | **同步、每次整文件读写**（`get` 全量 parse，`set` 读→改→整体落盘） |
+| 读写时机 | 同步、每次整文件读写（`get` 全量 parse，`set` 读→改→整体落盘） |
 | `get(key, fallback?)` | 有该键返回值，否则 fallback |
 | `set(key, value)` | `value === undefined` 按 JSON 语义存 `null` |
-| 生命周期 | 数据在 `data/` 目录下，**卸载重装不丢** |
+| 生命周期 | 数据在 `data/` 目录下，卸载重装不丢 |
 
-**它同时是插件界面的数据通道**：插件自带的页面读不到 `data/stickers.json` 这类私有文件，
+它同时是插件界面的数据通道：插件自带的页面读不到 `data/stickers.json` 这类私有文件，
 但可以 `fetch('../@data/storage.json')`。所以"要给页面看的东西"写进 storage 就够了。
 
 ⚠️ 别把大对象塞进去：1MB 是硬上限，100 张表情的内联 base64 就爆了。
@@ -242,34 +242,34 @@ api.registerTool({
 
 - `content`：字符串，或 parts 数组（元素含 `text` / `image_url` / `video_url`）。
 - `isError: true` 让模型知道这次调用失败了。
-- 抛异常也会被兜成错误结果，但**连续失败 5 次会熔断本扩展 5 分钟**。
+- 抛异常也会被兜成错误结果，但连续失败 5 次会熔断本扩展 5 分钟。
 
 ### 8.2 工具 id 为什么要加前缀
 
-最终 id = `<sanitized skillId>__<sanitized toolId>`（``src/plugin-loader.js` 的 `createSkillApi``）：
+最终 id = `<sanitized skillId>__<sanitized toolId>`（`src/plugin-loader.js` 的 `createSkillApi`）：
 
 - 工具 id 会成为发给模型的 **OpenAI function name**，只允许 `[a-zA-Z0-9_-]`。
   用 `:` 或 `.` 拼接会被严格端点（DeepSeek / OpenAI）以 `400 invalid function name`
-  **拒掉整个请求**。不是这一个工具失败，是整轮对话失败。
+  拒掉整个请求。不是这一个工具失败，是整轮对话失败。
 - 总长 ≤ 64（OpenAI 上限）：skillId 截 24、工具名截 38。
 - 前缀把工具绑到 skillId，便于开关联动与批量清理。
-- sanitize + 截断后**可能撞名**，此时后加载者覆盖先加载者，只留一条 `console.warn`。
+- sanitize + 截断后可能撞名，此时后加载者覆盖先加载者，只留一条 `console.warn`。
 
 ### 8.3 运行时护栏（自动套，不用自己写）
 
 `guardToolExecute()`（`src/tool-guard.js`）：
 
 - 单次执行超时 **120s**
-- 返回文本截断 **30000 字符**；parts 总量 **60000**
-- **同 skillId 连续失败 5 次 → 熔断 5 分钟**
+- 返回文本截断 30000 字符；parts 总量 60000
+- 同 skillId 连续失败 5 次 → 熔断 5 分钟
 
 内置工具（`src/tools.js` 的静态 defs）不经过 `registerTool`，不受此限。
 
 ### 8.4 清单里的 `tools[]` 只是元数据
 
-在清单里写 `tools: [{id, name, description, parameters}]` **不会注册工具**。
+在清单里写 `tools: [{id, name, description, parameters}]` 不会注册工具。
 工具只能靠 `api.registerTool()` 注册。声明了却没注册只会得到一条告警
-（``src/plugin-loader.js` 的 `loadSkillDir``）。
+（`src/plugin-loader.js` 的 `loadSkillDir`）。
 
 ---
 
@@ -284,8 +284,8 @@ api.registerTool({
 | `dispose()` | 卸载 / 覆盖注册 / 退出 | 1 | 否 | 同上。默认实现会注销本扩展全部工具 |
 | `hooks` | 对应事件发生时（第 10 节） | 每事件 1 次 | **是** | 只记日志，不影响其它扩展 |
 | `providers` | 核心按能力名取用时（第 11 节） | 由调用方定 | 由调用方定 | 调用方各自 try/catch |
-| `promptSections(ctx)` | 每次组装提示词 | 每次 1 次 | **否（同步！）** | 被 try/catch 吞掉 |
-| `available(ctx)` | 每次可用性判定 | 多次 | **否（同步！）** | 记 `自检异常：…` |
+| `promptSections(ctx)` | 每次组装提示词 | 每次 1 次 | **否（同步）** | 被 try/catch 吞掉 |
+| `available(ctx)` | 每次可用性判定 | 多次 | **否（同步）** | 记 `自检异常：…` |
 
 ### 9.1 `activate` / `deactivate` / `dispose` 的语义
 
@@ -295,16 +295,16 @@ export function deactivate(ctx) { stopTimer(); }      // 禁用（ctx.reason: 'd
 export function dispose() { release(); }              // 彻底卸载
 ```
 
-- 覆盖注册（热重载）时顺序是 **先 `deactivate` + `dispose`，再注册新的**。
+- 覆盖注册（热重载）时顺序是先 `deactivate` + `dispose`，再注册新的。
 - 退出时 `disposeAll({reason:'shutdown'})`。
 
 ### 9.2 ⚠️ `available` 与 `promptSections` 必须是同步函数
 
-管理器**同步调用**它们（``src/skills/manager.js` 的 `isAvailable``、`439`）。
+管理器**同步调用**它们（`src/skills/manager.js` 的 `isAvailable`、`getPromptSections`）。
 写成 `async` 会返回一个 Promise：
 
-- `available` → `{ok:true}` 判定恒真（`r && r.ok === false` 永不成立），自检**静默失真**；
-- `promptSections` → `for (const s of promise)` 抛错被吞，片段**静默消失**。
+- `available` → `{ok:true}` 判定恒真（`r && r.ok === false` 永不成立），自检静默失真；
+- `promptSections` → `for (const s of promise)` 抛错被吞，片段静默消失。
 
 ### 9.3 `promptSections` 的形态
 
@@ -315,7 +315,7 @@ export function promptSections(context) {   // 注意：不是 async
 }
 ```
 
-- 同 `id` 时**动态覆盖静态**（清单里的 `prompt.sections`）。
+- 同 `id` 时动态覆盖静态（清单里的 `prompt.sections`）。
 - `priority` 显式 `0` 是合法值（排最末），不会被 falsy 吞掉。
 - 排序：`priority` 降序 → 同优先级按 `id` 字典序（防字节漂移击穿缓存）。
 - 上限 **99**，且一律渲染在核心安全规则**之后**。
@@ -330,8 +330,8 @@ export const hooks = {
 };
 ```
 
-回调签名 `(context, { skillId })`。**只跑 `isActive` 为真的扩展**，禁用/未就绪的扩展
-其钩子会被**静默跳过**。
+回调签名 `(context, { skillId })`。只跑 `isActive` 为真的扩展，禁用/未就绪的扩展
+其钩子会被静默跳过。
 
 | 事件 | 何时 | 拿得到什么 | 能做什么 |
 |---|---|---|---|
@@ -345,9 +345,9 @@ export const hooks = {
 
 `skillContext` = `{chatKey, kind, chatId, chatName, model, provider, visionEnabled, searchEnabled, proactive, sessionId}`。
 
-**统一语义**（``src/skills/manager.js` 的 `runHook``）：
+**统一语义**（`src/skills/manager.js` 的 `runHook`）：
 
-- 返回值 `!== undefined` 才被收集成 `{skillId, value}`。**"不改写请求"就是返回 `undefined`。**
+- 返回值 `!== undefined` 才被收集成 `{skillId, value}`。"不改写请求"就是返回 `undefined`。
 - 默认超时 **5000ms**，超时抛 `skill-timeout`，该钩子被跳过、其它扩展不受影响。
 - 单个钩子抛错只记日志，不影响其它扩展。
 - 顺序 = 注册顺序（`skills/` 先于 `plugins/`）。
@@ -364,7 +364,7 @@ export const providers = {
 };
 ```
 
-核心**从不 import 具体扩展**，只按能力名取。常用能力：
+核心从不 import 具体扩展，只按能力名取。常用能力：
 
 | 能力名 | 契约 | 多提供者？ |
 |---|---|---|
@@ -386,13 +386,13 @@ export const providers = {
 | `image.mime-support` | `({mime}) => {supported}` | ❌ |
 | `model.thinking-detect` | `({baseUrl, model}) => dialect` | ❌ |
 
-**只有这 6 个允许多提供者**（`MULTI_PROVIDER_CAPABILITIES`，``src/skills/manager.js` 的 `MULTI_PROVIDER_CAPABILITIES``）：
+**只有这 6 个允许多提供者**（`MULTI_PROVIDER_CAPABILITIES`，`src/skills/manager.js` 的 `MULTI_PROVIDER_CAPABILITIES`）：
 `llm.request-params`、`llm.response`、`llm.usage`、`llm.retry-advisor`、`tool.guard`、`media.download`。
 
 其余能力**约定只能有一个提供者**：多了以后核心只取第一个，后面的静默不生效
 （`src/harness/doctor` 会报 `cap-conflict-*` 告警）。
 
-**取用规则**：`getCapabilityProviders()` 只返回 `isActive` 且**有真实实现**的提供者，
+**取用规则**：`getCapabilityProviders()` 只返回 `isActive` 且有真实实现的提供者，
 顺序 = 注册顺序。`capabilities` 里声明了但没提供实现 → 登记成 `null` 占位，
 `hasCapability()` 为 `false`（便于诊断"声明了但没写"）。
 
@@ -404,12 +404,12 @@ export const providers = {
 
 见 [skill-system.md 第 6 节](skill-system.md#6-安全边界两层别混淆)。要点：
 
-- **内置模块**靠 `builtin-modules.json` 的逐文件 sha1 指纹豁免。
-- **第三方模块**若触碰高危能力，默认拒绝加载，需在 `config.trustedPlugins`
+- 内置模块靠 `builtin-modules.json` 的逐文件 sha1 指纹豁免。
+- 第三方模块若触碰高危能力，默认拒绝加载，需在 `config.trustedPlugins`
   里登记它的**目录名**（不是清单 id，因为清单 id 是第三方自己能写的，目录名不是）。
 - 扫描被截断（>500 文件 / >12 层）→ fail-closed 拒绝。
 
-⚠️ **改了任何内置模块的文件，必须重算基线**，否则该模块会掉进能力扫描被拒加载。
+⚠️ 改了任何内置模块的文件，必须重算基线，否则该模块会掉进能力扫描被拒加载。
 重算方式见 [skill-system.md 第 6 节](skill-system.md#6-安全边界两层别混淆)。
 
 ### 12.2 高危能力清单
@@ -419,7 +419,7 @@ export const providers = {
 `process.getBuiltinModule`、运行期拼接 / 模板串形式的动态加载，
 以及触碰 `account.json` / `config.json` / `.env` / `process.env` / `accessToken` 等凭据。
 
-用**能力级正则**而不是字符串黑名单，因为黑名单追不上 `require('f'+'s')` 这类等价写法。
+用能力级正则而不是字符串黑名单，因为黑名单追不上 `require('f'+'s')` 这类等价写法。
 
 ### 12.3 运行时护栏
 
@@ -450,7 +450,7 @@ export const providers = {
 
 ### 13.2 静默失效（不报错、不崩、就是没反应）
 
-**这类最难查，逐条对照：**
+这类最难查，逐条对照：
 
 | 现象 | 原因 |
 |---|---|
@@ -489,7 +489,7 @@ curl -X POST http://127.0.0.1:<port>/api/skills/reload
 cat data/console-port
 ```
 
-校验内置模块指纹（本快照没带重算脚本，做法见
+校验内置模块指纹（仓库没带重算脚本，做法见
 [skill-system.md 第 6 节](skill-system.md#6-安全边界两层别混淆)）。
 
 用独立数据目录试错（不污染正在用的实例）：

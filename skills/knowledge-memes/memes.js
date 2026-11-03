@@ -1,12 +1,7 @@
 // 知识库（梗 / 口头禅 / 内部笑话 / 可复用短笔记）
 //
-// 移植自桌面魔改包 `09-knowledge-memes/src/memes.js`。改动点：
-//   ① DATA_DIR / 审计改为从核心与本模块注入（原版直接 import 了 08 的 memory-audit，
-//      而 08 并未整合进本项目 —— 带过来的话这个模块根本 import 不进来）；
-//   ② 落盘 vs 只读分离，便于测试注入临时目录；
-//   ③ 中文打分逻辑**原样保留**（滑窗 + 二字共现）—— 这部分是作者按真实语料调出来的，
-//      没有理由改。
-//
+// 数据目录与变更回调由 index.js 注入，本模块不直接依赖核心，便于用临时目录单测。
+// 中文打分逻辑（滑窗 + 二字共现）沿用移植前的版本，是按真实语料调出来的。
 // 存储仍是 `data/memes.json`（与魔改包同名，便于已有的库直接搬过来）。
 
 import fs from 'node:fs';
@@ -31,7 +26,7 @@ function read() {
   if (!FILE) return [];
   try {
     let t = fs.readFileSync(FILE, 'utf8');
-    // BOM 会让 JSON.parse 直接抛 —— Windows 编辑器很容易带上
+    // BOM 会让 JSON.parse 直接抛，Windows 编辑器很容易带上
     if (t.charCodeAt(0) === 0xFEFF) t = t.slice(1);
     const j = JSON.parse(t);
     return Array.isArray(j.memes) ? j.memes : [];
@@ -146,7 +141,7 @@ export function searchMeme(query, { limit = 5, minScore = 2.5 } = {}) {
 /**
  * 「脑内闪过」：允许弱相关也闪 1~2 条梗名。
  * 比 searchMeme 更松（标签命中 / 标题命中 / 二字共现都算），只给梗名。
- * 只返回梗名、不给细节 —— 细节交给 memory_meme_search，避免每次运行都灌一堆 token。
+ * 只返回梗名、不给细节，细节交给 memory_meme_search，避免每次运行都灌一堆 token。
  */
 export function cueMemories(triggerText, { limit = 2, minScore = 2.5 } = {}) {
   const qRaw = String(triggerText || '').toLowerCase();

@@ -6,8 +6,8 @@
 //   验证器判**可运行**（语法过不过、自检有没有新增问题、测试绿不绿）。
 //   两者都只读暂存区 + 沙箱，谁都不写真实文件。
 //
-// ⚠️ 静态检查是启发式的，不是沙箱。它挡得住"模型顺手写出危险东西"，
-//    挡不住精心构造的绕过 —— 所以它必须与人工闸②配合使用。
+// 静态检查是启发式的，不是沙箱。它挡得住"模型顺手写出危险东西"，
+// 挡不住精心构造的绕过。所以它必须与人工闸②配合使用。
 //
 // ── 为什么不 import extension-forge/gate.js ──
 //   本项目约定：每个扩展自包含，不跨插件 import（plugin-loader.js 把"逃出自包含模型"
@@ -21,27 +21,27 @@ import { stagedPath, resolveTarget, diffStat, sandboxDir, backupPath } from './c
 
 // ── 危险模式（block 一票否决 / confirm 标红 / notice 提示）────────────────
 //
-// ⚠️ 这份规则与 `src/harness/forge/gate.js` 的 DANGER_RULES 是**同口径的两份**
-//   （项目约定：每个扩展自包含、不跨插件 import，所以只能重复一份）。
-//   2026-10-07 的凭据漏洞修复**只落到了 gate.js**，这份漏了 —— 安全验证实测：
-//   `import fs from 'node:fs'` + 读 `config.json` 的改动能通过本协议闸
-//   （`passed: true, blocking: 0`），而协议闸正是 self-fix 落盘前唯一的自动防线。
-//   **改这两张表的任何一张时，必须同步另一张。**
+// 这份规则与 `src/harness/forge/gate.js` 的 DANGER_RULES 是**同口径的两份**
+// （项目约定：每个扩展自包含、不跨插件 import，所以只能重复一份）。
+// 曾经凭据漏洞的修复只落到 gate.js、这份漏了，于是
+// `import fs from 'node:fs'` + 读 `config.json` 的改动能通过本协议闸，
+// 而协议闸正是 self-fix 落盘前唯一的自动防线。
+// **改这两张表的任何一张时，必须同步另一张。**
 const DANGER_RULES = [
   { id: 'child-process', level: 'block', re: /\bchild_process\b|\bexecSync\b|\bspawnSync\b|\bexecFileSync\b/,
     title: 'shell 执行（child_process）', why: '修复不应引入系统命令调用 —— 这等于把整台机器交给改动的代码。' },
   { id: 'process-exit', level: 'block', re: /\bprocess\.exit\s*\(|\bprocess\.abort\s*\(/,
     title: '终止进程（process.exit）', why: '会直接杀掉整个应用。要表达"这次调用失败"请 return { isError: true }。' },
   // 凭据：必须覆盖**真实存放凭据的文件名**。
-  // 教训（与 gate.js 的 DANGER_RULES 同源）：原规则只认 account.json，而 API Key 实际在
-  // data/config.json 里 —— `JSON.parse(fs.readFileSync('data/config.json')).apiKey`
+  // 教训（与 gate.js 的 DANGER_RULES 同源）：只认 account.json 时，API Key
+  // 实际在 data/config.json 里：`JSON.parse(fs.readFileSync('data/config.json')).apiKey`
   // 完整地穿了过去。`apiKey\s*[:=]\s*['"]…` 只挡得住"硬编码字面量"。
   { id: 'credential-read', level: 'block',
     re: /account\.json|config\.json|\.env\b|apiKey\s*[:=]\s*['"][^'"]{8,}|dshProviderKeys|accessToken|httpAccessToken|\bcookie\b/i,
     title: '读取凭据', why: '凭据泄露的一票否决项：API Key 在 config.json，网关 token 也在配置里。需要配置请走既有的配置 API。' },
   // 能力闸：字符串黑名单追不上 require('f'+'s') 这类等价写法，但**import 目标本身
-  // 是无法等价改写的**（`export … from 'node:fs'` 与变量 import 是已知漏网，见
-  // plugin-loader.js 的注释 —— 那需要 AST 解析才能根治，这里先守住常见形态）。
+  // 是无法等价改写的**（`export … from 'node:fs'` 与变量 import 是已知漏网，
+  // 那需要 AST 解析才能根治，这里先守住常见形态）。
   { id: 'dangerous-import', level: 'block',
     re: /(?:^|[^\w$.])(?:import\s[\s\S]{0,80}?from\s*|\bexport\s[\s\S]{0,80}?from\s*|import\s*\(?\s*|require\s*\(\s*)['"](?:node:)?(?:fs(?:\/promises)?|child_process|cluster|dgram|net|tls|worker_threads|inspector|v8|vm|module)['"]/,
     title: '导入高危 Node 模块（fs / child_process / net / vm 等）',
@@ -60,7 +60,7 @@ const DANGER_RULES = [
     title: '残留调试输出', why: '生产代码请用 logger / api.log()。' }
 ];
 
-/** 白名单验证器 —— 模型只能从这张表里选，不能提供任意命令。 */
+/** 白名单验证器：模型只能从这张表里选，不能提供任意命令。 */
 export const VERIFIERS = [
   { id: 'syntax', label: '语法检查', hard: true, desc: 'node --check 解析每个改动的 JS 文件' },
   { id: 'protocol', label: '协议闸', hard: true, desc: 'P1-P9 合规检查 + 五道闸门' },
@@ -85,14 +85,14 @@ export function runProtocolGate(root, appRoot, dataRoot, rec) {
   const changes = Array.isArray(prop.changes) ? prop.changes : [];
 
   // ── 空提案 = 「本次无需代码修复」（合法终态，**不是**违规）──────────────────
-  // 为什么必须在这里早返回：prompt.js 明确允许这种产物 ——
+  // 必须在这里早返回：prompt.js 明确允许这种产物：
   //   「若这个问题不该由代码修复（例如其实是配置问题、或用户操作问题），changes 给空数组，
   //     并在 expectedEffect 里说明应该怎么做。」
-  // 但原来这里把空 changes 当 P1 阻断，于是形成**自相矛盾的死循环**（2026-10-08 用户报障）：
+  // 把空 changes 当 P1 阻断会形成**自相矛盾的死循环**：
   //   诊断说"静态扫描无警告/严重，模型无需介入" → 模型照 prompt 给空 changes
   //   → P1/P8 阻断 → 界面提示"让模型按上面的阻断原因重提" → 模型还是给空 changes
   //   → 永远过不了闸门，也永远不落地任何改动；还堆了一屏"阻断 2 项"的工单。
-  // 放行是否安全：空提案没有任何可落地内容 —— core.js 的 commit 对空 changes 直接拒绝
+  // 放行是安全的：空提案没有任何可落地内容：core.js 的 commit 对空 changes 直接拒绝
   //   （'没有改动可落地'），fix.apply 也只会 stage 0 个文件。所以放行只等于"无事可做"，不是放水。
   if (!changes.length) {
     const advice = String(prop.expectedEffect || '').trim();
@@ -197,7 +197,7 @@ export function runProtocolGate(root, appRoot, dataRoot, rec) {
   for (const c of changes) {
     const r = resolveTarget(root, appRoot, dataRoot, c);
     if (r.ok && fs.existsSync(r.abs)) {
-      // 已存在的文件必须有快照 —— 但 apply 阶段还没快照，所以这里只是提醒
+      // 已存在的文件必须有快照，但 apply 阶段还没快照，所以这里只是提醒
       continue;
     }
   }
@@ -274,18 +274,17 @@ function vScan(root, rec, ctx) {
 
 /**
  * 白名单测试：只允许跑 <projectRoot>/.workbuddy/tools/ 下的 .mjs/.js。
- * ⚠️ 诚实声明：测试脚本本身不知道沙箱的存在，所以它**读的是真实副本**，
- *    不是沙箱里的改动版。这一点必须在结果里说明，不能让人误以为"沙箱验过了"。
+ * 测试脚本本身不知道沙箱的存在，所以它**读的是真实副本**，不是沙箱里的改动版。
+ * 这一点必须在结果里说明，不能让人误以为"沙箱验过了"。
  */
 function vTests(root, rec, ctx, args) {
   const rel = String(args?.file || '').trim();
   if (!rel) return [{ file: '(回归测试)', status: 'skip', detail: '验证计划没有指定测试文件' }];
   const projectRoot = String(ctx?.projectRoot || '');
   const allowedRoot = path.join(projectRoot, '.workbuddy', 'tools');
-  // ⚠️ 开发侧测试目录**只有开发机有**（安装版/用户机的项目根下没有 .workbuddy ——
-  //   2026-10-10 用户反馈"没有 workbuddy 的就失效"）。目录不存在时 tests 验证
-  //   **整体不可用**：必须诚实 skip 并说明替代手段，不能报 fail（模型会误以为
-  //   代码有问题），也不能让整个修复流程卡死。
+  // 开发侧测试目录**只有开发机有**（安装版/用户机的项目根下没有 .workbuddy）。
+  // 目录不存在时 tests 验证**整体不可用**：必须诚实 skip 并说明替代手段，
+  // 不能报 fail（模型会误以为代码有问题），也不能让整个修复流程卡死。
   if (!fs.existsSync(allowedRoot)) {
     return [{
       file: rel,
@@ -318,7 +317,7 @@ function vTests(root, rec, ctx, args) {
 
 /**
  * 加载冒烟：在**子进程**里 import 沙箱里的插件/技能入口并跑一次 setup()。
- * 为什么必须进子进程：模型改的代码一旦 import 进主进程就有完整权限，
+ * 必须进子进程：模型改的代码一旦 import 进主进程就有完整权限，
  * 崩了/挂死了会拖垮整个机器人。子进程 + 超时是最低成本的隔离。
  */
 function vLoad(root, rec, ctx) {

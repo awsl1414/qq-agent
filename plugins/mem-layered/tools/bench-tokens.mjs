@@ -5,7 +5,7 @@
 // 复刻 index.js before-llm-messages 的真实链路与记账：
 //   buildReplay(2.5 睡眠重演) → build(3 自动想起旧事) → 送达后
 //   markInjected(cooldownIds) + passiveChunkIds 记 passive + replayChunkIds 记 full/replay。
-// 轮与轮之间只清块级冷却（模拟间隔 ≥30 分钟）、保留碎片记忆 lastMids ——
+// 轮与轮之间只清块级冷却（模拟间隔 ≥30 分钟）、保留碎片记忆 lastMids，
 // 与 selftest M8 同口径，隔离出「省 token 三件套」的贡献。
 import fs from 'node:fs';
 import os from 'node:os';
@@ -104,7 +104,7 @@ function makeEnv(root, overrides = {}) {
 }
 
 // 语料：130 天的群聊历史。每层 2 个小时块、话题轮换。
-// 36~44 天区间密铺（9 层）—— 那是 score=1 的块「该复习了」的窗口
+// 36~44 天区间密铺（9 层）：那是 score=1 的块「该复习了」的窗口
 // （gap∈[0.8S,2.5S] 且 R∈[0.5,0.95]，S=45 天时约等于 36~45 天）。
 const AGES = [1, 2, 3, 5, 8, 12, 16, 20, 24, 28, 32, 36, 37, 38, 39, 40, 41, 42, 43, 44, 48, 54, 60, 70, 85, 100, 115, 130];
 const TOPICS = ['猫粮', '婚礼', '显卡', '论文', '火锅'];
@@ -134,13 +134,13 @@ function seed(root) {
     JSON.stringify({ version: 1, messages: msgs }, null, 1),
     'utf8'
   );
-  // dfCutoffRatio=1 / peopleBoost=1：块数几十时默认 0.7 会剪掉短词（README 提醒过），
-  // 多线索加权与本题无关 —— 都关掉，隔离出「省 token」本身的贡献。
+  // dfCutoffRatio=1 / peopleBoost=1：块数几十时默认 0.7 会剪掉短词，
+  // 多线索加权与本题无关，都关掉，隔离出「省 token」本身的贡献。
   return makeEnv(root, { dfCutoffRatio: 1, peopleBoost: 1, pendingTodos: false, crossTurn: false, semanticCards: false });
 }
 
 // 8 轮对话 = 三次小会话（火锅×3、显卡×2、婚礼×2 连续聊 + 一个新话题）。
-// ⚠️ 必须包含**连续同话题**的轮次 —— 碎片级跨轮去重按设计只对照「上一轮」的碎片
+// 必须包含连续同话题的轮次：碎片级跨轮去重按设计只对照「上一轮」的碎片
 // （lastMids 不累积，否则旧事永远别想再露面），话题轮换的序列根本触发不了它。
 // 现实中「一个晚上连着把一件事聊完」正是重复注入的高发场景。
 const QUERIES = [

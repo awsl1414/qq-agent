@@ -1,10 +1,10 @@
 // Skill Manifest 规范化与校验。
 //
 // 加载单元统称 Skill，按**语义**分两型（见下面的 DIR_KIND）：
-//   确定性型（plugins/）—— 核心通过**能力名**取用，满足条件必然执行，不经过 LLM
-//   LLM 型（skills/）  —— 注册**工具**进模型的 function 列表，由模型决定何时调用
+//   确定性型（plugins/），核心通过**能力名**取用，满足条件必然执行，不经过 LLM
+//   LLM 型（skills/），注册**工具**进模型的 function 列表，由模型决定何时调用
 // 两型走同一条 normalizeManifest，字段与扩展点完全等价；"通过能力名依赖而不是
-// 硬编码 Skill 名字"这一点对两型都成立 —— 替换实现不需要改核心代码。
+// 硬编码 Skill 名字"这一点对两型都成立，替换实现不需要改核心代码。
 //
 // manifest 字段：
 //   id                  唯一标识（目录名不一致时以 manifest 为准）
@@ -16,16 +16,16 @@
 //   description         一句话说明（UI 展示）
 //   requires            依赖的能力名数组（如 ['web.fetch']）
 //   capabilities        本 Skill 提供的能力名数组
-//   permissions         权限声明数组（当前只有 web_fetch —— 控制 api.fetch 是否可用）
+//   permissions         权限声明数组（当前只有 web_fetch，控制 api.fetch 是否可用）
 //   configSchema        配置项声明（UI 据此渲染表单）
-//                       其中 type:'action' 的条目**不是配置项**，是"界面入口" ——
+//                       其中 type:'action' 的条目**不是配置项**，是"界面入口"，
 //                       见下面的 panels，以及 src/skills/panel.js 的完整契约
 //   settings            该 Skill 的默认配置值
 //   prompt              提示词片段声明（见 promptSections）
 //   deprecated          标记为过期的 Skill（仍可加载，UI 提示）
 //
 // ⚠️ 规范化产物里多一个 `panels`：从 configSchema 摘出来的界面入口（已校验 + 已拼好 URL）。
-//    也就是说 **manifest.configSchema 里不会再有 type:'action' 的条目** ——
+//    也就是说 **manifest.configSchema 里不会再有 type:'action' 的条目**，
 //    消费方不必再过滤，设置表单直接遍历 configSchema 就是"纯配置项"。
 //    入口声明仍然写在 configSchema 里（作者熟悉的位置），拆分只发生在加载时。
 
@@ -38,7 +38,7 @@ export const SKILL_API_VERSION = 1;
  *
  *   plugins/  确定性型（kind = 'plugin'）
  *             提供**能力**（providers）或**钩子**（hooks）。核心代码按能力名取用，
- *             满足条件就一定被执行 —— 不经过 LLM，模型想忽略也忽略不掉。
+ *             满足条件就一定被执行，不经过 LLM，模型想忽略也忽略不掉。
  *
  *   skills/   LLM 型（kind = 'skill'）
  *             注册**工具**（registerTool）+ 提示词片段。工具进模型的 function 列表，
@@ -57,7 +57,7 @@ export function kindOfDir(dirPath) {
 }
 
 // 插件/技能分类词表。曾漏 'fun'（red-packet-radar）与 'query'（weather-alert），
-// 导致这两个合法分类被回退成 utility —— 与工具分类词表两套不一致。这里补全，
+// 导致这两个合法分类被回退成 utility，与工具分类词表两套不一致。这里补全，
 // 新增插件用到这些分类时不再被误判非法（保证插件通用性）。
 const VALID_CATEGORIES = new Set(['model', 'message', 'knowledge', 'media', 'utility', 'fun', 'query']);
 
@@ -76,7 +76,7 @@ function cleanString(value, fallback = '') {
 
 /**
  * 规范化 manifest：补默认值、去重、筛掉非法项。
- * 不做"必须合法否则抛错"的强校验 —— 单个 Skill 写错 manifest 不应该拖垮整个启动，
+ * 不做"必须合法否则抛错"的强校验，单个 Skill 写错 manifest 不应该拖垮整个启动，
  * 由调用方根据返回的 problems 决定是警告还是拒绝加载。
  */
 export function normalizeManifest(raw, { fallbackId = '' } = {}) {
@@ -106,7 +106,7 @@ export function normalizeManifest(raw, { fallbackId = '' } = {}) {
   const capabilities = [...new Set(asArray(raw.capabilities))];
   const requires = [...new Set(asArray(raw.requires))];
   // permissions 也必须走归一化：加载器（createSkillApi → api.fetch 的权限闸）
-  // 消费的就是这份产物 —— 若只认 raw 的数组形态，字符串写法（"permissions":
+  // 消费的就是这份产物，若只认 raw 的数组形态，字符串写法（"permissions":
   // "web_fetch"）会静默变成零权限（收包人报告④）。
   const permissions = [...new Set(asArray(raw.permissions))];
 
@@ -116,7 +116,7 @@ export function normalizeManifest(raw, { fallbackId = '' } = {}) {
 
   // 界面入口（configSchema 里的 type:'action'）在这里就与配置项分开：
   // 之后全流程只认 manifest.panels + 一份**不含 action** 的 configSchema。
-  // 放在这里而不是各消费方各过滤一次 —— 那样「设置表单」和「共 N 项设置」和
+  // 放在这里而不是各消费方各过滤一次，那样「设置表单」和「共 N 项设置」和
   // 「保存白名单」三处会各漏一次，而且漏了不报错。
   const rawSchema = (raw.configSchema && typeof raw.configSchema === 'object') ? raw.configSchema : {};
   const { panels, problems: panelProblems } = collectPanels(id, rawSchema);
@@ -148,7 +148,7 @@ export function normalizeManifest(raw, { fallbackId = '' } = {}) {
 
 /** 提示词片段声明：一律带 priority，且强制低于核心安全规则（100）。 */
 function normalizePrompt(prompt) {
-  // 字符串快捷写法视为 instruction —— 以前直接静默丢弃（返回 null），
+  // 字符串快捷写法视为 instruction，以前直接静默丢弃（返回 null），
   // 扩展装上了、开关开了、提示词却无声消失，排查毫无线索（收包人报告③"格式错静默降级"）。
   if (typeof prompt === 'string') prompt = { instruction: prompt };
   if (!prompt || typeof prompt !== 'object') return null;

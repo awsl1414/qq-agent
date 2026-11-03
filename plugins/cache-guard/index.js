@@ -1,30 +1,26 @@
-// 前缀缓存哨兵（cache-guard）—— 纯观测，不改行为。
+// 前缀缓存哨兵（cache-guard）：纯观测，不改行为。
 //
-// 为什么存在：
-//   前缀缓存（prompt caching）的命中取决于「请求体的 token 前缀是否逐字节稳定」。
-//   系统提示里任何一段被插件改掉、配置热更、或动态片段顺序变化，都会把
-//   从变更点开始的整段前缀打废 —— 表现是账单变大，而日志里毫无线索。
-//   （本项目实测：单会话 promptTokens 中位 29,362、缓存命中率 93.36%，
-//    剩下 6.6% ≈ 75 万 token/天 的"全新 token"值得有人盯着。）
+// 前缀缓存的命中取决于请求体的 token 前缀是否逐字节稳定。系统提示里任何一段
+// 被插件改掉、配置热更、或动态片段顺序变化，都会把从变更点开始的整段前缀打废，
+// 表现是账单变大，而日志里毫无线索。
 //
-// 三件事：
+// 做三件事：
 //   1. after-response：累计每群/每日的 prompt 与 cached token（核心已算好
-//      session.lastCallCache，这里只做聚合，不重复计算）。
+//      session.lastCallCache，这里只做聚合）。
 //   2. before-llm-messages：对系统提示做分段指纹（按 ▸ 小节标题切），
-//      与上一次对比 —— 谁的段落变了，一目了然。
-//   3. registerTool：一个 缓存报表 工具，模型被问"缓存命中率怎么样"时能自查。
+//      与上一次对比，报出是哪一段变了。
+//   3. registerTool：一个缓存报表工具，模型被问缓存命中率时能自查。
 //
-// 红线（本项目踩过的坑）：
+// 红线：
 //   · 数据只写 QQ_AGENT_DATA_DIR/plugin-data/cache-guard/，
-//     绝不写进 plugins/ 目录 —— fs.watch recursive 会把每次写盘变成全量重扫。
-//   · 落盘走 节流 + tmp+rename 原子写，避免崩溃窗口写坏 JSON。
+//     绝不写进 plugins/ 目录，fs.watch recursive 会把每次写盘变成全量重扫。
+//   · 落盘走节流 + tmp+rename 原子写，避免崩溃窗口写坏 JSON。
 
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-// M5（2026-10-14）：数据目录以核心 DATA_DIR 为唯一真源。
-// 原来写 `QQ_AGENT_DATA_DIR || '.'`，env 未设时回落**进程 cwd** ——
-// 多实例 profile（data-2）/ 从别的目录启动时会把统计写进错误目录。
+// 数据目录以核心 DATA_DIR 为唯一真源。不能回落进程 cwd：
+// 多实例 profile（data-2）或从别的目录启动时会把统计写进错误目录。
 import { DATA_DIR } from '../../src/config.js';
 
 const DEFAULTS = { saveIntervalSec: 30, driftKeep: 80, daysKeep: 14 };
@@ -35,7 +31,7 @@ const state = {
   days: {},        // 'YYYY-MM-DD' -> { calls, prompt, cached, minRate, maxRate, chats:{[chatKey]:{calls,prompt,cached}} }
   drift: [],       // 系统提示漂移事件（新的在前）
   lastSystem: null, // { hash, sections:{标题:指纹}, at }
-  lastUser: null    // { len, blocks:{引导,历史,唤醒,状态,时间}, at } —— 仅结构参考
+  lastUser: null    // { len, blocks:{引导,历史,唤醒,状态,时间}, at }，仅作结构参考
 };
 
 let dataDir = null;
@@ -45,7 +41,7 @@ let saveTimer = null;
 
 const sha1 = (s) => crypto.createHash('sha1').update(String(s)).digest('hex').slice(0, 10);
 
-/** 本地日期（不要用 toISOString —— UTC+8 会把凌晨算成昨天，health-system 教训）。 */
+/** 本地日期（不能用 toISOString：UTC+8 会把凌晨算成昨天）。 */
 function fmtDay(d = new Date()) {
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
@@ -96,8 +92,8 @@ function prune() {
 }
 
 // ── 系统提示分段指纹 ───────────────────────────────────────────────────
-// prompt.js 把 Skill 提示词片段渲染成「▸ 标题」小节。按这个标记切段，
-// 每段一个指纹 —— 漂移时能直接报出"是哪一段变了"。
+// prompt.js 把扩展提示词片段渲染成「▸ 标题」小节。按这个标记切段，
+// 每段一个指纹，漂移时能直接报出是哪一段变了。
 
 function fingerprintSystem(text) {
   const sections = {};
@@ -114,12 +110,12 @@ function fingerprintSystem(text) {
   return { whole: sha1(text), sections };
 }
 
-/** userPrompt 各段长度（结构参考，不判漂移 —— 尾部时间戳属于预期易变）。 */
+/** userPrompt 各段长度（结构参考，不判漂移，尾部时间戳本来就每轮变）。 */
 function userBlocks(text) {
   const blocks = {};
-  // ⚠️ 必须按段分隔符 `\n\n【` 切，**不能**用 text.indexOf('【过去状态】')：
+  // 必须按段分隔符 `\n\n【` 切，不能用 text.indexOf('【过去状态】')：
   // 【引导说明】正文里写着"扫一眼【过去状态】和【本次唤醒】"，indexOf 会命中
-  // 那一处引用，把「过去状态」算成 7 字节、「本次唤醒」算成 4687 字节（实测），
+  // 那一处引用，把「过去状态」算成 7 字节、「本次唤醒」算成 4687 字节，
   // 整张报表因此失真。口径与 llm.js 的 watchUserSegments 保持一致。
   String(text || '').split('\n\n【').forEach((part, i) => {
     let name;
@@ -181,7 +177,7 @@ function buildReport() {
   return lines.join('\n');
 }
 
-// ── Skill 接口 ─────────────────────────────────────────────────────────
+// ── 插件接口 ───────────────────────────────────────────────────────────
 
 export function setup(api) {
   cfg = () => ({ ...DEFAULTS, ...(api.config() || {}) });

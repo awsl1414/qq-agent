@@ -1,35 +1,34 @@
-// 冲突自检：内置 plugins/conversation-memory 与本插件**提供同名能力**
+// 冲突自检：内置 plugins/conversation-memory 与本插件提供同名能力
 // （memory.search / memory.archive / memory.status / memory.rebuild）。
 //
-// ── 为什么要自检 ─────────────────────────────────────────────────────────
 // 两个提供者同时启用会同时踩三件事。这三条都是在宿主源码里查证过的，不是推测：
-//   ① 钩子叠加 —— skills/manager.js 的 runHook 是 `for (const skill of registry.list())`
-//      **遍历所有已激活 Skill 依次调用**，不是"谁先返回谁赢"。两边都会往最后一条
-//      user 消息末尾追加记忆 → 内容重复、token 翻倍。
-//   ② 能力先注册者赢 —— plugin-loader.js 的 api.capability 只取**第一个**生效的
-//      提供者（源码注释原话："约定：同类能力只应有一个提供者"）。加载顺序是
-//      skills/ → plugins/，各自按目录名排序 —— conversation-memory(c) 排在
-//      mem-layered(m) 前面，所以默认情形下**内置版赢**。后果：宿主自带的
-//      memory_search 工具查到的是内置版的数据根，本插件的数据在磁盘上却查不到
-//      —— 不报错，只是"看起来新插件没生效"，最容易误判。
-//   ③ 双定时器 —— 两边各自 setInterval 跑后台巩固，互不破坏，但 CPU/IO 双份。
+//   ① 钩子叠加：skills/manager.js 的 runHook 是 `for (const skill of registry.list())`
+//      遍历所有已激活 Skill 依次调用，不是"谁先返回谁赢"。两边都会往最后一条
+//      user 消息末尾追加记忆，内容重复、token 翻倍。
+//   ② 能力先注册者赢：plugin-loader.js 的 api.capability 只取第一个生效的提供者
+//      （源码注释原话："约定：同类能力只应有一个提供者"）。加载顺序是
+//      skills/ → plugins/，各自按目录名排序，conversation-memory(c) 排在
+//      mem-layered(m) 前面，所以默认情形下内置版赢。后果是宿主自带的 memory_search
+//      工具查到的是内置版的数据根，本插件的数据在磁盘上却查不到，
+//      不报错，只是"看起来新插件没生效"，最容易误判。
+//   ③ 双定时器：两边各自 setInterval 跑后台巩固，互不破坏，但 CPU/IO 双份。
 //
-// ── 怎么在不碰宿主的前提下判断出来 ───────────────────────────────────────
-// 宿主没给插件"读别的 Skill 配置"或"列出能力提供者"的接口（createSkillApi 的
-// 白名单里只有 isSkillActive / capability / hasCapability），所以这里用两件事拼：
-//   · api.isSkillActive('conversation-memory') —— 内置版是否生效（纯内存查询，无 IO）
-//   · 给自己的 memory.status 传一个探针参数，看**第一个**提供者回不回我的引擎标记
-//     —— 回了说明我排在前面；没回说明内置版抢走了能力。
-// 探针在**本插件自己的** provider 里短路返回（见 index.js 的 providers），不读盘、
+// 怎么在不碰宿主的前提下判断出来：宿主没给插件"读别的 Skill 配置"或
+// "列出能力提供者"的接口（createSkillApi 的白名单里只有 isSkillActive /
+// capability / hasCapability），所以这里用两件事拼：
+//   · api.isSkillActive('conversation-memory')，内置版是否生效（纯内存查询，无 IO）
+//   · 给自己的 memory.status 传一个探针参数，看第一个提供者回不回我的引擎标记
+//     回了说明我排在前面；没回说明内置版抢走了能力。
+// 探针在本插件自己的 provider 里短路返回（见 index.js 的 providers），不读盘、
 // 不建实例；内置版不认识这个参数，会照常算它自己的状态（几个内存计数，代价极小）。
-// 而且只有"内置版确实生效"时才会去探针 —— 没冲突就不花这一分钱。
+// 而且只有"内置版确实生效"时才会去探针，没冲突就不花这一分钱。
 //
-// ⚠️ 本文件不改宿主任何一个字节：只用上面两个公开接口 + 宿主给插件自己的存储。
+// 本文件不改宿主任何一个字节：只用上面两个公开接口 + 宿主给插件自己的存储。
 import { num } from './util.js';
 
 /** 内置记忆插件的目录名 / 清单 id（两者一致）。 */
 export const BUILTIN_ID = 'conversation-memory';
-/** 内置版的显示名 —— 提示文案必须指名道姓，否则用户不知道该去关哪一个。 */
+/** 内置版的显示名，提示文案必须指名道姓，否则用户不知道该去关哪一个。 */
 export const BUILTIN_NAME = '分层会话记忆';
 /** 本插件的显示名（提示文案里用）。 */
 const SELF_NAME = '分层记忆（增强版）';
@@ -50,9 +49,9 @@ const COOLDOWN_DEFAULT = 1440;
  * 冲突看门狗。
  *
  * 三级结论：
- *   none      内置版没生效 —— 什么都没发生
- *   duplicate 内置版开着，但第一个能力提供者仍是我 —— 重复注入 + 双定时器
- *   shadowed  内置版开着**且抢走了能力**（默认情形）—— 上面全部，外加
+ *   none      内置版没生效，什么都没发生
+ *   duplicate 内置版开着，但第一个能力提供者仍是我：重复注入 + 双定时器
+ *   shadowed  内置版开着且抢走了能力（默认情形）：上面全部，外加
  *             "模型主动检索查到的是内置版的旧数据"
  */
 export class ConflictGuard {
@@ -66,7 +65,7 @@ export class ConflictGuard {
     this.state = null;
     this.checkedAt = 0;
     this.lastAnnouncedAt = 0;
-    // 上次提醒时间从宿主的插件存储里读回来 —— 进程重启不该把冷却重新数一遍，
+    // 上次提醒时间从宿主的插件存储里读回来：进程重启不该把冷却重新数一遍，
     // 否则每次热重载都会再念叨一次。
     try {
       const saved = api?.storage?.get?.(STORAGE_KEY, null);
@@ -135,7 +134,7 @@ export class ConflictGuard {
   }
 
   /**
-   * 注入用的一句话。必须短 —— 它只在私聊、且隔一段冷却才出现一次。
+   * 注入用的一句话。必须短，它只在私聊、且隔一段冷却才出现一次。
    * 措辞写成"给助手的一句话"，让模型顺口转达给主人；末尾明确"说一次就够"，
    * 免得模型每轮都念。
    */
@@ -147,7 +146,7 @@ export class ConflictGuard {
   }
 
   /**
-   * 这轮该不该插一句冲突提醒。**纯判断，不记账** ——
+   * 这轮该不该插一句冲突提醒。纯判断，不记账：
    * 记账交给 markAnnounced()，由调用方在"确实注入成功"之后调用，
    * 否则"没找到 user 消息、注入失败"也会白白吃掉一次冷却。
    */
@@ -155,7 +154,7 @@ export class ConflictGuard {
     const s = this.settings() || {};
     if (s.warnOnConflict === false) return false;
     // 只在私聊提醒：群聊里播报插件配置，等于当着陌生人的面念主人的设置页。
-    // 这是安全默认，不做成开关 —— 让人误开的东西不该存在。
+    // 这是安全默认，不做成开关：让人误开的东西不该存在。
     if (!String(chatKey || '').startsWith('private:')) return false;
     if (this.check({ now }).level === 'none') return false;
     const cooldownMs = num(s.conflictWarnCooldownMin, COOLDOWN_DEFAULT, COOLDOWN_MIN, COOLDOWN_MAX) * 60000;

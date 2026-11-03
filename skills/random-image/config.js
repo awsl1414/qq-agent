@@ -1,10 +1,9 @@
-// setu 常量与标签 Set 集中管理（从 setu.js 提取，减少主文件行数）。
-// 纯数据/常量，无逻辑，零副作用。
+// setu 常量与标签 Set 集中管理。纯数据/常量，无逻辑，零副作用。
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-// 2026-09-26 修：原来用 process.cwd() 锚定数据目录 —— 多实例 profile（data-2）
-// 或从其它工作目录启动时会把 setu-tmp / setu-dedup.json 写到错误位置。
-// 现在与核心其它模块同源：优先 QQ_AGENT_DATA_DIR，回退按模块自身位置推 app 根。
+// 数据目录不能用 process.cwd()：多实例 profile（data-2）或从其它工作目录启动时
+// 会把 setu-tmp / setu-dedup.json 写到错误位置。优先 QQ_AGENT_DATA_DIR，
+// 回退按模块自身位置推 app 根，与核心其它模块同源。
 const _here = path.dirname(fileURLToPath(import.meta.url));
 const _appRoot = path.resolve(_here, '..', '..');        // skills/random-image -> app 根
 const DATA_DIR = String(process.env.QQ_AGENT_DATA_DIR || '').trim()

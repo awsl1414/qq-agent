@@ -1,4 +1,4 @@
-// 内置壁纸模块（src/wallpaper/）冒烟测试 —— 2026-10-23 内置化时补。
+// 内置壁纸模块（src/wallpaper/）冒烟测试。
 //
 // 覆盖四件事：
 //   1. 能力面完整（plugin.json 声明 == providers 实现，防漂移）；
@@ -6,13 +6,13 @@
 //   3. promptSections 默认空、打开后两个段存在且引用的工具名与真实注册名一致；
 //   4. 白名单门禁 + 无 WE 环境下的降级路径不抛错。
 //
-// ⚠️ 2026-10-24：壁纸默认不再进对话（llmControl 默认 false）。原因见
-//    src/wallpaper/index.js 的 llmExposed 注释 —— 每轮固定 1358 tok，实测 0 次调用。
-//    下面凡是要拿到工具的用例，config 里都必须显式给 llmControl: true。
+// 壁纸默认不再进对话（llmControl 默认 false）。原因见 src/wallpaper/index.js 的
+// llmExposed 注释：每轮固定 1358 tok，实测 0 次调用。
+// 下面凡是要拿到工具的用例，config 里都必须显式给 llmControl: true。
 //
-// ⚠️ 数据目录必须指到临时目录：theme.js 的同步/登记表、core.js 的扫描缓存都写
-//    DATA_DIR。用动态 import 而不是静态 —— 静态 import 会在设 env 之前就把
-//    config.js 求值完，DATA_DIR 会钉死在真实 data/ 上。
+// 数据目录必须指到临时目录：theme.js 的同步/登记表、core.js 的扫描缓存都写
+// DATA_DIR。用动态 import 而不是静态：静态 import 会在设 env 之前就把 config.js
+// 求值完，DATA_DIR 会钉死在真实 data/ 上。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -112,9 +112,9 @@ test('白名单放行后能走通（ capability 冒烟 ）', async () => {
   const list = tools.find((t) => t.id === 'list');
   // 本机可能没装 WE：两种结果都算通过（不抛错 + 结构正确），有装则 items 是数组
   const r = await list.execute({ triggerSenderId: '12345' }, {});
-  // ⚠️（2026-10-24 修）库不可用时工具按本模块约定返回**纯文本 isError**（err()），
-  //    不是 JSON —— 原测试无条件 JSON.parse，在没装 WE 的机器上必红。装不装 WE
-  //    都该验的是"没被门禁拦"，JSON 结构只在库可用时验。
+  // 库不可用时工具按本模块约定返回纯文本 isError（err()），不是 JSON。
+  // 无条件 JSON.parse 在没装 WE 的机器上必红；装不装 WE 都该验的是"没被门禁拦"，
+  // JSON 结构只在库可用时验。
   if (r.isError) {
     assert.ok(!/白名单/.test(String(r.content)), '白名单内不该被门禁拦');
     return;

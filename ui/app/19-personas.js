@@ -1,16 +1,15 @@
-// 〔已安装的人设〕—— 左栏「下载 → 已安装 → 人设」
+// 〔已安装的人设〕左栏「下载 → 已安装 → 人设」
 'use strict';
 /* ══════════════════════════════════════════════════════════════
-   为什么单独开一页（2026-10-22）：
-     人设落在 config.customPersonas，但在此之前**没有任何界面列出它们** ——
+   单独开一页的原因：
+     人设落在 config.customPersonas，但在此之前没有任何界面列出它们：
      市场页只给市场条目打「已应用」徽标；设置页只有一个「选择人设」弹窗，
      而那个弹窗的语义是"挑一个填进角色设定"，不是"看看我装了哪些"。
      于是用户装了几个、装的是什么、怎么切走、怎么删，全都看不见。
-     技能和插件在「已安装」段各有一页，人设是同一类东西却没有 —— 这是
-     信息架构的缺口，不是样式问题。
+     技能和插件在「已安装」段各有一页，人设是同一类东西却没有。
 
    与技能 / 插件页的关键差别：
-     那两个是**开关型**（每个独立启用/关闭）；人设是**单选型**（同一时间只有
+     那两个是开关型（每个独立启用/关闭）；人设是单选型（同一时间只有
      一个 roleText 生效）。所以这里没有开关，只有「使用中」标记 + 「使用」按钮。
    ══════════════════════════════════════════════════════════════ */
 
@@ -22,27 +21,27 @@ var PERSONA_SRC = {
 
 /* 状态筛选（与插件页的 MODULE_FILTER 同款三档）。
    人设只有"使用中 / 未使用"两种状态，所以没有插件页那两档
-   （依赖未就绪 / 加载失败 —— 人设是纯文本，不存在加载失败）。
+   （依赖未就绪 / 加载失败，人设是纯文本，不存在加载失败）。
    放模块级：切走再回来保留筛选，跟插件页行为一致。 */
 var personasFilter = 'all';   // all | on | off
 
 /* 切换进行中的闸门。
-   全局人设是单选，但连点两个开关会发两个 POST —— 后端 updateConfig 虽然是同步
+   全局人设是单选，但连点两个开关会发两个 POST。后端 updateConfig 虽然是同步
    读-改-写、最终值以最后一次为准，前端两次 renderPersonasPage 交错却会让用户
    看到"两个都亮过一下"的中间态。串行化最省事：上一次没回来就忽略新的点击。 */
 var personasSwitching = false;
 
 /* 最近一次把人设列表渲染到了哪个容器。
-   2026-10-22：会话设置（全屏页）的右栏也要渲染同一套列表，容器不再是固定的
-   #personas-page。所有"操作完重画"的路径（开关 / 删除 / 筛选）都调无参的
-   renderPersonasPage()，靠这个变量找回家 —— 否则在会话设置里点一下开关，
-   重画会画到后台那个隐藏的人设页上，眼前这份纹丝不动。 */
+   会话设置（全屏页）的右栏也要渲染同一套列表，容器不再是固定的 #personas-page。
+   所有"操作完重画"的路径（开关 / 删除 / 筛选）都调无参的 renderPersonasPage()，
+   靠这个变量找回家；否则在会话设置里点一下开关，重画会画到后台那个隐藏的
+   人设页上，眼前这份纹丝不动。 */
 var personasHost = null;
 
 function personaHostEl() {
   // 只认"还在 DOM 里且真的可见"的那个容器。会话设置是全屏页，关掉之后
-  // #bp-setup-scroll 仍然挂在 DOM 上、只是被隐藏 —— 不判可见性的话，
-  // 回到人设页点开关会重画到那个看不见的右栏里，眼前纹丝不动。
+  // #bp-setup-scroll 仍然挂在 DOM 上、只是被隐藏，不判可见性的话，
+  // 回到人设页点开关会重画到那个看不见的右栏里。
   if (personasHost && document.body.contains(personasHost) && personasHost.getClientRects().length) {
     return personasHost;
   }
@@ -54,17 +53,15 @@ function personaCurrentText() {
   return String((typeof state !== 'undefined' && state.config && state.config.persona && state.config.persona.roleText) || '').trim();
 }
 
-/** 是否就是当前生效的那一个。判据与设置页「选择人设」一致：比正文，不比名字。 */
 /**
- * 当前生效的人设 id —— **第一个**正文匹配的模板。
+ * 当前生效的人设 id，第一个正文匹配的模板。
  *
  * config 里只存 roleText，没有"当前用的是哪个模板"的字段，所以只能靠正文反查。
- * ⚠️ 2026-10-22：判据从"每张卡各自比正文"改成"全局只认第一个匹配的 id"。
- *    原因是全局人设**同时只能有一个**：用户如果把同一个 .txt 导入两次，
- *    两个人设正文完全相同，按正文比对会让两张卡同时显示「使用中」、两个开关
- *    同时打开 —— 看起来像能同时启用两个。改成只认第一个 id 后，无论重复多少份，
- *    最多只有一个亮。
- *    顺序取自 state.personaTemplates 的插入顺序（内置在前、自定义按数组序），稳定。
+ * 判据是"全局只认第一个匹配的 id"，不是"每张卡各自比正文"：
+ * 全局人设同时只能有一个，用户如果把同一个 .txt 导入两次，两个人设正文完全相同，
+ * 按正文比对会让两张卡同时显示「使用中」、两个开关同时打开，看起来像能同时启用两个。
+ * 只认第一个 id 后，无论重复多少份，最多只有一个亮。
+ * 顺序取自 state.personaTemplates 的插入顺序（内置在前、自定义按数组序），稳定。
  */
 function personaCurrentId() {
   const cur = personaCurrentText();
@@ -83,7 +80,7 @@ function personaIsCurrent(id) {
 
 /**
  * 把 state.personaTemplates 摊成列表。
- * custom_N 里的 N 就是 customPersonas 的下标 —— 靠它区分"从市场装的"和"自己写的"：
+ * custom_N 里的 N 就是 customPersonas 的下标，靠它区分"从市场装的"和"自己写的"：
  * GET /api/persona-templates 只回 id/name/text/builtin，不回 source。
  */
 function personaInstalledList() {
@@ -119,12 +116,12 @@ function renderPersonasPage(opts) {
   const box = o.box || personaHostEl();
   if (!box) return;
   personasHost = box;
-  // compact：会话设置右栏那种窄容器 —— 去掉底部尾注（那块是"全局概览"，
+  // compact：会话设置右栏那种窄容器，去掉底部尾注（那块是"全局概览"，
   // 属于人设页的收尾，塞进右栏只会把卡片往下推）。
   const compact = !!o.compact;
   // keepScroll：切换人设 / 删除后重画时保住滚动位置。列表内容几乎没变
   //（只换一个开关状态），弹回顶部会让用户重新找刚才那一张。
-  // 筛选变化**不**传这个 —— 那时内容整个变了，回顶部才是对的。
+  // 筛选变化不传这个：那时内容整个变了，回顶部才是对的。
   const keepScroll = !!o.keepScroll;
   const prevTop = keepScroll ? box.scrollTop : 0;
   const all = personaInstalledList();
@@ -132,14 +129,14 @@ function renderPersonasPage(opts) {
   const onCount = cur ? 1 : 0;
   // 筛选后的列表；统计（页头那个 X / N、筛选条的数字）一律按全量算，
   // 否则"使用中 1"在切到「未使用」档后会变成 0，看着像状态丢了。
-  // 2026-10-23：筛选状态是模块级变量，主页「下载→已安装→人设」与会话设置右栏**共用**。
+  // 筛选状态是模块级变量，主页「下载→已安装→人设」与会话设置右栏共用。
   // 群友反馈「会话设置里的人设选择：人设库有 5 个，只显示 4 个，也不能往下滑」，
-  // 根因就是这次共用：右栏只想给本会话挑一个人设，却继承了主页面留下的「未使用」筛选
-  // —— 正在用的那 1 个被过滤掉，剩 4 个（2 行）不足一屏，于是既看不到第 5 个、也没有
+  // 根因就是这次共用：右栏只想给本会话挑一个人设，却继承了主页面留下的「未使用」筛选，
+  // 正在用的那 1 个被过滤掉，剩 4 个（2 行）不足一屏，于是既看不到第 5 个、也没有
   // 滚动条，看上去像被裁掉了。
   // 实测（无头浏览器 + CDP 量真实布局）：#bp-setup-scroll（.bp-scroll）的
   // overflow-y:auto 与 flex 高度链都正常，8 张卡时 scrollHeight 878 > clientHeight 621、
-  // scrollTop 能滚到底 —— 容器本身没有问题，纯粹是筛选把条目藏了。
+  // scrollTop 能滚到底，容器本身没有问题，纯粹是筛选把条目藏了。
   // 修法：compact（会话设置右栏）不参与全局筛选，永远按「全部」渲染；筛选条也不显示。
   const effFilter = compact ? 'all' : personasFilter;
   const list = all.filter((x) => {
@@ -147,7 +144,7 @@ function renderPersonasPage(opts) {
     if (effFilter === 'off') return !personaIsCurrent(x.id);
     return true;
   });
-  // 两个"覆盖全局"的隐形层，必须在**切换的地方**报出来 —— 设置页已经报过，
+  // 两个"覆盖全局"的隐形层，必须在切换的地方报出来：设置页已经报过，
   // 但用户是在这一页按开关的。不报的话，他切完发现那几个会话/主人那边行为没变，
   // 只会觉得"这个开关坏了"。判定口径与 06-settings-render.js 的摘要卡完全一致：
   //   ① personaByChat：personaForChat 逐会话合并，优先级高于全局
@@ -159,24 +156,23 @@ function renderPersonasPage(opts) {
   const ownerOn = ownerCfg.personaEnabled === true && !!String(ownerCfg.personaRoleText || '').trim();
   // 第三个隐形层：覆盖了系统提示词、但没留 {roleText} 占位符。
   // buildSystemPrompt 的 override 分支是「整段替换」再 replaceAll('{roleText}', ...)，
-  // 所以占位符不在 = 人设正文根本没有注入点 —— 在这页怎么切都没反应，
+  // 所以占位符不在 = 人设正文根本没有注入点，在这页怎么切都没反应，
   // 而且界面上一切正常（开关会动、卡片会换），最难自查的一种。
   const overrideText = String((state.config && state.config.persona && state.config.persona.systemPromptOverride) || '').trim();
   const overrideNoRole = !!overrideText && overrideText.indexOf('{roleText}') < 0;
 
-  // 2026-10-22 第三版：与插件卡**同构**。
-  //   上一版虽然用了 .mcard，但把操作放成了底部一整行文字钮，于是：
+  // 与插件卡同构。
+  //   早先虽然用了 .mcard，但把操作放成了底部一整行文字钮，于是：
   //   ① .mcard-state 的 margin-left:auto 把「使用中」推到卡片最右，和名称之间
   //      拉开一大段（插件卡的「生效中」是紧跟版本号的）；
   //   ② 多一条分隔线 + 一行按钮，卡片比插件卡高一截。
   //   用户一眼就看出"样式不一样"。现在改成插件卡那套：右侧图标（预览 + 开关），
   //   删除放右下角，卡片高度和插件卡完全一致。
-  // 2026-10-23：第四处破相 —— 「全局人设 · 所有会话共用」当时独占卡片第 4 行，
-  //   于是"使用中"的人设卡比同页其他人设卡、比插件卡高一截（用户截图对比
-  //   记忆系统插件卡后指出"卡片大小不一致"）。已改为 .mcard-dir 行内后缀标签
-  //   （.ps-global-tag，hover 看完整解释），结构回到"标题 + 简介（固定两行）
-  //   + 元信息单行"三件套。**教训：这套卡片的等高是硬约定，任何"觉得重要就
-  //   再加一行"都会破相 —— 新信息一律并入既有行或收进 hover。**
+  // 「全局人设 · 所有会话共用」曾独占卡片第 4 行，于是"使用中"的人设卡比同页其他人设卡、
+  //   比插件卡高一截。已改为 .mcard-dir 行内后缀标签（.ps-global-tag，hover 看完整解释），
+  //   结构回到"标题 + 简介（固定两行）+ 元信息单行"三件套。
+  //   教训：这套卡片的等高是硬约定，任何"觉得重要就再加一行"都会破相，
+  //   新信息一律并入既有行或收进 hover。
   //   开关语义：开 = 用这个人设，关 = 回落到内置默认（人设是单选，没有"都关掉"）。
   // 齿轮：编辑自定义人设。造型与插件卡那颗完全一致（06-settings-render.js 的 GEAR_SVG）。
   const GEAR_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true">'
@@ -231,7 +227,7 @@ function renderPersonasPage(opts) {
   }).join('');
 
   // 外层容器照抄插件页：.usage-wrap（max-width 940 居中）→ .usage-head → 网格。
-  // 这不是"抄着好看"—— 插件页就是这套，容器不同则卡片宽度、左边距、滚动行为全变，
+  // 这不是"抄着好看"：插件页就是这套，容器不同则卡片宽度、左边距、滚动行为全变，
   // 同一套 .mcard 会长成两个样子。
   // 状态筛选条：与插件页 .mod-filters 同款写法（选中态用主题强调色内联，
   // 不新增一次性 CSS）。人设只有"使用中 / 未使用"两态，所以是三档不是四档。
@@ -243,9 +239,9 @@ function renderPersonasPage(opts) {
       ].map((f) => `<button type="button" class="btn btn-small" data-ps-filter="${f.id}"`
         + (f.id === personasFilter ? ' style="background:var(--accent);color:#fff;border-color:var(--accent)"' : '')
         + `>${f.label} ${f.n}</button>`).join('')
-    // 2026-10-23：显式标出"当前显示几个 / 一共几个"。
-    // 反馈来源：用户说「人设库里有 5 个，只显示 4 个，还不能往下滑」。
-    // 实测（无头浏览器量真实布局）：.usage-pane 的滚动本身正常 —— 8 张卡时
+    // 显式标出"当前显示几个 / 一共几个"。
+    // 用户说「人设库里有 5 个，只显示 4 个，还不能往下滑」。
+    // 实测（无头浏览器量真实布局）：.usage-pane 的滚动本身正常，8 张卡时
     // scrollHeight 878 > clientHeight 621，scrollTop 能滚到底。真正会"少一个"
     // 的是筛选：切到「未使用」后，正在用的那 1 个被过滤掉，剩 4 个不足一屏，
     // 于是既看不到第 5 个、也没有滚动条，看上去像"被裁掉了"。
@@ -256,7 +252,7 @@ function renderPersonasPage(opts) {
 
   // 尾注：与技能页（共注册 N 个工具）/ 插件页（共提供 N 个能力）同一套版式。
   // 人设没有"能力/工具"这种可枚举的东西，最有用的是**体量**：正文会整段注入
-  // 系统提示词，字数直接换算成 token —— 用户能一眼看出哪一类人设"重"。
+  // 系统提示词，字数直接换算成 token，用户能一眼看出哪一类人设"重"。
   // 统计一律按全量 all，不随筛选变。
   const bySrc = { builtin: [], market: [], custom: [] };
   for (const x of all) bySrc[x.source].push(x);
@@ -286,7 +282,7 @@ function renderPersonasPage(opts) {
           : '当前还没有应用任何人设，用的是内置默认。'}
       </div>
       <!-- 说明折叠条：与技能 / 插件页同一个组件（原生 <details>，无 JS、键盘与读屏天然可用）。
-           收起来只占一行，展开才铺开解释 —— 顶部不再吃视口。 -->
+           收起来只占一行，展开才铺开解释，顶部不再吃视口。 -->
       <details class="module-note">
         <summary>
           <svg class="mn-chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.4 2.4 8 6l-3.6 3.6" /></svg>
@@ -315,8 +311,8 @@ function renderPersonasPage(opts) {
    加载
    ══════════════════════════════════════════════════════════════ */
 /**
- * 拉人设模板 + 相关 config 字段，写回 state。**不碰任何 DOM。**
- * 人设页（#personas-page）和会话设置右栏（#bp-setup-scroll）共用它 ——
+ * 拉人设模板 + 相关 config 字段，写回 state。不碰任何 DOM。
+ * 人设页（#personas-page）和会话设置右栏（#bp-setup-scroll）共用它：
  * 两边各自只负责渲染，数据这一份逻辑不要写两遍。
  */
 async function refreshPersonaData() {
@@ -326,14 +322,14 @@ async function refreshPersonaData() {
   ]);
   const map = {};
   for (const t of ((tplData && tplData.templates) || [])) {
-    // customRules 必须带上：personaForChat 是**逐字段合并**（roleText / customRules /
+    // customRules 必须带上：personaForChat 是逐字段合并（roleText / customRules /
     // systemPromptOverride / participation），切换时只写 roleText 会让上一个人设的
     // 附加规则残留下来，两套设定串味。设置页的「选择人设」就是同步它的。
     map[t.id] = { name: t.name, text: t.text, builtin: !!t.builtin, customRules: t.customRules || '' };
   }
   state.personaTemplates = map;
-  // GET /api/config 回的是**脱敏后的 config 本体**（不是 {config} 包一层）。
-  // 只摘需要的字段回填，不整体覆盖 state.config —— sanitizeConfig 会把 apiKey
+  // GET /api/config 回的是脱敏后的 config 本体（不是 {config} 包一层）。
+  // 只摘需要的字段回填，不整体覆盖 state.config：sanitizeConfig 会把 apiKey
   // 等换成掩码，整包覆盖会让别处读到假值。
   // personaByChat / skills 是页头那两条覆盖警告要用的，一并带上。
   if (cfg && typeof cfg === 'object') {
@@ -435,9 +431,9 @@ function bindPersonasPage(host) {
 /**
  * 「＋ 添加人设」：复用设置页那个新建弹窗（支持把 .txt/.md 拖进去自动读取）。
  *
- * ⚠️ 四个选择器都刻意指向**不存在**的元素：
+ * 四个选择器都刻意指向不存在的元素：
  *    弹窗默认会把新内容填回设置页的「角色设定 / 附加规则」文本框并派发 input
- *    触发自动保存 —— 如果用户刚从设置页切过来、那里还开着正在编辑的内容，
+ *    触发自动保存。如果用户刚从设置页切过来、那里还开着正在编辑的内容，
  *    就会把人家写了一半的东西覆盖掉。这页本来也没有编辑器可填，直接指向空气；
  *    弹窗内部对 null 都有保护，不会报错。
  *    提示也走不到页面上（hintSel 是空的），所以成功反馈由 onDone 里的 toast 负责。
@@ -446,11 +442,11 @@ function bindPersonasPage(host) {
 /**
  * 「齿轮」：编辑这条自定义人设（名称 / 正文 / 附加规则）。
  *
- * 复用设置页那个新建弹窗的编辑模式（传 editId）—— 同一套字段、同一套拖文件读取，
+ * 复用设置页那个新建弹窗的编辑模式（传 editId），同一套字段、同一套拖文件读取，
  * 不另写一个只差三个输入框的弹窗。
- * ⚠️ 四个选择器同样指向不存在的元素：这页没有"角色设定"编辑器可填，
- *    不能让编辑结果灌进设置页那边正在写的东西里（与 personaAddNew 同一个理由）。
- * ⚠️ 只对自定义人设开放：内置人设的正文写死在 src/personas.js，后端也只认 custom_N。
+ * 四个选择器同样指向不存在的元素：这页没有"角色设定"编辑器可填，
+ * 不能让编辑结果灌进设置页那边正在写的东西里（与 personaAddNew 同一个理由）。
+ * 只对自定义人设开放：内置人设的正文写死在 src/personas.js，后端也只认 custom_N。
  */
 function personaEditInstalled(id) {
   const tpl = state.personaTemplates && state.personaTemplates[id];
@@ -500,11 +496,11 @@ function personaPreviewInstalled(id, trigger) {
 /**
  * 把人设模板应用成「当前全局人设」的 patch。
  *
- * ⚠️ customRules 只在模板**自带**规则时才写。这是 2026-10-16 修过的坑：
- *   内置人设没有 rules，无条件 `customRules: ''` 会把用户手写的「管理员附加规则」
- *   静默抹掉；反过来，切换时**完全不写**又会让上一个人设的规则残留
- *   （personaForChat 是逐字段合并，roleText 换了、customRules 还留着旧的）。
- *   与设置页「选择人设」同口径：有才覆盖，没有就保留用户的值。
+ * customRules 只在模板自带规则时才写。内置人设没有 rules，无条件
+ * `customRules: ''` 会把用户手写的「管理员附加规则」静默抹掉；反过来，
+ * 切换时完全不写又会让上一个人设的规则残留（personaForChat 是逐字段合并，
+ * roleText 换了、customRules 还留着旧的）。
+ * 与设置页「选择人设」同口径：有才覆盖，没有就保留用户的值。
  */
 function personaApplyPatch(tpl) {
   const patch = { persona: { roleText: String(tpl.text || '') } };
@@ -523,7 +519,7 @@ async function personaUseInstalled(id, btn) {
   if (btn) { btn.disabled = true; btn.textContent = '切换中…'; }
   personasSwitching = true;
   try {
-    // 只改 persona 下的字段（后端 updateConfig 是深合并 patch），刻意不动 botName ——
+    // 只改 persona 下的字段（后端 updateConfig 是深合并 patch），刻意不动 botName，
     // 名字是账号身份，@ 判定与存档称呼都依赖它。
     await api('/api/config', { method: 'POST', body: JSON.stringify(personaApplyPatch(tpl)) });
     if (state.config && state.config.persona) {
@@ -548,8 +544,8 @@ async function personaUseInstalled(id, btn) {
 /**
  * 卡片右侧那颗「使用」开关。
  *
- * 开 = 换成这个人设；关 = **回落到内置默认**。
- * 为什么关不是"变成没人设"：人设是单选，roleText 必须有值 —— 留空的话
+ * 开 = 换成这个人设；关 = 回落到内置默认。
+ * 关不是"变成没人设"：人设是单选，roleText 必须有值，留空的话
  * 机器人会带着一段空设定说话，比"用回默认"糟得多。内置默认取 xiaojingyu，
  * 与「选择人设」弹窗里删掉正在使用的人设时的回落口径完全一致。
  */
@@ -563,12 +559,12 @@ async function personaToggleUse(id, checked) {
     renderPersonasPage();          // 把开关画回去
     return;
   }
-  // 记下"原来是哪一个"，用来在提示里明说"它已经自动关了" —— 单选语义要讲出来，
+  // 记下"原来是哪一个"，用来在提示里明说"它已经自动关了"，单选语义要讲出来，
   // 否则用户看到另一个开关自己弹回去，会以为点错了。
   const prevId = personaCurrentId();
   const prevName = ((state.personaTemplates && state.personaTemplates[prevId]) || {}).name;
   // 正文与当前人设完全相同的另一份（用户把同一个 txt 导了两次）：
-  // 打开它不会改变 roleText，重画后亮的仍是第一个 —— 不解释的话用户只会看到
+  // 打开它不会改变 roleText，重画后亮的仍是第一个，不解释的话用户只会看到
   // "开关自己弹回去了"。这里直接说清，不做无效 POST。
   if (checked && prevId && prevId !== id && String(tpl.text || '').trim() === personaCurrentText()) {
     personaToast(`「${tpl.name}」的正文和当前人设完全相同，切换不会有变化`, 'warn');

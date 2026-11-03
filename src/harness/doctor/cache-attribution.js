@@ -1,14 +1,13 @@
 // ── 缓存击穿归因：把"这一轮为什么没命中"落到「哪个模块的哪一段」────────────
 //
-// 为什么单独一个文件：cache-sentinel 回答"掉了多少"，这里回答"谁干的"。
+// 与 cache-sentinel 的分工：那里回答"掉了多少"，这里回答"谁干的"。
 // 两件事的数据源不同（前者看 usage，后者要读 systemPrompt 做 diff），
 // 算法也不同（前者是求和，后者是分段指纹对比）。混在一起会互相牵制。
 //
 // ── 数据源（两个，互补）──────────────────────────────────────────────
-//   ① sessions/*.json  —— 每次会话存档一份完整 systemPrompt（字节级真相）。
-//      本机实测（2026-10-23，98 会话全窗口）：两次「表情包」翻字在相邻存档
-//      之间都留了痕，会话间 diff 全部抓到，且带改前/改后全文。
-//  ② plugin-data/cache-guard/stats.json 的 drift 数组 —— cache-guard 在
+//   ① sessions/*.json：每次会话存档一份完整 systemPrompt（字节级真相），
+//      带改前/改后全文。会话之间的 diff 全部能抓到。
+//  ② plugin-data/cache-guard/stats.json 的 drift 数组：cache-guard 在
 //      **每次 LLM 调用前**都对系统提示做分段指纹，翻字即记一条（段名级）。
 //      它的不可替代性在另一个方向：会话**内部**翻字又翻回时，相邻两份存档
 //      一模一样，① 看不见，只有 ② 留得下记录。两者判重后合并（同一起事件
@@ -26,24 +25,22 @@
 //      更好的 A），否则作为独立事件并入，断点位置取"翻字后最近一次存档"
 //      里该段的位置，before/after 原文取翻字前后的最近存档。
 //   C. 归因出口：
-//        · breaks   —— 时间线（含 before/after 原文预览、断点字符位置、代价）
-//        · byModule —— 按模块汇总（谁累计造成最多击穿）
-//        · sections —— 模块清单（哪个模块带来了什么：段名/字节数/翻字次数）
+//        · breaks：时间线（含 before/after 原文预览、断点字符位置、代价）
+//        · byModule：按模块汇总（谁累计造成最多击穿）
+//        · sections：模块清单（哪个模块带来了什么：段名/字节数/翻字次数）
 //
-//   这个算法的关键在于：**它不需要猜测**。systemPrompt 是逐字节存在 session
-//   存档里的，diff 出来的断点就是真实断点。唯一的不确定性是 tools 段 ——
-//   它不在存档里，所以工具集变化无法在这里归因（那是 llm.js 的 tools-watch
-//   与 [req-fp] 日志的领域）。
+//   这个算法不需要猜测：systemPrompt 是逐字节存在 session 存档里的，
+//   diff 出来的断点就是真实断点。唯一的不确定性是 tools 段，它不在存档里，
+//   所以工具集变化无法在这里归因（那是 llm.js 的 tools-watch 与 [req-fp] 日志的领域）。
 //
-// ⚠️ 与 body-lcp 日志的分工：那条日志记的是**每次请求**的断点（含 tools），
-//    但只在当次有效、不落盘、不能跨轮对比。这里做的是**跨轮归因**，代价是
-//    看不到 tools 段。
+//   与 body-lcp 日志的分工：那条日志记的是**每次请求**的断点（含 tools），
+//   但只在当次有效、不落盘、不能跨轮对比。这里做的是**跨轮归因**，代价是
+//   看不到 tools 段。
 
 import fs from 'node:fs';
 import path from 'node:path';
 
-// 归因要跨天才有意义：本机实测 98 个会话里只有 2 次 system 变化，且都在
-// 几小时前 —— 窗口取小了（比如最近 16 轮）会得出"没有插件击穿"的假结论。
+// 归因要跨天才有意义：窗口取小了（比如最近 16 轮）会得出"没有插件击穿"的假结论。
 // 所以默认尽量往前看（上限就是读文件数上限），代价只有几十毫秒。
 const ATTRIBUTION_MAX_FILES = 120;
 const DEFAULT_WINDOW = ATTRIBUTION_MAX_FILES;
@@ -75,7 +72,7 @@ function sha1Short(s) {
 
 /**
  * 按「▸ 标题」切段。规则与 cache-guard/index.js 的 fingerprintSystem 完全一致
- * —— 两处必须同源，否则"哨兵说 A 段变了、归因说 B 段"会互相打脸。
+ * 两处必须同源，否则"哨兵说 A 段变了、归因说 B 段"会互相打脸。
  */
 export function sliceSections(text) {
   const src = String(text || '');
@@ -156,8 +153,7 @@ function firstDiffOffset(a, b) {
 
 /**
  * 以"第一个差异点"为中心的预览：段可能几百字符，变化只在其中一两行，
- * 从段首截断会前后看起来一模一样（实测第二次翻字就是这样）。窗口对准
- * 差异点，"换的到底是什么"才看得见。
+ * 从段首截断会前后看起来一模一样。窗口对准差异点，"换的到底是什么"才看得见。
  */
 function previewAt(text, pos, span = PREVIEW_SPAN) {
   const s = String(text || '');
@@ -267,7 +263,7 @@ export function attributeBreaks({ dataDir, window = DEFAULT_WINDOW, sectionOwner
     const afterText = change.next ? cur.sys.slice(change.next.idx, change.next.end) : '';
     const beforeText = change.prev ? prev.sys.slice(change.prev.idx, change.prev.end) : '';
     // 预览窗口对准段内第一个差异点：几百字的段里只改了一行时，从段首
-    // 截断会显得"什么都没变"（实测踩过）。
+    // 截断会显得"什么都没变"。
     const dOff = firstDiffOffset(beforeText, afterText);
     breaks.push({
       at: cur.at,
@@ -303,7 +299,7 @@ export function attributeBreaks({ dataDir, window = DEFAULT_WINDOW, sectionOwner
     const dup = breaks.some((b) => b.title === title && d.at >= b.prevAt - 60000 && d.at <= b.at + DEDUP_WINDOW_MS);
     if (dup) { deduped += 1; continue; }
     // 翻字前后的最近存档：用来取该段的 before/after 原文与断点位置。
-    // 注意这是"最近快照"而非"翻字那一瞬的原文"——drift 只存了指纹，
+    // 注意这是"最近快照"而非"翻字那一瞬的原文"：drift 只存了指纹，
     // 原文以存档为准（UI 标注来源，用户能分辨精度）。
     const beforeRow = [...seq].reverse().find((r) => r.at <= d.at) || null;
     const afterRow = seq.find((r) => r.at >= d.at) || null;

@@ -1,7 +1,7 @@
 // 可观测：记下"记忆到底有没有被用上"。
 //
-// 内置版只有块数/词项数/当日 token，没有检索命中率，也没有"模型到底调过几次检索工具"
-// —— 于是"记忆是不是白开了"永远无法回答。这里补上最小可用的一组计数，
+// 内置版只有块数/词项数/当日 token，没有检索命中率，也没有"模型到底调过几次检索工具"，
+// 于是"记忆是不是白开了"永远无法回答。这里补上最小可用的一组计数，
 // 由 memory.status 能力暴露（宿主自带的 memory_status 工具会直接显示它）。
 import fs from 'node:fs';
 import path from 'node:path';
@@ -116,7 +116,7 @@ export class Stats {
       cardsDropped: Number(c.cardsDropped) || 0,
       crossTurnDropped: Number(c.crossTurnDropped) || 0,
       todosDropped: Number(c.todosDropped) || 0,
-      // 「节省效应到底救回了多少」—— 墓碑从"只有印象"被重建回"完整回忆"的次数
+      // 「节省效应到底救回了多少」：墓碑从"只有印象"被重建回"完整回忆"的次数
       gistRevived: Number(c.gistRevived) || 0,
       // 索引与块文件不一致、被懒自愈摘掉的项数。长期 > 0 说明磁盘/文件有问题
       selfHealed: Number(c.selfHealed) || 0,

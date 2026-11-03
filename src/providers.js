@@ -1,5 +1,5 @@
 // 多提供商模型目录：从 DSH 的 settings.yaml 导入模型列表，统一成 OpenAI 兼容调用。
-// 说明：DSH 里 api: anthropic-messages 的提供商，本程序按 OpenAI 兼容模式调用
+// DSH 里 api: anthropic-messages 的提供商，本程序按 OpenAI 兼容模式调用
 // （A6API 这类中转站两种协议都支持；baseURL 缺 /v1 时自动补上）。
 // 密钥来源优先级：DSH .credentials.yaml 的 refs > 环境变量（含别名）。
 import fs from 'node:fs';
@@ -12,9 +12,8 @@ import {
   buildProtocolRequest, parseProtocolResponse, protocolModelsRequest, parseProtocolModels
 } from './api-protocols.js';
 
-// DSH 未写 baseURL 的提供商，按官方默认端点补全（可在 UI 修改）。
-// 来源：
-// - mimo.mi.com/docs Token Plan 快速接入（tp- 密钥专用网关，与 sk- 开放平台相互独立不可混用）
+// DSH 未写 baseURL 的提供商，按官方默认端点补全（可在 UI 修改）：
+// - mimo.mi.com/docs Token Plan（tp- 密钥专用网关，与 sk- 开放平台不可混用）
 // - help.aliyun.com/zh/model-studio/token-plan-personal-quick-start（sk-sp- 密钥专用网关，与按量付费 sk- 不可混用）
 // - opencode.ai/docs/go（OpenCode Go 订阅网关）
 const PROVIDER_URL_DEFAULTS = {
@@ -83,13 +82,13 @@ export function parseDshSettings(yamlPath) {
     } else {
       ({ key, from: keyFrom } = envApiKey(envName));
     }
-    // ⚠️ 命名陷阱（2026-10-21 审查标注）：provider 上的字段是 **baseURL**（大写 URL），
-    //    而 config.api 上的同名概念是 **baseUrl**（小写 url）。两套 schema 只差一个字母
-    //    却同时存在，写错时不会报错 —— 只会表现为"地址为空 / 需要重填"，极难定位。
-    //    · 这里是 provider：p.baseURL
-    //    · 那是全局 api 配置：cfg.api.baseUrl
-    //    · 两者的转换点在 llm.js 的 `baseUrl: String(p.baseURL)`（发起请求时统一成小写）。
-    //    改这一带代码前先确认自己拿的是哪个对象。
+    // 命名陷阱：provider 上的字段是 baseURL（大写 URL），而 config.api 上的同名
+    // 概念是 baseUrl（小写 url）。两套 schema 只差一个字母却同时存在，写错时不会
+    // 报错，只表现为"地址为空 / 需要重填"，极难定位。
+    //   · 这里是 provider：p.baseURL
+    //   · 那是全局 api 配置：cfg.api.baseUrl
+    //   · 转换点在 llm.js 的 `baseUrl: String(p.baseURL)`（发起请求时统一成小写）。
+    // 改这一带代码前先确认自己拿的是哪个对象。
     const entry = {
       id,
       displayName: String(p?.displayName || id),
@@ -140,7 +139,7 @@ export function setProviderKey(providerId, apiKey) {
   return currentProviders().find((p) => p.id === providerId) || null;
 }
 
-// ── 手动管理提供商/模型（设置页“模型 API”） ──────────────────────────────
+// ── 手动管理提供商/模型（设置页"模型 API"）──────────────────────────────
 
 function normalizeBaseUrl(raw) {
   return String(raw || '').trim().replace(/\/+$/, '');
@@ -164,9 +163,8 @@ function normalizeModelInput(models) {
       if (id) out.push({ id, name: '' });
     } else if (typeof m === 'object') {
       const id = String(m.id ?? m.model ?? '').trim();
-      // 2026-10-18：name 缺失时**不再兜底成 id**。兜底会让 modelNames 存成
-      // { id: id }，而模型列表的渲染是「显示名 + 灰色 id」两列 —— 名字等于 id
-      // 时同一个 id 出现两遍（群友反馈"模型 id 怎么出现了两遍"）。
+      // name 缺失时不要兜底成 id：兜底会让 modelNames 存成 { id: id }，而模型
+      // 列表的渲染是「显示名 + 灰色 id」两列，名字等于 id 时同一个 id 出现两遍。
       // 空串由下游 `names[m] || m` 统一兜底成 id，只显示一次。
       if (id) out.push({ id, name: String(m.name ?? '').trim() });
     }
@@ -201,10 +199,9 @@ function opencodeHeaders(baseUrl, model = '') {
 /**
  * 把底层网络异常翻译成用户能照着排查的话。
  *
- * 为什么要专门做这件事（2026-09-20）：原先失败一律冒成 `TypeError: fetch failed`
- * —— Node 的原始错误（ECONNREFUSED / ENOTFOUND / 证书错误）藏在 `error.cause` 里，
- * 上层只看 `.message`，于是界面上只有「拉取失败：fetch failed」。
- * 用户完全无法区分"地址写错 / 没网 / 端口不通 / 证书过期 / 超时"。
+ * 原先失败一律冒成 `TypeError: fetch failed`：Node 的原始错误（ECONNREFUSED /
+ * ENOTFOUND / 证书错误）藏在 error.cause 里，上层只看 .message，界面上只有
+ * 「拉取失败：fetch failed」，用户无法区分"地址写错 / 没网 / 端口不通 / 证书过期 / 超时"。
  */
 export function describeNetError(error, target) {
   // 超时：AbortSignal.timeout 抛 TimeoutError；主动 abort 抛 AbortError
@@ -269,7 +266,7 @@ export async function fetchModelsFrom(baseUrl, apiKey, timeoutMs = 15000, protoc
     res = await fetch(url, {
       headers,
       signal: AbortSignal.timeout(timeoutMs),
-      dispatcher: dispatcherFor()   // 网络代理（2026-10-19）：与对话请求同一条通道
+      dispatcher: dispatcherFor()   // 网络代理：与对话请求同一条通道
     });
   } catch (error) {
     // 连请求都没发出去 / 没拿到响应
@@ -311,7 +308,7 @@ export async function fetchModelsFrom(baseUrl, apiKey, timeoutMs = 15000, protoc
 
 /**
  * 用用户提供的 baseUrl + apiKey + modelId 发送一次最小 chat 测试请求。
- * @param {string} [protocol='openai'] API 协议——测试必须与实跑同协议，
+ * @param {string} [protocol='openai'] API 协议。测试必须与实跑同协议，
  *   否则会出现"测试通过、实跑失败"（或反过来）的假象。
  */
 export async function testModelChat({ baseUrl, apiKey, model, protocol = 'openai' }) {
@@ -400,10 +397,10 @@ export function upsertProvider({ baseUrl, apiKey, models = [], protocol = 'opena
     if (protocol !== undefined && protocol !== null && String(protocol).trim()) {
       existing.apiProtocol = proto;
     }
-    // ⚠️ modelNames 的合并必须在 updateConfig **之前**完成：
-    //   曾经先 updateConfig（内部 structuredClone 出配置快照落盘）、
-    //   再改局部 existing.modelNames —— 返回值（内存对象）带着新名字，
-    //   但 currentConfig 与磁盘上都没有，重启后新增模型的显示名丢失。
+    // ⚠️ modelNames 的合并必须在 updateConfig 之前完成：曾经先 updateConfig
+    // （内部 structuredClone 出配置快照落盘）、再改局部 existing.modelNames，
+    // 返回值（内存对象）带着新名字，但 currentConfig 与磁盘上都没有，重启后
+    // 新增模型的显示名丢失。
     existing.modelNames = { ...(existing.modelNames || {}) };
     for (const m of entries) existing.modelNames[m.id] = m.name;
     if (apiKey) {
@@ -475,10 +472,9 @@ export function removeModelFromProvider(providerId, modelId) {
     delete p.modelNames[modelId];
   }
   const patch = { providers: providers.map((x) => { const { apiKey, ...rest } = x; return rest; }) };
-  // 2026-10-23 修复：删掉的正好是**当前生效**的模型 → 一并清空选中态。
-  //   旧实现只改 providers，api.model 仍指向一个已经不存在的 id：
-  //   之后每次对话都被上游 400，设置页「模型」框还显示着它。
-  //   与 removeProvider（见下）的处理保持一致 —— 那条早就这么做了，这里漏了。
+  // 删掉的正好是当前生效的模型 → 一并清空选中态。只改 providers 的话，
+  // api.model 仍指向一个已经不存在的 id：之后每次对话都被上游 400，设置页
+  // 「模型」框还显示着它。与 removeProvider 的处理保持一致。
   const cfg = getConfig();
   if (String(cfg.api?.model ?? '') === String(modelId)) {
     patch.api = { provider: '', model: '' };
@@ -516,7 +512,7 @@ export function removeProvider(providerId) {
   return true;
 }
 
-// ── 连通性测试：GET {baseURL}/models（OpenAI 兼容探测） ────────────────────
+// ── 连通性测试：GET {baseURL}/models（OpenAI 兼容探测）────────────────────
 
 /**
  * 测试一个提供商的端点连通性与密钥有效性。

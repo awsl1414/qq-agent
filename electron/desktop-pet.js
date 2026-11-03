@@ -5,7 +5,7 @@ import { petSize, restorePetBounds, dragPetBounds, layoutPetSpeechWindow, layout
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 
-// 用量卡片（2026-10-24 起是一式两行的一行式用量串，窗口随之收窄）
+// 用量卡片是一式两行的一行式用量串，窗口随之收窄
 const USAGE_CARD_SIZE = Object.freeze({ width: 380, height: 84 });
 // 卡片可见期间的数据刷新间隔：与 buildUsageStats 的 5 秒微缓存同一拍，
 // 既能让「搜索：N 次」这类下面那串跟着动，又不会触发全量重算风暴。
@@ -157,7 +157,7 @@ export function createDesktopPetHost({ getMainWindow, showMainWindow, getService
       chats: Array.isArray(data.chats) ? data.chats.length : 0,
       models: Array.isArray(data.models) ? data.models.slice(0, 1) : [],
       range: data.range || 'today',
-      // 卡片第二行「搜索：N 次」的数据口（2026-10-24 一行式用量串）
+      // 卡片第二行「搜索：N 次」的数据口
       searchCount: Number(data.searchCount) || 0,
     };
     usageRevision++;
@@ -407,12 +407,11 @@ export function createDesktopPetHost({ getMainWindow, showMainWindow, getService
   }
 
   const host = {
-    // ⚠️ 必须是**严格布尔**。原来写的是 `started && !closed && Boolean(alive())`，
-    //    未启动时整个表达式是 undefined；而 service 侧判的是
-    //    `Boolean(host && host.available !== false)` —— `undefined !== false` 为真，
-    //    于是「桌宠窗口根本没建起来」会被当成「可用」。后果有两层：
-    //    界面上一直显示「正在加载」而不是本该显示的「请通过 QQ Agent 桌面程序
-    //    打开桌宠」，排障时方向直接跑偏；send() 也会往一个不存在的窗口发命令。
+    // 必须是严格布尔。写成 `started && !closed && Boolean(alive())` 时，未启动
+    // 会让整个表达式变成 undefined；而 service 侧判的是
+    // `Boolean(host && host.available !== false)`，undefined !== false 为真，
+    // 于是「桌宠窗口根本没建起来」会被当成「可用」：界面一直显示「正在加载」
+    // 而不是「请通过 QQ Agent 桌面程序打开桌宠」，send() 也会往不存在的窗口发命令。
     get available() { return Boolean(started && !closed && alive()); },
     async start({ port, consoleToken = '' }) {
       if (started && !closed) return host;
@@ -537,10 +536,9 @@ export function createDesktopPetHost({ getMainWindow, showMainWindow, getService
       listen('qqa-pet:model-loaded', (value) => {
         if (!value || !value.id) return;
         const svc = service();
-        // ⚠️ 2026-10-24：这里原来只拿本模块的 `state` 缓存比对，缓存是 null 或旧值时
-        //    上报会被**静默丢掉** —— 表现就是"桌面上已经有角色，控制台一直显示正在加载"，
-        //    而且失败路径同样被吞，连 modelError 都没有。现在以服务端实时状态为准，
-        //    并且不一致时写日志，别再让它无声消失。
+        // 以服务端实时状态为准。只用本模块的 state 缓存比对时，缓存为 null 或旧值
+        // 会上报被静默丢掉，表现为"桌面上已经有角色，控制台一直显示正在加载"。
+        // 不一致时写日志，别再让它无声消失。
         const activeId = svc?.getState?.()?.activeModel?.id || state?.activeModel?.id || '';
         if (!activeId) {
           report(`桌宠上报模型已加载（${value.id}），但主进程拿不到当前角色（service=${Boolean(svc)}）`);

@@ -1,10 +1,10 @@
-// 〔设置事件绑定〕——M9 拆分第 8 段
+// 〔设置事件绑定〕
 'use strict';
 // ── 设置页渲染守卫 ─────────────────────────────────────────────────────
 // 自动保存期间（表单读取 + 保存请求在途），任何代码路径想整页重渲染设置表单
-// 都会被拦下并记为"待重绘"（真正的拦截在 renderSettings 开头）。原因：
-// 重渲染 = 用 state.config（上一次保存的旧值）重建整个表单 DOM ——
-// 用户正在输入的未保存内容会被直接吹掉，看起来就是"设置存不上 / 改了又弹回去"。
+// 都会被拦下并记为"待重绘"（真正的拦截在 renderSettings 开头）。
+// 重渲染 = 用 state.config（上一次保存的旧值）重建整个表单 DOM，用户正在输入的
+// 未保存内容会被直接吹掉，看起来就是"设置存不上 / 改了又弹回去"。
 // 拦下后等保存完成再补一次重绘，那时 state.config 已是最新值，不会丢内容。
 const settingsGuard = { pending: 0, needRerender: false };
 
@@ -19,7 +19,7 @@ function endSettingsGuard() {
 
 // ── 离开设置页前的"挂起保存"清单 ───────────────────────────────────────
 // bindSettingsEvents 每次重渲染都重建闭包，外部（switchTab）拿不到最新的
-// flushSave —— 用模块级数组中转：渲染时登记、切页时逐个调用、
+// flushSave，用模块级数组中转：渲染时登记、切页时逐个调用、
 // 重渲染前清掉同表单的旧登记（表单 DOM 已换，旧 flush 引用的闭包失效）。
 let settingsFlushHandlers = [];
 
@@ -29,18 +29,16 @@ function flushSettingsSaves() {
   for (const fn of settingsFlushHandlers) {
     try { fn(); } catch (e) { failed++; console.error('离开设置页前保存失败:', e); }
   }
-  // ⚠️（2026-10-17 N3）**不能只写 console**。用户在设置页改完就切走是常态，
-  //    而这一支正是"防抖窗口内还没落盘"的最后一次保存机会：它悄悄失败的话，
-  //    用户以为改动已生效，下次回到设置页看到的却是旧值 —— 只会觉得"设置自己变回去了"。
-  //    聚合后**只提示一次**（多个表单同时失败不该弹好几个框）；不 await，
-  //    因为切页流程不能被一个提示框卡住。
+  // ⚠️ 不能只写 console。用户在设置页改完就切走是常态，而这一支正是"防抖窗口内
+  //    还没落盘"的最后一次保存机会。悄悄失败的话，用户以为改动已生效，下次回到
+  //    设置页看到的却是旧值。聚合后只提示一次，不 await（切页流程不能被提示框卡住）。
   if (failed) {
     qaAlert(`有 ${failed} 项设置没能保存（后端可能未响应）。请稍后回到设置页确认。`);
   }
 }
 
-// ── 设置搜索面板「点外面收起」（2026-10-23 萌新化 P4）──────────────────
-// 挂在**模块顶层**（脚本加载时执行一次）而不是 bindSettingsEvents 里 ——
+// ── 设置搜索面板「点外面收起」──────────────────────────────────────────
+// 挂在**模块顶层**（脚本加载时执行一次）而不是 bindSettingsEvents 里，
 // 后者每次重渲染都会跑，绑在 document 上会无限累积。每次点击时现找 DOM，
 // 面板不存在（搜索框未渲染的分区/页面）时天然空转，无泄漏。
 document.addEventListener('click', (e) => {
@@ -50,11 +48,11 @@ document.addEventListener('click', (e) => {
   panel.hidden = true;
 });
 
-/* ── 自动保存状态字（2026-10-20）──────────────────────────────────────────
+/* ── 自动保存状态字 ───────────────────────────────────────────────────────
    设置页是**静默自动保存**：改完没有任何反馈，用户只能靠"下次进来值还在"推断
-   存没存上 —— 后端抖动时这正是"设置自己变回去了"的体感来源之一。
+   存没存上，后端抖动时这正是"设置自己变回去了"的体感来源之一。
    这里在页头右侧（#set-save-state，见 06-settings-render.js）写一个极轻的状态字，
-   不弹框，2.4s 后淡出。重渲染会把它清空 —— 可接受，状态本来就是瞬时的。 */
+   不弹框，2.4s 后淡出。重渲染会把它清空，可接受，状态本来就是瞬时的。 */
 let saveStateTimer = null;
 function flashSaveState(text, kind = 'ok') {
   const el = $('#set-save-state');
@@ -69,7 +67,7 @@ function flashSaveState(text, kind = 'ok') {
   }, 2400);
 }
 
-/* ── 外观个性化（R40）────────────────────────────────────────────────────
+/* ── 外观个性化 ───────────────────────────────────────────────────────────
    色板/取色器/滑块/背景图按钮的绑定与即时应用。
    ⚠️ 这些控件都在 #settings-form 里，改动会触发既有的一次防抖自动保存；
       这里只负责"立刻看到效果"和需要原生能力的两件事（选图、清图）。
@@ -97,10 +95,9 @@ function bindUiCustomEvents() {
 
   const apply = (opts) => {
     const patch = readUi();
-    // ⚠️（2026-10-10 r86 修 P1）拖动滑条的 `input` 阶段传 { live: true }：
-    //    applyUiCustom 里的 setOpacity 是**跨进程 IPC**，挂在 input 上等于
-    //    拖动时每帧打一次 IPC（60fps → 60 次/秒）。CSS 变量在 live 阶段照样
-    //    即时更新（视觉反馈不丢），只把 IPC 推迟到 change（松手）那一次。
+    // ⚠️ 拖动滑条的 `input` 阶段传 { live: true }：applyUiCustom 里的 setOpacity
+    //    是跨进程 IPC，挂在 input 上等于拖动时每帧打一次（60fps → 60 次/秒）。
+    //    CSS 变量在 live 阶段照样即时更新，只把 IPC 推迟到 change（松手）那一次。
     applyUiCustom(patch, opts);
     syncToState();
   };
@@ -121,14 +118,13 @@ function bindUiCustomEvents() {
         const hexEl = $(hexInputSel);
         if (hexEl) {
           hexEl.value = v;
-          /* ⚠️ 2026-10-20 修「换了主题色/底色，重启又变回去」：
-             色板是 <div class="swatch">，点击不产生 input/change —— 而设置页的
-             自动保存（#settings-form 上的 input/change 委托，07:398/405）只认这两个
-             事件。旧代码只改了 hex 输入框的值和 CSS 变量，**保存从未发起**：
-             要么用户之后又碰了别的控件（顺带被 saveConfig 读走），要么切页/关窗时
-             被 flushSave 兜底 —— 所以表现为"有时候能存、有时候不能"。
-             这里主动派发一次 input（bubbles 让它走到 #settings-form 的委托上），
-             hex → 色板联动本身幂等，不会循环（赋 cEl.value 不派发事件）。 */
+          /* ⚠️ 必须主动派发 input。色板是 <div class="swatch">，点击不产生
+             input/change，而设置页的自动保存（#settings-form 上的 input/change
+             委托）只认这两个事件。只改 hex 输入框的值和 CSS 变量的话保存从未发起，
+             只能等用户之后碰别的控件顺带被读走，或切页/关窗时被 flushSave 兜底，
+             表现为"有时候能存、有时候不能"。
+             bubbles 让它走到 #settings-form 的委托上；hex → 色板联动本身幂等，
+             不会循环（赋 cEl.value 不派发事件）。 */
           hexEl.dispatchEvent(new Event('input', { bubbles: true }));
         }
         const cEl = $(colorInputSel);
@@ -166,10 +162,8 @@ function bindUiCustomEvents() {
   wireColorPair('#cfg-bgcolor', '#cfg-bgcolor-hex', markBg);
 
   // 滑块：拖动时同步显示数字 + 即时应用
-  // ⚠️（2026-10-10 r86 修 P1）拖动中的 `input` 走 apply({ live: true }) ——
-  //    只更新 CSS 变量做即时预览，跳过 setOpacity 这类**跨进程 IPC**；
-  //    松手（change）时再落一次完整应用，把窗口透明度真正推给主进程。
-  //    否则拖动 60fps = 每秒 60 次 IPC。
+  // ⚠️ 拖动中的 `input` 走 apply({ live: true })：只更新 CSS 变量做即时预览，
+  //    跳过 setOpacity 这类跨进程 IPC；松手（change）时再落一次完整应用。
   const wireRange = (sel, labelSel) => {
     const el = $(sel);
     if (!el) return;
@@ -189,7 +183,7 @@ function bindUiCustomEvents() {
   wireRange('#cfg-bgdim', '#bgdim-val');
   wireRange('#cfg-winopacity', '#winopacity-val');
 
-  // ── 桌面悬浮小窗（2026-10-20）：勾上总开关才解灰下面的选项组 ──
+  // ── 桌面悬浮小窗：勾上总开关才解灰下面的选项组 ──
   // 只切样式不动数据（保存仍走 #settings-form 的通用防抖自动保存，
   // 这条 change 照旧冒泡上去触发它）。
   $('#cfg-widget-enabled')?.addEventListener('change', () => {
@@ -200,23 +194,19 @@ function bindUiCustomEvents() {
     opts.style.pointerEvents = on ? '' : 'none';
   });
 
-  /* ── 背景不透明度滑条：拖动时即时落盘 + 即时同步小窗（R140）────────────────
-     旧行为：input 只改旁边的数字，真正的保存走 #settings-form 的 600ms 防抖
-     全量 POST → 主进程 1 秒轮询才发现 → 小窗再等 2.5 秒状态轮询（还带 3 秒
-     去重）。最坏约 4.6 秒：用户拖一下松手，卡片要过好几秒才变色 ——
-     这正是"滑条不丝滑"的体感来源（滑条本身跟不上卡片的变化）。
+  /* ── 背景不透明度滑条：拖动时即时落盘 + 即时同步小窗 ───────────────────
+     只走 #settings-form 的 600ms 防抖全量保存的话，要等主进程轮询、再等小窗
+     状态轮询，最坏约 4.6 秒卡片才变色，滑条本身跟不上卡片的变化。
 
-     新行为：input 直接发一份**只含 opacity 的局部 patch**。updateConfig 是
-     deepMerge，不会动 config.widget 的其它字段；主进程 300ms 内通过 IPC 主动
-     推给小窗，小窗收到就重拉配置改卡片 alpha。到松手时 #settings-form 的
-     change 委托照旧 flushSave() 全量落盘（同一个值，不冲突）——
-     所以"离开页签 / 关页面"的落盘口径完全没变。
+     所以 input 直接发一份只含 opacity 的局部 patch。updateConfig 是 deepMerge，
+     不会动 config.widget 的其它字段；主进程 300ms 内通过 IPC 主动推给小窗。
+     松手时 #settings-form 的 change 委托照旧 flushSave() 全量落盘（同一个值），
+     "离开页签 / 关页面"的落盘口径完全没变。
 
-     ⚠️ 节流而不是每个 input 都发：input 在拖动中每帧都触发，100ms 内的
-        连续输入只保留最后一次位置。每次都是同步写盘（updateConfig 里
-        writeFileSync + rename），不节流会把磁盘和配置写入打满。
-     ⚠️ 失败只复位 lastSent 让下一轮重试，**不弹提示**：全量保存有自己的
-        重试链路，这里打断拖动提示反而更吵。 */
+     ⚠️ 必须节流：input 在拖动中每帧都触发，而每次都是同步写盘（updateConfig
+        里 writeFileSync + rename），不节流会把磁盘和配置写入打满。
+     ⚠️ 失败只复位 lastSent 让下一轮重试，不弹提示：全量保存有自己的重试链路，
+        这里打断拖动提示反而更吵。 */
   const opaRange = $('#cfg-widget-opacity');
   if (opaRange) {
     const opaLabel = $('#cfg-widget-opacity-val');
@@ -240,10 +230,9 @@ function bindUiCustomEvents() {
     opaRange.addEventListener('input', () => {
       if (opaLabel) opaLabel.textContent = `${opaRange.value}%`;   // 数字先动，不等网络
       if (opaTimer) clearTimeout(opaTimer);
-      // 2026-10-20（审查 P3）：110ms → 250ms。每次发送都是一次整份 config 落盘
-      // （updateConfig 内部 writeFileSync + rename），拖 10 秒约 90 次全量写太重，
-      // 磁盘慢时还会和 #settings-form 的全量保存抢队列。250ms 仍在"拖一下就变色"
-      // 的手感区间内（主进程 300ms 轮询 + 小窗推送是这条路的下限）。
+      // 250ms：每次发送都是一次整份 config 落盘（writeFileSync + rename），
+      // 间隔太短时拖 10 秒就是几十次全量写，磁盘慢时还会和 #settings-form 的
+      // 全量保存抢队列。250ms 仍在"拖一下就变色"的手感区间内。
       opaTimer = setTimeout(() => { opaTimer = null; sendOpa(); }, 250);
     });
     // 松手立即把最后位置发出去，不等节流尾巴（final change 之后没有后续输入了）
@@ -253,16 +242,14 @@ function bindUiCustomEvents() {
     });
   }
 
-  /* ── 界面背景：两层背景的互斥开关（2026-10-23 晚合入）────────────────────
-     背景事实，改这里之前先读：
+  /* ── 界面背景：两层背景的互斥开关 ───────────────────────────────────────
+     改这里之前先记住背景事实：
        · 本地图片  config.ui.bgImage → #app-bg 的 background-image
        · 小红车壁纸 localStorage['wp-console-bg'] → html[data-wp='on'] + #wp-bg-video/#wp-bg-img
-     而 style.css:493 有一条 `html[data-wp='on'] #app-bg { display: none }` ——
-     **壁纸一启用，本地图就被整层隐藏**。两者不是叠加，是后者顶掉前者。
+     style.css 有一条 `html[data-wp='on'] #app-bg { display: none }`：
+     壁纸一启用，本地图就被整层隐藏。两者不是叠加，是后者顶掉前者。
 
-     这正是把壁纸页收回设置的直接原因：拆在两个入口时，用户在设置里选完图
-     什么都看不到、也没有任何提示，只会以为按钮坏了。下面三段的目标统一为
-     「让当前生效的是哪一层，用户看得见、也改得动」：
+     所以下面三段的目标是「让当前生效的是哪一层，用户看得见、也改得动」：
        ① refreshBgStatus   状态行 + 恢复按钮的显隐，任何切换后立刻重算
        ② 选本地图          自动撤壁纸（否则选完不可见），撤之前先备份原壁纸
        ③ 关壁纸 / 恢复壁纸  成对的后悔药，避免"壁纸没了还得在几百张里重找"
@@ -274,7 +261,7 @@ function bindUiCustomEvents() {
 
   // 撤掉壁纸：只清 localStorage 里的选择，不动 config。
   // 14 那边的 wpRenderBackground 看到"没有 id"就会摘掉 html[data-wp]，
-  // #app-bg 随即从 display:none 里恢复 —— 本地图才可能被看见。
+  // #app-bg 随即从 display:none 里恢复，本地图才可能被看见。
   const wpPause = () => {
     if (!wpReady()) return false;
     const cfg = wpCfgLoad();
@@ -286,7 +273,7 @@ function bindUiCustomEvents() {
   };
 
   const refreshBgStatus = () => {
-    // 壁纸模块不在就别碰这行 —— 06 渲染时用内联 IIFE 算好了一份，
+    // 壁纸模块不在就别碰这行，06 渲染时用内联 IIFE 算好了一份，
     // 这里覆盖成"无"反而是错的（会把真实的本地图状态抹掉）。
     if (typeof wpCfgLoad !== 'function') return;
     const el = $('#cfg-bgstatus');
@@ -313,14 +300,13 @@ function bindUiCustomEvents() {
     }
   };
   refreshBgStatus();
-  // 壁纸库是弹窗（14-wallpaper.js 的 wpOpenLibrary）：关掉时那边要把设置页这行
-  // 状态同步一次，但它够不着这个局部函数 —— 挂到 window 上留一条明路。
-  // 不挂的话，在弹窗里换了壁纸、关掉一看，状态行和「当前壁纸」还是进来之前那句。
+  // 壁纸库是弹窗（14-wallpaper.js 的 wpOpenLibrary），关掉时那边要把设置页这行
+  // 状态同步一次，但它够不着这个局部函数，只能挂到 window 上。
+  // 不挂的话，在弹窗里换了壁纸、关掉一看，状态行还是进来之前那句。
   try { window.refreshBgStatus = refreshBgStatus; } catch { /* ignore */ }
 
   // 打开壁纸库：弹出壁纸库弹窗（浮在设置页之上），不再整页跳转。
-  // 理由见 14-wallpaper.js 的 wpOpenLibrary 注释：这里的每一次点选都是即时生效的，
-  // 选完就该回到原来的位置，而不是"切页 → 选 → 再切回设置"。
+  // 每次点选都是即时生效的，选完就该回到原来的位置，而不是"切页 → 选 → 再切回设置"。
   // 弹窗壳（08-modals.js）万一没加载，wpOpenLibrary 内部会退回整页。
   $('#cfg-open-wallpaper')?.addEventListener('click', () => {
     if (typeof wpOpenLibrary === 'function') wpOpenLibrary();
@@ -373,9 +359,9 @@ function bindUiCustomEvents() {
       await api('/api/config', { method: 'POST', body: JSON.stringify({ ui: state.config.ui }) });
       applyUiCustom(state.config.ui);
       const clearBtn = $('#cfg-bg-clear');
-      if (clearBtn) clearBtn.disabled = false;   // 有图可清了（R50）
-      // 壁纸开着时本地图会被整层隐藏（style.css: html[data-wp='on'] #app-bg{display:none}），
-      // 所以选完图顺手把壁纸撤下来 —— 否则"选了图却什么都没变"，用户只会以为按钮坏了。
+      if (clearBtn) clearBtn.disabled = false;   // 有图可清了
+      // 壁纸开着时本地图会被整层隐藏（html[data-wp='on'] #app-bg{display:none}），
+      // 所以选完图顺手把壁纸撤下来，否则"选了图却什么都没变"，用户只会以为按钮坏了。
       // 原选择已备份到 wp-console-bg-prev，页面会露出「↩ 恢复上次的壁纸」。
       const paused = wpPause();
       refreshBgStatus();
@@ -398,7 +384,7 @@ function bindUiCustomEvents() {
       await api('/api/config', { method: 'POST', body: JSON.stringify({ ui: state.config.ui }) });
       applyUiCustom(state.config.ui);
       const clearBtn = $('#cfg-bg-clear');
-      if (clearBtn) { clearBtn.disabled = true; clearBtn.title = '还没有设置背景图'; }   // 没图可清了（R50）
+      if (clearBtn) { clearBtn.disabled = true; clearBtn.title = '还没有设置背景图'; }   // 没图可清了
       if (hint) hint.textContent = '已清除背景图。';
       refreshBgStatus();   // 状态行要跟着变：清图后可能退化成"只有界面底色"
     } catch (e) {
@@ -442,13 +428,11 @@ function bindSettingsEvents(c) {
   });
   /* ── 即时保存：任何设置项变动 → 防抖 600ms 自动保存 ──
      变动反馈由「↩ 撤销本次设置」按钮承担（见 showUndoBtn）。
-     原先还有一条"流动的浅黄色渐变带"（.dirty-glow）作为变动提示，已废弃：
-     它是 rgba(255,213,79,.10~.22) 的半透明渐变 + background-position 无限动画，
-     在透明分层窗口上会被逐帧 alpha 混合成一条黄色残影（用户反馈的"黄色的一坨"）。
-     style.css 里 .dirty-glow 样式已置空，这里也不再收集 dirtyEls。 */
+     不要再加 .dirty-glow 那种流动渐变带：半透明渐变 + background-position
+     无限动画在透明分层窗口上会被逐帧 alpha 混合成一条黄色残影。 */
   let saveTimer = null;
   let saving = false;
-  // 连续自动保存失败计数（2026-10-17 N4）：成功清零，失败递增。
+  // 连续自动保存失败计数：成功清零，失败递增。
   // 用于"每连续失败 3 次弹一次提示"的节流，避免后端挂掉时弹窗轰炸。
   let saveFailures = 0;
   // 撤销快照：进入本设置区块时拍一份配置；有改动后显示「撤销」按钮，
@@ -468,7 +452,7 @@ function bindSettingsEvents(c) {
     undoBtn.textContent = '↩ 撤销本次设置';
     undoBtn.title = '把本区块的设置整体还原到你进入时的状态。\n注意：设置是即时生效的，改动到撤销之间机器人可能已按新设置运行过，这部分不回滚。';
     undoBtn.addEventListener('click', async () => {
-      // ⚠️（2026-10-10 r86 修 P2）撤销会丢弃本区块改动 → danger:true
+      // 撤销会丢弃本区块改动 → danger:true
       if (!await qaConfirm({
         danger: true,
         confirmText: '撤销',
@@ -477,9 +461,8 @@ function bindSettingsEvents(c) {
       try {
         // 整份快照写回（后端 updateConfig 深合并；快照含全部字段，等价整体覆盖）。
         // ⚠️ 不带 keepalive：fetch keepalive 有 64KB body 上限，整份配置快照
-        // （含 providers/价格表/技能设置）很容易超 —— 超限时 fetch 直接以
-        // "Failed to fetch" 拒绝，这就是"撤销设置偶发报错"的根源（2026-09-19 修）。
-        // keepalive 只该用于页面卸载兜底（小 patch），撤销是普通点击场景。
+        // （含 providers/价格表/技能设置）很容易超，超限时 fetch 直接以
+        // "Failed to fetch" 拒绝。keepalive 只用于页面卸载兜底（小 patch）。
         const r = await api('/api/config', { method: 'POST', body: JSON.stringify(sectionSnapshot) });
         if (r && r.config) state.config = r.config;
         renderSettings();
@@ -502,7 +485,7 @@ function bindSettingsEvents(c) {
     if (saving) { scheduleSave(); return; }
     saving = true;
     // 渲染守卫：从"开始收集表单"到"state.config 更新完成"期间不允许整页重渲染。
-    // saveConfig 会先逐字段读 DOM、再 POST 并用响应覆盖 state.config ——
+    // saveConfig 会先逐字段读 DOM、再 POST 并用响应覆盖 state.config，
     // 中途任何重渲染（SSE 事件 / 轮询回调）都会吹掉用户正在输入的值。
     beginSettingsGuard();
     try {
@@ -519,13 +502,11 @@ function bindSettingsEvents(c) {
       startStatusPoller();
     } catch (e) {
       console.error('自动保存失败:', e);
-      // ⚠️（2026-10-17 N4）自动保存失败**不能只写 console**。这正是
-      //    "关掉的功能重启后又自己打开"的根源之一：UI 显示的是内存态，
-      //    落盘失败时磁盘还是旧值，重启后从磁盘重读 —— 看起来就是
-      //    "设置自己变回去了"，而用户全程毫无感知。
-      //    策略：3 秒后自动重试（后端抖动自愈）；每连续失败 3 次
-      //    弹一次窗（节流，避免后端宕机时弹窗轰炸）。后端恢复后
-      //    重试成功即清零，永不到达弹窗分支。
+      // ⚠️ 自动保存失败不能只写 console。这正是"关掉的功能重启后又自己打开"的
+      //    根源之一：UI 显示的是内存态，落盘失败时磁盘还是旧值，重启后从磁盘重读，
+      //    看起来就是"设置自己变回去了"，而用户全程毫无感知。
+      //    策略：3 秒后自动重试（后端抖动自愈）；每连续失败 3 次弹一次窗（节流，
+      //    避免后端宕机时弹窗轰炸）。重试成功即清零，永不到达弹窗分支。
       saveFailures++;
       try { flashSaveState('保存失败，正在重试…', 'err'); } catch { /* 反馈失败不影响重试 */ }
       if (saveFailures % 3 === 0) {
@@ -540,10 +521,10 @@ function bindSettingsEvents(c) {
 
   // 立即保存（清掉防抖定时器，当场发起）。
   // 两个触发点：
-  //   1. change 事件（复选框勾选/下拉框切换/日期时间选择）——这类操作语义上
+  //   1. change 事件（复选框勾选/下拉框切换/日期时间选择），这类操作语义上
   //      已经"完成"，没有继续输入的后续，等 600ms 毫无意义，还留出
   //      "改完立刻切页签 → 定时器随 DOM 一起销毁 → 改动丢失"的窗口。
-  //   2. 切走设置页前（switchTab flush）—— 同上，是离开前的最后一刻。
+  //   2. 切走设置页前（switchTab flush），同上，是离开前的最后一刻。
   // 定时器回调里先清引用：doSave 里若正在保存会再次 scheduleSave()，
   // 旧引用不清掉会让"已取消的定时器"看起来还活着。
   function flushSave() {
@@ -552,18 +533,17 @@ function bindSettingsEvents(c) {
   }
 
   // 表单变动监听（设置页所有输入都会经过这里）。
-  // input（打字/拖滑条）保持 600ms 防抖聚批；change（勾选/选择完成）立即保存 ——
+  // input（打字/拖滑条）保持 600ms 防抖聚批；change（勾选/选择完成）立即保存，
   // change 之后再没有"同一字段的后续输入"，防抖只会增加丢失窗口。
   //
   // ⚠️ 防重复绑定：#settings-form 是静态元素（只换 innerHTML），renderSettings
-  //    每次都会调 bindSettingsEvents。曾经每次都在 form 上 addEventListener +
-  //    向 window 挂 beforeunload —— N 次重渲染后每敲一个字触发 N 次保存
-  //    （N 个并发 POST），关页时 N 次 keepalive 请求可能撞配额。
-  //    这里仿照 attachScrollLoader 的做法：监听器只挂一次，闭包引用存在
-  //    元素属性上，重渲染时只更新引用。
-  // 2026-10-23：数字输入框「聚焦时滚轮改值」的经典误触 —— 鼠标停在 number 框上
-  // 滚页面，值被悄悄 ±1 并随后自动保存，用户完全无感知。只在**聚焦**时拦截，
-  // 未聚焦的滚动照常滚页面。全局只装一次。
+  //    每次都会调 bindSettingsEvents。每次都在 form 上 addEventListener + 向 window
+  //    挂 beforeunload 的话，N 次重渲染后每敲一个字触发 N 次保存（N 个并发 POST），
+  //    关页时 N 次 keepalive 请求可能撞配额。
+  //    仿照 attachScrollLoader：监听器只挂一次，闭包引用存在元素属性上，
+  //    重渲染时只更新引用。
+  // 数字输入框「聚焦时滚轮改值」的经典误触：鼠标停在 number 框上滚页面，值被悄悄
+  // ±1 并随后自动保存，用户完全无感知。只在聚焦时拦截，未聚焦的滚动照常滚页面。
   if (!window.__numWheelGuard) {
     window.__numWheelGuard = true;
     document.addEventListener('wheel', (e) => {
@@ -573,8 +553,8 @@ function bindSettingsEvents(c) {
       }
     }, { passive: false });
   }
-  // 2026-10-23：全局防连点。同一按钮 400ms 内的第二次点击直接吞掉。
-  // 背景：多个弹窗的保存/添加按钮没有 disabled 防护，连点会并发两次请求 ——
+  // 全局防连点：同一按钮 400ms 内的第二次点击直接吞掉。
+  // 背景：多个弹窗的保存/添加按钮没有 disabled 防护，连点会并发两次请求，
   // 配置类补丁幂等无妨，但「添加提供商 / 添加搜索服务」这类创建型端点可能落两条重复记录。
   // 用捕获阶段统一拦截，比逐处改 6 个弹窗可靠；项目里没有依赖双击的交互。
   if (!window.__clickGuard) {
@@ -598,11 +578,9 @@ function bindSettingsEvents(c) {
       flushSave: () => flushSave()
     };
     form.addEventListener('input', (e) => form.__settingsBound.markDirty(e.target), { passive: true });
-    // ⚠️（2026-10-17 N5）change（勾选/下拉切换）**立即落盘**，不走 600ms 防抖。
-    //    flushSave 的注释（触发点 1）一直声称 change 会立即保存，实现却只调了
-    //    markDirty —— 实际仍是 600ms 防抖。这个窗口正是"关完开关马上退出 /
-    //    强制退出 → 改动没落盘 → 重启后开关'自己变回去'"的成因（工具开关
-    //    的勾选全走这里）。input（打字/拖滑条）保持防抖聚批不变。
+    // ⚠️ change（勾选/下拉切换）必须立即落盘，不走 600ms 防抖：这个窗口正是
+    //    "关完开关马上退出 → 改动没落盘 → 重启后开关自己变回去"的成因。
+    //    input（打字/拖滑条）保持防抖聚批不变。
     //    markDirty 里的 scheduleSave 会先被 flushSave 清掉，不会重复保存。
     form.addEventListener('change', (e) => {
       form.__settingsBound.markDirty(e.target);
@@ -623,23 +601,19 @@ function bindSettingsEvents(c) {
 
   // 暴露给页签切换等外部路径：离开设置页前把挂起的改动落盘。
   // ⚠️ 必须挂在模块级状态上（bindSettingsEvents 每次重渲染都重建闭包），
-  //    switchTab 永远能找到"当前这一份"的 flush。
-  //    #settings-form 是静态元素（从不被替换），旧登记的去重条件曾用
-  //    attachedForm 比较 —— 永远不相等，每次重渲染 push 一个新闭包，
-  //    数组无限增长。改成"清空只留当前一份"：重渲染后旧闭包的
+  //    switchTab 才能找到"当前这一份"的 flush。
+  //    每次都 push 会让数组无限增长，所以清空只留当前一份：重渲染后旧闭包的
   //    saveTimer 引用已失效，留着只会有害。
   settingsFlushHandlers = [];
   const flush = () => flushSave();
   settingsFlushHandlers.push(flush);
 
   // ── Skill 开关 ──
-  // 与工具开关的关键区别：Skill 开关**立即生效并落盘**，不走"未保存更改"流程。
-  // 原因：Skill 的启停要跑生命周期回调（activate/deactivate），
-  // 如果只是改本地 state 等用户点保存，就会出现"界面显示已开、后端还没开"的中间态；
-  // 而且用户随手关掉一个 Skill 后忘了保存，会以为已经生效 —— 正是要消灭的割裂。
-  // 2026-10-23：停用这段死代码 —— 选择器 `.skill-toggle` 与真实类名
-  // （`.skill-toggle-row` / `[data-skill-toggle]`）不符，从未命中过；skill 开关的
-  // 真实绑定在 06-settings-render.js。保留代码仅作历史参考，不再参与运行。
+  // Skill 的启停要跑生命周期回调（activate/deactivate），所以是立即生效并落盘，
+  // 不走"未保存更改"流程，避免"界面显示已开、后端还没开"的中间态。
+  // ⚠️ 下面这段是死代码：选择器 `.skill-toggle` 与真实类名（`.skill-toggle-row` /
+  //    `[data-skill-toggle]`）不符，从未命中过；真实绑定在 06-settings-render.js。
+  //    保留仅作历史参考，不再参与运行。
   [].forEach((cb) => {
     cb.addEventListener('change', async () => {
       const id = cb.dataset.skillId;
@@ -665,11 +639,9 @@ function bindSettingsEvents(c) {
   });
 
   // ── 工具分类块：按块绑定 + 局部刷新 ──────────────────────────────────
-  // 分类总开关 / 折叠展开**只重建自己这一个 .tool-category 块**
-  // （refreshToolCategory），不再整页 renderSettings() —— 整页 innerHTML
-  // 重建在这里的表现就是肉眼可见的整页闪烁（2026-09-20 用户反馈），还会
-  // 白白重绑全页事件。块内渲染与整页渲染同源（buildToolCategoryHTML，
-  // 见 06-settings-render.js）。
+  // 分类总开关 / 折叠展开只重建自己这一个 .tool-category 块（refreshToolCategory），
+  // 不整页 renderSettings()：整页 innerHTML 重建是肉眼可见的闪烁，还会白白重绑
+  // 全页事件。块内渲染与整页渲染同源（buildToolCategoryHTML，见 06-settings-render.js）。
   function refreshToolCategory(cat) {
     const el = document.querySelector(`.tool-category[data-category="${cat}"]`);
     // 找不到块（已切走设置页等）→ 兜底走整页渲染
@@ -712,10 +684,10 @@ function bindSettingsEvents(c) {
       });
     });
 
-    // 分类开关 = 一键总闸（2026-09-20 改版）：
+    // 分类开关 = 一键总闸：
     //   关 → 整类停用，子开关视觉跟着全关且不可拨（渲染层按 categories[cat] 汇合）；
-    //   开 → 自动展开该分类并**把子工具全部打开**（一键全开），子开关各自仍可单独关。
-    // 单个开/关只写自己的 override，**不回写**分类开关 —— 两个层级互不干扰。
+    //   开 → 自动展开该分类并把子工具全部打开（一键全开），子开关各自仍可单独关。
+    // 单个开/关只写自己的 override，不回写分类开关，两个层级互不干扰。
     const catCb = block.querySelector('.category-checkbox');
     if (catCb) catCb.addEventListener('change', () => {
       state.config.tools = state.config.tools || {};
@@ -758,12 +730,10 @@ function bindSettingsEvents(c) {
   });
 
   // 全部启用/禁用/恢复默认
-  // ⚠️ 2026-10-20：这三个是 <button>，click 不产生 input/change —— 设置页的自动保存
-  //    （#settings-form 上的事件委托）根本收不到，旧代码只改了内存 + 重渲染。
-  //    也就是说"点完立刻关程序/被强杀"这一路改动会整个丢掉（点完不碰别的、也不切页
-  //    的话，flushSave 的兜底也轮不到）。批量开关影响面最大，必须当场落盘。
-  //    saveConfig 的 tools 分支本来就是从 state.config.tools 读（08:2422 附近），
-  //    所以这里只需要把 flush 补上，渲染顺序不用动。
+  // ⚠️ 这三个是 <button>，click 不产生 input/change，设置页的自动保存（#settings-form
+  //    上的事件委托）根本收不到。只改内存 + 重渲染的话，"点完立刻关程序/被强杀"这一路
+  //    改动会整个丢掉。批量开关影响面最大，必须当场落盘。
+  //    saveConfig 的 tools 分支从 state.config.tools 读，所以只需补上 flush。
   $('#tools-enable-all')?.addEventListener('click', () => {
     state.config.tools = state.config.tools || {};
     state.config.tools.enabled = true;
@@ -785,7 +755,7 @@ function bindSettingsEvents(c) {
   });
   $('#tools-reset')?.addEventListener('click', () => {
     // 恢复默认：分类开关回到完整默认集（核心 6 类 + media/knowledge/utility 全开），
-    // 而不是写空对象 {} —— 旧写法会清掉用户显式关闭过的分类、且漏掉 utility 键。
+    // 而不是写空对象 {}，旧写法会清掉用户显式关闭过的分类、且漏掉 utility 键。
     state.config.tools = {
       enabled: true,
       overrides: {},
@@ -795,11 +765,11 @@ function bindSettingsEvents(c) {
     try { flushSave(); } catch { /* 同上 */ }
   });
 
-  /** 实时更新提示词预览（旧版在前端拼静态模板，已改为后端同源组装） */
+  /** 实时更新提示词预览（后端同源组装，前端不拼静态模板） */
   function updatePromptPreview() {
-    // 立即刷：后端按当前内存态组装（工具开关已同步写进 state.config.tools，
-    // 但自动保存有 600ms 防抖、还没落盘）——所以先把当前工具态随请求发过去，
-    // 后端合并补丁组装但不落盘，预览即刻反映刚点的开关。
+    // 立即刷：工具开关已同步写进 state.config.tools，但自动保存有 600ms 防抖、
+    // 还没落盘。所以把当前工具态随请求发过去，后端合并补丁组装但不落盘，
+    // 预览即刻反映刚点的开关。
     const overrides = { tools: state.config?.tools || {} };
     refreshPromptPreview(overrides);
   }
@@ -826,7 +796,7 @@ function bindSettingsEvents(c) {
     const manage = $('#custom-provider-manage');
     if (manage) manage.style.display = v.startsWith('custom:') ? '' : 'none';
     // 自定义服务 Key 框随选中项重置：不同服务各自的掩码/空状态在渲染时生成，
-    // 但切换提供方是原地改 display 不重渲染 —— 这里手动对齐，避免上一家的
+    // 但切换提供方是原地改 display 不重渲染，这里手动对齐，避免上一家的
     // Key 残留显示给下一家（看起来像"共享 Key"，实际两家的 Key 互不相干）。
     const cpKey = $('#cfg-custom-sp-key');
     const cpToggle = $('#cfg-custom-sp-key-toggle');
@@ -840,8 +810,8 @@ function bindSettingsEvents(c) {
   });
 
   // ── 自定义搜索服务：测试 / 删除 ──
-  // （"添加"已整体搬进 openAddSearchProviderModal 弹窗，08-modals.js 自带绑定；
-  //   页面上的 <details> 表单 2026-09-21 改成了「⚙ 添加自定义搜索服务」入口按钮。）
+  // （"添加"在 openAddSearchProviderModal 弹窗里，08-modals.js 自带绑定；
+  //   页面上是「⚙ 添加自定义搜索服务」入口按钮。）
   $('#open-add-search-provider-btn')?.addEventListener('click', () => openAddSearchProviderModal());
 
   $('#test-search-provider-btn')?.addEventListener('click', async () => {
@@ -873,7 +843,7 @@ function bindSettingsEvents(c) {
     const id = v.slice('custom:'.length);
     const opt = sel.querySelector(`option[value="${v}"]`);
     const name = opt ? opt.textContent : id;
-    // ⚠️（2026-10-10 r86 修 P2）删除服务 → danger:true
+    // 删除服务 → danger:true
     if (!await qaConfirm({
       danger: true,
       confirmText: '删除服务',
@@ -887,7 +857,7 @@ function bindSettingsEvents(c) {
     }
   });
 
-  // ── 聊天设置两个收纳模态框的入口（2026-09-18 改版）──
+  // ── 聊天设置两个收纳模态框的入口 ──
   $('#open-send-config-btn')?.addEventListener('click', () => openSendConfigModal());
   $('#open-active-config-btn')?.addEventListener('click', () => openActiveConfigModal());
 
@@ -910,7 +880,7 @@ function bindSettingsEvents(c) {
     });
   }
 
-  // ── 外观个性化（R40）──
+  // ── 外观个性化 ──
   // 全部"改了立刻看得到"，落盘交给设置页统一的防抖自动保存（saveConfig）。
   bindUiCustomEvents();
 
@@ -920,10 +890,7 @@ function bindSettingsEvents(c) {
     // 开关一变，当前模型的可用单价来源就变了，重刷卡片
     refreshModelPriceCard();
   });
-  // 直接在模型输入框里改模型时也要刷新 —— 只有从目录里选才会走另一条路径。
-  // 用 input 而非 change：边打字边更新，避免"点了别处才变"的迟滞感。
-  // 2026-10-23：删掉这段无效监听 —— #cfg-model 是 type="hidden"（06:521），
-  // 永远收不到用户输入，挂在上面的 input 监听只可能被程序派发触发。
+  // ⚠️ 不要在 #cfg-model 上挂 input 监听：它是 type="hidden"，永远收不到用户输入。
   // 价格卡的刷新由 refreshModelPriceCard() 自己的调用点负责。
   refreshModelPriceCard();
 
@@ -938,7 +905,7 @@ function bindSettingsEvents(c) {
       await api('/api/config', { method: 'POST', body: JSON.stringify({ cacheWarm: { enabled } }) });
       e.target.checked = enabled;
     } catch (err) {
-      // 保存失败要把勾选状态回滚 —— 否则界面显示"已开"而后端仍是关的
+      // 保存失败要把勾选状态回滚，否则界面显示"已开"而后端仍是关的
       e.target.checked = !enabled;
       qaAlert(`保存失败：${err.message}`);
     }
@@ -1025,10 +992,9 @@ function bindSettingsEvents(c) {
           btn.textContent = '隐藏';
         } else {
           // 切回密码态：如果框里是真实 Key（用户没改过），用掩码盖住。
-          // ⚠️ 空输入不再被强制回填掩码：曾经 current === '' 也变成 '******'，
-          //    用户"清空输入框想清除 Key"的意图被吞掉 —— 保存时空串
-          //    会被后端按"不修改"处理，导致已存 Key 永远无法清除。
-          //    现在空 = 保持空（保存即清除）；掩码只盖"真实 Key 原样"这一种。
+          // ⚠️ 空输入不要强制回填掩码：把 current === '' 也变成 '******' 会吞掉
+          //    用户"清空输入框想清除 Key"的意图，已存 Key 永远无法清除。
+          //    空 = 保持空；掩码只盖"真实 Key 原样"这一种。
           const current = input.value || '';
           input.type = 'password';
           if (real && current === real) {
@@ -1045,7 +1011,7 @@ function bindSettingsEvents(c) {
   }
 
   // 输入框 id -> 搜索服务字段名（/api/config 里的搜索 Key 是脱敏的，
-  // 所以“显示”必须向后端专用端点要明文，不能直接读 state.config）
+  // 所以"显示"必须向后端专用端点要明文，不能直接读 state.config）。
   // 自定义服务是动态的：field 值在切换提供方时才定（custom:<id>），
   // 所以这里是个函数而不是常量表。
   const SEARCH_KEY_FIELDS = {
@@ -1077,7 +1043,7 @@ function bindSettingsEvents(c) {
       const field = SEARCH_KEY_FIELDS[inputId]?.();
       if (!field) return;
       const input = $(`#${inputId}`);
-      // ⚠️（2026-10-10 r86 修 P2）清除凭据不可逆 → danger:true
+      // 清除凭据不可逆 → danger:true
       if (!await qaConfirm({
         danger: true,
         confirmText: '清除 Key',
@@ -1085,10 +1051,9 @@ function bindSettingsEvents(c) {
       })) return;
       try {
         if (isCustom) {
-          // 自定义服务的 Key 存在 providers 数组条目里，不能走 webSearch.<field> 路径；
+          // 自定义服务的 Key 存在 providers 数组条目里，不能走 webSearch.<field> 路径。
           // 重用 POST /api/search-providers 的"已存在则更新"分支：同一 baseUrl+type
-          // 命中 existing，传空 apiKey 清除（后端只在 submitted 非空时覆盖 —— 空 = 清除
-          // 需要 existing.apiKey = ''，见下方显式置空）
+          // 命中 existing，传空 apiKey 即清除。
           const cp = (state.config?.webSearch?.providers || []).find((p) => `custom:${p.id}` === field);
           if (!cp) throw new Error('找不到这个自定义搜索服务');
           await api('/api/search-providers', {
@@ -1127,9 +1092,8 @@ function bindSettingsEvents(c) {
     const field = SEARCH_KEY_FIELDS[inputId]?.();
     if (field) {
       const r = await api(`/api/search-key?field=${encodeURIComponent(field)}`);
-      // 环境变量提供的 Key：配置里没存（apiKey 空）但 env 有 —— 显示时
-      // 直接把 env 值亮出来（web-search.js 的运行时优先级就是 cfg > env，
-      // 用户"看一眼"的语义应该覆盖两种来源）。
+      // 环境变量提供的 Key：配置里没存（apiKey 空）但 env 有，显示时直接亮出
+      // env 值（运行时优先级是 cfg > env，用户"看一眼"应该覆盖两种来源）。
       return String(r.apiKey || '');
     }
     // OneBot 令牌：与搜索 Key 同样的"显示明文"专用端点
@@ -1144,7 +1108,7 @@ function bindSettingsEvents(c) {
   let fallbackRows = (Array.isArray(c.api?.fallbackModels) ? c.api.fallbackModels : []).map((f) => ({ model: f.model || '', provider: f.provider || '' }));
   if (fallbackRows.length === 0) fallbackRows = [{ model: '', provider: '' }];
   // 备选模型点选：readonly 输入框 → 弹模型目录选择器，选完写回行数据并触发表单保存。
-  // 与手输并行不存在了（readonly），杜绝"打错模型 id 等运行时才报错"。
+  // 不让手输，杜绝"打错模型 id 等运行时才报错"。
   function openFallbackModelPicker(rowIdx) {
     const providers = state.providers || [];
     if (!providers.length) { qaAlert('模型目录为空：请先在本页上方添加提供商。'); return; }
@@ -1184,8 +1148,8 @@ function bindSettingsEvents(c) {
           closeModelModal(overlay);
           renderFallbackRows();
           // renderFallbackRows 整表重建 DOM，焦点会掉回 body（之后 Ctrl+V 全废），
-          // 且 closeModelModal 归还的旧行元素已被移除 —— 重建后显式还给该行
-          // 选择框之后第一个可编辑控件（2026-10-18）。
+          // 且 closeModelModal 归还的旧行元素已被移除，重建后显式还给该行
+          // 选择框之后第一个可编辑控件。
           focusFirstEditableAfter($(`.fb-model-pick[data-i="${rowIdx}"]`));
           // 通知自动保存：fallbackModels 从 DOM 实时读，触发表单监听即可
           $('#fallback-model-rows')?.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1199,8 +1163,8 @@ function bindSettingsEvents(c) {
   function renderFallbackRows() {
     const box = $('#fallback-model-rows');
     if (!box) return;
-    // 提供商列已删（2026-09-18 用户需求）：选模型时自动带上所属提供商（跨渠道
-    // 备选仍有效），手动再选一遍纯属多余。行内只留 模型点选 + 删除。
+    // 没有提供商列：选模型时自动带上所属提供商（跨渠道备选仍有效），
+    // 手动再选一遍纯属多余。行内只留 模型点选 + 删除。
     const provNameOf = (pid) => {
       const p = (state.providers || []).find((x) => x.id === pid);
       return p ? (p.displayName || p.id) : '';
@@ -1232,15 +1196,14 @@ function bindSettingsEvents(c) {
     renderFallbackRows();
   });
 
-  // ── 「模型配置」「模型管理」两个入口模态框（2026-09-18 改版）──
-  // 原页面上的 模型目录/baseURL/Key/专用模型/图片视频开关/视频理解方式
-  // 全部收进「模型配置」（mc-* 字段，弹窗内部自带绑定）；删除模型/手动添加
-  // 提供商收进「模型管理」。Key 的显示/清除都已搬进「模型配置」弹窗
-  // （mc-apikey-toggle / mc-apikey-clear，弹窗内自带绑定），旧绑定全部删除。
+  // ── 「模型配置」「模型管理」两个入口模态框 ──
+  // 模型目录/baseURL/Key/专用模型/图片视频开关/视频理解方式都在「模型配置」
+  // （mc-* 字段，弹窗内部自带绑定）；删除模型/手动添加提供商在「模型管理」。
+  // Key 的显示/清除也在「模型配置」弹窗（mc-apikey-toggle / mc-apikey-clear）。
   $('#open-model-config-btn')?.addEventListener('click', () => openModelConfigModal());
   $('#open-model-manage-btn')?.addEventListener('click', () => openModelManageModal());
-  // ── 新手引导卡（2026-10-23 萌新化 P1）：未配置模型时 api 分区只渲染
-  //    「接口地址 + 密钥 + 测试并保存」，一键完成 拉模型 → 建服务商 → 选模型 → 测连通。
+  // ── 新手引导卡：未配置模型时 api 分区只渲染「接口地址 + 密钥 + 测试并保存」，
+  //    一键完成 拉模型 → 建服务商 → 选模型 → 测连通。
   //    已配置后该卡不渲染，这两个绑定自然失效（?. 守卫）。
   $('#fg-start')?.addEventListener('click', () => runFirstTimeGuide());
   $('#fg-key-toggle')?.addEventListener('click', () => {
@@ -1252,7 +1215,7 @@ function bindSettingsEvents(c) {
     btn.textContent = show ? '隐藏' : '显示';
   });
 
-  // ── 设置搜索（2026-10-23 萌新化 P4）────────────────────────────────
+  // ── 设置搜索 ─────────────────────────────────────────────────────
   // 索引表 SETTINGS_SEARCH_INDEX 在 06-settings-render.js。交互：
   //   输入 → 面板列出命中项（权重排序）→ ↑↓ 选择 / Enter 或点击直达。
   // 直达路径与健康卡 hc-fix-btn 完全同型：先 flush 防抖窗口内的挂起改动
@@ -1313,9 +1276,8 @@ function bindSettingsEvents(c) {
       else if (e.key === 'Escape') { ssPanel.hidden = true; }
     });
   }
-  // 拿当前 API Key 的真实值：如果输入框里是用户刚输入的新 Key（非掩码非空），优先用；否则向后端取
-  // 2026-09-19（M9 清理）：唯一调用点已随「模型配置」弹窗改版删除（弹窗内自带取 Key
-  // 逻辑），此函数成为死代码且引用不存在的 #cfg-apikey —— 一并删除。
+  // 拿当前 API Key 真实值的函数已删除：唯一调用点随「模型配置」弹窗改版消失，
+  // 它引用的 #cfg-apikey 也不存在了。弹窗内自带取 Key 逻辑。
 
   // 连通性测试：抽成公共逻辑，两个入口共用
   // （健康卡片的 test-api-btn 与「模型配置」弹窗里的测试按钮做的是同一件事）
@@ -1325,14 +1287,13 @@ function bindSettingsEvents(c) {
     btn.textContent = '测试中…';
     if (out) out.textContent = '';
     try {
-      // 2026-09-18 模型配置改版后，设置页上只剩隐藏字段（cfg-baseurl-value），
-      // 旧的 #cfg-baseurl / #cfg-apikey 输入框已搬进弹窗（mc-*）。这里按
-      // 「界面实时值优先、隐藏字段兜底、最后用已保存配置」的顺序取值 ——
+      // 设置页上只剩隐藏字段（cfg-baseurl-value），输入框都搬进了弹窗（mc-*）。
+      // 按「界面实时值优先、隐藏字段兜底、最后用已保存配置」的顺序取值，
       // 否则健康卡片上的「测试一下」永远拿空 baseUrl，必报"请先填写 Base URL"。
       const baseUrl = ($('#mc-baseurl')?.value || $('#cfg-baseurl-value')?.value || state.config?.api?.baseUrl || '').trim();
       const model = ($('#mc-model-pick')?.dataset?.model || $('#cfg-model')?.value || state.config?.api?.model || '').trim();
       // 只把"用户新输入的明文 Key"传给服务端；若是掩码/空则不传，
-      // 让服务端用自己保存的 Key —— 不依赖明文读取端点，未设 token 时也能测试。
+      // 让服务端用自己保存的 Key，不依赖明文读取端点，未设 token 时也能测试。
       const raw = ($('#mc-apikey')?.value || '').trim();
       const apiKey = (raw && raw !== '******') ? raw : '';
       const r = await api('/api/providers/test-chat', {
@@ -1353,8 +1314,7 @@ function bindSettingsEvents(c) {
     btn.textContent = idleLabel;
   }
 
-  // 健康卡片上的「测试一下」：此前 renderHealthCard 渲染后从未绑定事件
-  // （旧代码绑的是不存在的 test-provider-btn），按钮点了完全没反应。
+  // 健康卡片上的「测试一下」（按钮 id 是 test-api-btn，不是 test-provider-btn）
   const testApiBtn = $('#test-api-btn');
   if (testApiBtn) testApiBtn.addEventListener('click', () => runConnectivityTest(testApiBtn, $('#test-api-result'), '测试一下'));
 
@@ -1363,9 +1323,8 @@ function bindSettingsEvents(c) {
     btn.addEventListener('click', () => {
       const target = btn.dataset.target;
       if (target === 'connection') {
-        // 2026-10-23：原「去启动 SnowLuma」→ 现在跳「工具 → 连接」页。
-        // 协议端由用户自装，这一页给的是状态 + 装什么 / 怎么配的指引，
-        // 比把用户丢进设置分区里找按钮更有用。
+        // 跳「工具 → 连接」页：协议端由用户自装，那一页给的是状态 +
+        // 装什么 / 怎么配的指引，比把用户丢进设置分区里找按钮更有用。
         flushSettingsSaves();   // 换页前先把 600ms 防抖窗口内的改动落盘
         switchTab('connection');
       } else if (target === 'settings-api') {
@@ -1374,8 +1333,7 @@ function bindSettingsEvents(c) {
         state.settingsSection = 'api';
         renderSettingsSidebar();
         renderSettings();
-        // 高亮模型配置入口按钮（2026-09-18 改版后 Base URL 不再是页面输入框，
-        // 引导用户进「模型配置」弹窗；旧 #cfg-baseurl 已不存在）
+        // 高亮模型配置入口按钮：Base URL 不再是页面输入框，引导用户进「模型配置」弹窗
         setTimeout(() => {
           const input = $('#open-model-config-btn');
           if (input) {
@@ -1419,9 +1377,8 @@ function bindSettingsEvents(c) {
   }
   syncVisionSwitch(c.api.provider, c.api.model);
 
-  // 「扫描视觉能力」按钮已按需求删除（2026-09-17）。
-  // 视觉能力数据仍由内置视觉表 + 模型目录徽标提供；后端 /api/vision/scan
-  // 端点保留（无 UI 入口），SSE vision-scan 事件监听保留兜底。
+  // 「扫描视觉能力」按钮已删除。视觉能力数据仍由内置视觉表 + 模型目录徽标提供；
+  // 后端 /api/vision/scan 端点保留（无 UI 入口），SSE vision-scan 监听保留兜底。
 
   // 模型目录“支持图片输入/不支持图片输入”徽标开关
   function applyShowVision() {
@@ -1433,11 +1390,10 @@ function bindSettingsEvents(c) {
   // ── 人设区块事件 ──
   const personaPick = $('#cfg-persona-pick');
   function currentPersonaId() {
-    // ⚠️（2026-10-16 外部审查 #10）原实现读 `$('#cfg-roletext')?.value` —— 那个输入框
-    //    早已随人设编辑器搬进弹窗、不在 DOM 里，于是**恒返回空串**：删除按钮永远不显示、
-    //    "当前人设"提示永远为空，人设相关的状态判定全部静默失真。
-    //    改为按**已保存配置**的 roleText 比对 —— 与 06-settings-render.js 渲染
-    //    "当前人设名"用的是同一个口径（`c.persona?.roleText`），两处不会再分叉。
+    // ⚠️ 必须按已保存配置的 roleText 比对，不能读 `$('#cfg-roletext')?.value`：
+    //    那个输入框早已随人设编辑器搬进弹窗、不在 DOM 里，恒返回空串，
+    //    会让删除按钮永远不显示、"当前人设"提示永远为空。
+    //    口径与 06-settings-render.js 渲染"当前人设名"一致（`c.persona?.roleText`）。
     const roleText = String(state.config?.persona?.roleText ?? '');
     const found = Object.entries(state.personaTemplates || {})
       .find(([, p]) => String(p.text ?? '') === roleText);
@@ -1463,7 +1419,7 @@ function bindSettingsEvents(c) {
     if (!id.startsWith('custom_')) return;
     const tpl = state.personaTemplates[id];
     if (!tpl) return;
-    // ⚠️（2026-10-10 r86 修 P2）删除人设 → danger:true
+    // 删除人设 → danger:true
     if (!await qaConfirm({
       danger: true,
       confirmText: '删除人设',
@@ -1471,8 +1427,8 @@ function bindSettingsEvents(c) {
     })) return;
     try {
       await api(`/api/persona-templates/${id}`, { method: 'DELETE', body: '{}' });
-      // UI-19：这三处原本是裸赋值 —— 元素不在 DOM（视图未渲染/结构变化）时直接抛
-      // TypeError，把已经成功的 DELETE 当成失败处理。全部补上存在性守卫。
+      // 必须判空：元素不在 DOM（视图未渲染/结构变化）时裸赋值会抛 TypeError，
+      // 把已经成功的 DELETE 当成失败处理。
       const roleEl = $('#cfg-roletext');
       const rulesEl = $('#cfg-customrules');
       if (roleEl) roleEl.value = state.personaTemplates.xiaojingyu?.text || '';
@@ -1482,7 +1438,7 @@ function bindSettingsEvents(c) {
       $('#cfg-roletext')?.dispatchEvent(new Event('input', { bubbles: true }));
       await loadSettings();
     } catch (e) {
-      // UI-19：同上，提示条元素缺席时不能让异常吞掉真实错误
+      // 同上：提示条元素缺席时不能让异常吞掉真实错误
       const hintEl = $('#persona-pick-hint');
       if (hintEl) hintEl.textContent = `删除失败：${e.message}`;
       else console.error('[persona] 删除失败：', e);
@@ -1497,10 +1453,9 @@ function bindSettingsEvents(c) {
   const pickFriendsBtn = $('#pick-friends-btn');
   if (pickFriendsBtn) pickFriendsBtn.addEventListener('click', () => openWhitelistPicker('friends'));
 
-  // ── 按会话独立人设 ──
-  // 唯一真相是隐藏 input 里的 JSON（与分群档位滑条同一套做法）：
   // ── 人设页：统一/分会话切换 + 分会话按钮网格 ──
-  // 统一开关：切显隐（不触发保存——display 切换不是配置变化，真正的值在 checkbox 上）。
+  // 唯一真相是隐藏 input 里的 JSON（与分群档位滑条同一套做法）。
+  // 统一开关：切显隐（不触发保存，display 切换不是配置变化，真正的值在 checkbox 上）。
   const personaUnifiedChk = $('#cfg-persona-unified');
   if (personaUnifiedChk) personaUnifiedChk.addEventListener('change', () => {
     const ub = $('#persona-unified-box');
@@ -1509,14 +1464,13 @@ function bindSettingsEvents(c) {
     if (pb) pb.style.display = personaUnifiedChk.checked ? 'none' : '';
   });
   // 分会话按钮：点开独立人设模态框（写回隐藏 JSON → 自动保存）
-  // root 判空：DOM 测试环境里 #persona-perchat-box 可能不在场（统一模式渲染时它存在，
-  // 但旧测试快照可能没这个节点——$$ 对 null root 直接抛错）
+  // root 判空：统一模式下这个节点也可能不在场，$$ 对 null root 会直接抛错。
   const perChatBox = $('#persona-perchat-box');
   if (perChatBox) $$('.persona-chat-btn', perChatBox).forEach((btn) => {
     btn.addEventListener('click', () => openPerChatPersonaModal(btn.dataset.chat));
   });
   // 人设编辑入口：两个模式各一个按钮（统一模式=「编辑人设」，分群模式=「全局人设设置」），
-  // 打开的是同一个弹窗 —— 所以用一个函数绑两次，别让哪个模式漏掉入口。
+  // 打开的是同一个弹窗，所以用一个函数绑两次，别让哪个模式漏掉入口。
   $('#open-global-persona-btn')?.addEventListener('click', () => openGlobalPersonaModal());
   $('#open-persona-editor-btn')?.addEventListener('click', () => openGlobalPersonaModal());
   // 群名异步补显：按钮文字先显示"群 号"，拉到群名后替换
@@ -1560,13 +1514,12 @@ function bindSettingsEvents(c) {
   });
 
   // ── OneBot 区块事件 ──
-  /* ── r100：一键启动 + 便携版管理（从旧 SnowLuma 页整体迁入）──
-     2026-10-23：协议端解耦后，「一键启动」只剩**启动 QQ** 这一步 ——
-     SnowLuma / NapCat 由用户自己装、自己启动，本软件不碰。
-     状态模型：renderSettings 同步渲染、运行态是异步接口 → 下面 qbRefresh() 先拉
+  /* ── 一键启动 + 便携版管理 ──
+     协议端解耦后，「一键启动」只剩启动 QQ 这一步，SnowLuma / NapCat 由用户自己装、
+     自己启动，本软件不碰。
+     状态模型：renderSettings 同步渲染、运行态是异步接口，所以 qbRefresh() 先拉
      /api/status + /api/qq-portable/status 存进 qb，再 qbPaint() 只改 quickbar 与
-     「QQ 来源」块的文字/按钮态 —— **不重建表单**，这里的绑定不会因重渲染丢失
-     （重渲染后 bindSettingsEvents 重跑，闭包和监听都是新的，也无叠加风险）。 */
+     「QQ 来源」块的文字/按钮态，不重建表单。 */
   if ($('#quick-start-btn')) {
     const qb = { qqReady: false, qqRunning: false, protoUp: false, source: 'none', portableInstalled: false, connected: false };
 
@@ -1575,10 +1528,9 @@ function bindSettingsEvents(c) {
       const btn = $('#quick-start-btn');
       if (!btn) return;
       btn.disabled = !!qb.connected;
-      // 已连接是终态：老版里一键启动条连接后直接消失（只在未连接时渲染），
-      // 设置页保留一个可见的锚点更稳 —— 但必须禁用，别让人以为还要再点什么。
-      // ⚠️ 这一位由 qbRefresh 从 /api/status 读回来，三步链成功时也置位 ——
-      //    否则成功后的 qbRefresh 会立刻把「已连接 ✓」覆盖回启动态文案（r100 探针 D4 抓到的）。
+      // 已连接是终态：保留一个可见的锚点，但必须禁用，别让人以为还要再点什么。
+      // ⚠️ 这一位由 qbRefresh 从 /api/status 读回来，三步链成功时也置位，
+      //    否则成功后的 qbRefresh 会立刻把「已连接 ✓」覆盖回启动态文案。
       if (qb.connected) {
         if (text) text.textContent = '机器人已连接，正常工作中 —— 状态与日志见「工具 → 连接」页';
         btn.textContent = '已连接 ✓';
@@ -1633,8 +1585,7 @@ function bindSettingsEvents(c) {
       } catch { /* 拉不到就保持占位文案，不打断设置页 */ }
     };
 
-    // 「一键启动」：三步链与原 SnowLuma 页版逐行同源（启动链参数别改，14-chrome.js
-    //   的「开始对话」按钮按同一套节奏走）。
+    // 「一键启动」：启动链参数别改，14-chrome.js 的「开始对话」按钮按同一套节奏走。
     const quickStartBtn = $('#quick-start-btn');
     quickStartBtn.addEventListener('click', async () => {
       const btn = quickStartBtn;
@@ -1671,8 +1622,8 @@ function bindSettingsEvents(c) {
           // 等 3 秒让 QQ 完全启动
           await new Promise((r2) => setTimeout(r2, 3000));
         }
-        // 步骤 2（2026-10-23）：协议端不再由本软件启动。没在跑就明确告诉用户
-        // 去哪儿装 / 怎么启动 —— 在这里干等 5 分钟只会让人以为程序坏了。
+        // 步骤 2：协议端不由本软件启动。没在跑就明确告诉用户去哪儿装 / 怎么启动，
+        // 在这里干等 5 分钟只会让人以为程序坏了。
         const st2 = await api('/api/status').catch(() => null);
         if (!st2?.protocol?.portOpen) {
           qb.protoUp = false;
@@ -1682,24 +1633,22 @@ function bindSettingsEvents(c) {
         }
         qb.protoUp = true;
         // 步骤 3：等待 OneBot 连接
-        // ⚠️（2026-10-17）旧实现只等 **30 秒** 就报「连接超时」—— 而这 30 秒里
-        //   用户很可能**还没扫码登录**（首次登录本来就要一两分钟），后台的注入循环
-        //   其实还在跑整整 6 分钟。小白看到"超时"就以为失败，回去再点一次，
-        //   于是又来一轮启动链，越点越乱。现在：最多等 5 分钟，并且每隔十几秒
-        //   把"正在等什么、你现在该做什么"写清楚 —— 等待期间不需要任何操作。
+        // ⚠️ 最多等 5 分钟。只等 30 秒就报"连接超时"的话，用户很可能还没扫码登录
+        //    （首次登录本来就要一两分钟），看到超时以为失败又点一次，越点越乱。
+        //    等待期间每隔十几秒把"正在等什么、你现在该做什么"写清楚。
         btn.textContent = '等待机器人上线…';
         const WAIT_STEP_MS = 2000;
         const WAIT_MAX_MS = 5 * 60 * 1000;
         for (let waited = 0; waited < WAIT_MAX_MS; waited += WAIT_STEP_MS) {
-          // 2026-10-23：用户切走页签/分区后按钮已不在 DOM，循环仍在每 2 秒打一次
-          // /api/status（最多 5 分钟）。这里直接收尾，不再空转。
+          // 用户切走页签/分区后按钮已不在 DOM，循环仍在每 2 秒打一次 /api/status
+          // （最多 5 分钟）。这里直接收尾，不再空转。
           if (!btn.isConnected) return;
           await new Promise((r2) => setTimeout(r2, WAIT_STEP_MS));
           const s = await api('/api/status').catch(() => null);
           if (s?.onebot?.connected) {
             if (hint) hint.textContent = '✅ 已连接！机器人开始工作';
-            // ⚠️ 走 qbPaint() 落终态，别手写 btn.textContent —— 紧随其后的
-            //    qbRefresh() 会重画一次，手写的字样会被覆盖（探针 D4 抓过这个）。
+            // ⚠️ 走 qbPaint() 落终态，别手写 btn.textContent：紧随其后的
+            //    qbRefresh() 会重画一次，手写的字样会被覆盖。
             qb.connected = true;
             qbPaint();
             qbRefresh();
@@ -1743,8 +1692,8 @@ function bindSettingsEvents(c) {
     });
 
     // 「装独立副本（可选）」：从本机 QQ 复制一份（1~2GB，分钟级），带进度轮询。
-    // ⚠️ 判断"装没装完"要看 portableInstalled / setup.ok，**不能看 ready** ——
-    //    本机有 QQ 时 ready 本来就是 true（r90 语义），用它会一进来就误判"装好了"。
+    // ⚠️ 判断"装没装完"要看 portableInstalled / setup.ok，不能看 ready：
+    //    本机有 QQ 时 ready 本来就是 true，用它会一进来就误判"装好了"。
     const pInstallBtn = $('#qq-install-btn');
     if (pInstallBtn) pInstallBtn.addEventListener('click', async () => {
       const btn = pInstallBtn;
@@ -1761,8 +1710,7 @@ function bindSettingsEvents(c) {
         } else {
           // 后端已开始复制 → 每秒看一眼进度（上限 30 分钟）
           for (let i = 0; i < 1800; i++) {
-            // 2026-10-23：同启动链 —— 切走后按钮脱离 DOM，别让这个每秒一次的
-            // 进度轮询继续空转（上限 30 分钟）。
+            // 同启动链：切走后按钮脱离 DOM，别让这个每秒一次的进度轮询继续空转。
             if (!btn.isConnected) break;
             await new Promise((r) => setTimeout(r, 1000));
             const s = await api('/api/status');
@@ -1798,12 +1746,12 @@ function bindSettingsEvents(c) {
     location.reload();
   });
 
-  // ── 媒体工具（ffmpeg）区块事件（2026-11-03）──────────────────────────
-  // ffmpeg 改为按需下载后，这一块承担三件事：
+  // ── 媒体工具（ffmpeg）区块事件 ─────────────────────────────────────
+  // 这一块承担三件事：
   //   ① 状态条：当前用的是哪份（下载的 / 系统的 / 手填的）、版本多少
   //   ② 下载：起任务 → 每秒轮询进度 → 完成后刷新状态
   //   ③ 手动路径验证 + 删除已下载的那份
-  // 状态是异步拉的，首帧只渲染占位；ffmpegRefresh() 拉到后**只改文字与按钮态**，
+  // 状态是异步拉的，首帧只渲染占位；ffmpegRefresh() 拉到后只改文字与按钮态，
   // 不重建表单（与上面「连接 QQ」的 qbRefresh 同一套做法，避免绑定丢失）。
   const ffmpegDownloadBtn = $('#ffmpeg-download-btn');
   if (ffmpegDownloadBtn) {
@@ -1833,11 +1781,11 @@ function bindSettingsEvents(c) {
       system: '系统安装的'
     };
 
-    // 平台适配（2026-11-03）：installGuide / canAutoInstall 只有 /api/ffmpeg/status
-    // 才有，06 的渲染函数是同步纯函数拿不到 —— 安装指引区首帧是空占位（hidden），
+    // 平台适配：installGuide / canAutoInstall 只有 /api/ffmpeg/status 才有，
+    // 06 的渲染函数是同步纯函数拿不到，所以安装指引区首帧是空占位（hidden），
     // 由 paint() 注入；平台相关的文案与 macOS 要隐藏的下载区块也在 paint() 里修正。
-    // 注意 paint 只改文字与显隐、不重建表单（与 qbRefresh 同一约束），
-    // 所以这里对每块内容都先确认存在再写。
+    // paint 只改文字与显隐、不重建表单（与 qbRefresh 同一约束），
+    // 所以每块内容都先确认存在再写。
     const installGuideHtml = (g) => {
       if (!g || g.kind !== 'command') return '';
       // 这块是运行时注入的，不是 .set-card 的直接子节点，所以拿不到
@@ -1893,11 +1841,11 @@ function bindSettingsEvents(c) {
             btn.textContent = '已复制 ✓';
           } catch (e) {
             // 剪贴板被拒（窗口未聚焦 / 浏览器权限 / 非安全上下文）时不能假装成功，
-            // 但只说「复制失败」用户无从下手 —— 退一步把命令选中，让他自己按复制键。
-            // 这不是"吞掉错误"：失败原因记在 title 上，主路径仍是自动复制。
+            // 但只说「复制失败」用户无从下手，所以退一步把命令选中，让他自己按复制键。
+            // 失败原因记在 title 上，主路径仍是自动复制。
             //
-            // 不区分 ⌘C / Ctrl+C：`navigator.platform` 已废弃（Chromium 返回空串），
-            // 而为了一个提示文案去嗅探 UA 不值得 —— 直接说「复制键」两边都说得通。
+            // 不区分 ⌘C / Ctrl+C：navigator.platform 已废弃（Chromium 返回空串），
+            // 为一个提示文案去嗅探 UA 不值得，说「复制键」两边都说得通。
             btn.textContent = '复制失败';
             btn.title = `自动复制不可用（${e?.message || e?.name || '未知原因'}）。命令已选中，按系统的复制快捷键即可`;
             const code = btn.closest('div')?.querySelector('code');
@@ -1918,7 +1866,7 @@ function bindSettingsEvents(c) {
     let autoInstallAllowed = true;
 
     // 把本机探测到的可用 ffmpeg 列在「优先使用」下面。
-    // 这是用户判断"系统里那份到底认不认"的唯一依据 —— 只给单选而不给清单，
+    // 这是用户判断"系统里那份到底认不认"的唯一依据，只给单选而不给清单，
     // 用户切到 system 后看到"未安装"会以为是设置坏了。
     const paintCandidates = (list) => {
       const hint = $('#cfg-ffmpeg-source-hint');
@@ -1941,7 +1889,7 @@ function bindSettingsEvents(c) {
 
     const paint = (s) => {
       if (!s) return;
-      // ── 平台适配（2026-11-03）────────────────────────────────────
+      // ── 平台适配 ─────────────────────────────────────────────────
       // canAutoInstall 缺省按 true 处理：后端旧版本 / 字段未就位时保持现状，
       // 不能因为读不到就突然把 Windows 的下载入口藏掉。
       const canAutoInstall = s.canAutoInstall !== false;
@@ -1952,7 +1900,7 @@ function bindSettingsEvents(c) {
       //
       // 已装好时整块折叠成一行「安装方式」：状态条刚说完"ffmpeg 9.0.2 可用"，
       // 紧接着摆一条安装命令是自相矛盾的，用户还会以为哪里没配好。
-      // 未装 / 不健康时才默认展开 —— 那时安装命令正是他要找的东西。
+      // 未装 / 不健康时才默认展开，那时安装命令正是他要找的东西。
       // 用户手动展开过就不再覆盖（dataset.userToggled），否则每次轮询刷新
       // 都会把他刚点开的区块重新折上。
       const guideBox = $('#ffmpeg-install-guide');
@@ -1993,7 +1941,7 @@ function bindSettingsEvents(c) {
       // 下载按钮与高级区：macOS 整块不显示。高级区里全是下载相关的东西
       // （下载 / 下载源 / Token / 删除），藏掉后只剩一个展开后空白的入口，
       // 所以连折叠按钮一起藏。
-      // ⚠️ 这些内容被 settingsCards() 切成了独立卡片，必须按卡片藏 ——
+      // ⚠️ 这些内容被 settingsCards() 切成了独立卡片，必须按卡片藏，
       //    只藏 #ffmpeg-adv 的话，它的子元素早被 </section> 挤到了卡外。
       const advToggleEl = $('#ffmpeg-adv-toggle');
       const advBoxEl = $('#ffmpeg-adv');
@@ -2017,7 +1965,7 @@ function bindSettingsEvents(c) {
       }
 
       // 两个下载按钮（状态条上的主按钮 + 高级区里的）共用同一份状态：
-      // 已安装时只保留高级区那个「重新下载」，顶部不再出现一个大按钮 ——
+      // 已安装时只保留高级区那个「重新下载」，顶部不再出现一个大按钮，
       // 用户已经有能用的 ffmpeg 了，主行动不该是"再装一遍"。
       const advBtn = $('#ffmpeg-download-btn-adv');
       const advHint = $('#ffmpeg-download-hint');
@@ -2057,7 +2005,7 @@ function bindSettingsEvents(c) {
       // 下载走哪条通道直接决定速度（实测：代理直连 5.5MB/s、镜像 700KB/s、
       // 裸直连经常超时）。后端已经把「镜像 / 代理」合成一条决策（有代理时
       // 镜像自动让位，避免 代理→镜像→GitHub 多绕一跳），这里原样展示。
-      // 只在"可能去下载"时才显示 —— 已装好且健康、用的是系统 ffmpeg 的用户
+      // 只在"可能去下载"时才显示，已装好且健康、用的是系统 ffmpeg 的用户
       // 看这条纯属噪音；但健康检查不通过时仍要显示（那份确实要重下）。
       const proxyLine = $('#ffmpeg-proxy-line');
       if (proxyLine) {
@@ -2085,7 +2033,7 @@ function bindSettingsEvents(c) {
     };
 
     // 进度轮询：与 /api/wallpaper/import 的 1 秒节奏一致。
-    // 切走分区后按钮脱离 DOM（isConnected=false）就停 —— 否则轮询空转。
+    // 切走分区后按钮脱离 DOM（isConnected=false）就停，否则轮询空转。
     const poll = () => {
       if (pollTimer) clearInterval(pollTimer);
       pollTimer = setInterval(async () => {
@@ -2117,7 +2065,7 @@ function bindSettingsEvents(c) {
       }, 1000);
     };
 
-    // 两个入口（状态条主按钮 / 高级区按钮）走同一段逻辑 —— 复制一份必然漂移。
+    // 两个入口（状态条主按钮 / 高级区按钮）走同一段逻辑，复制一份必然漂移。
     const startDownload = async (btn) => {
       if (btn) btn.disabled = true;
       progressHint.textContent = '正在连接下载源…';
@@ -2131,7 +2079,7 @@ function bindSettingsEvents(c) {
         if (!r.ok) {
           progressHint.textContent = '';
           if (btn) btn.disabled = false;
-          // 后端以 use_package_manager 拒绝下载 —— 这不是故障，是"这台机器该走
+          // 后端以 use_package_manager 拒绝下载，这不是故障，是"这台机器该走
           // 包管理器"。照抄成"下载失败"会把用户引向反复重试。
           // 命令取自当前安装指引，避免在别处再写死一份 brew 命令。
           if (r.code === 'use_package_manager') {
@@ -2254,9 +2202,8 @@ function bindSettingsEvents(c) {
     try {
       await api('/api/open-data-dir', { method: 'POST', body: '{}' });
     } catch (e) {
-      // ⚠️（2026-10-17 N3）用户点一下按钮**什么都没发生**时，必须给出原因，
-      //    否则会反复点击并以为功能坏了（数据目录打不开通常是后端未响应或
-      //    系统没有文件管理器关联，两者用户都能自己处理）。
+      // ⚠️ 用户点一下按钮什么都没发生时，必须给出原因，否则会反复点击并以为功能坏了
+      //    （数据目录打不开通常是后端未响应或系统没有文件管理器关联）。
       console.error('打开数据目录失败:', e);
       qaAlert(`打开数据目录失败：${e?.message || e}`);
     }
@@ -2265,7 +2212,7 @@ function bindSettingsEvents(c) {
   const resetDataBtn = $('#reset-data-btn');
   if (resetDataBtn) resetDataBtn.addEventListener('click', async () => {
     const hint = $('#reset-data-hint');
-    // ⚠️（2026-10-10 r86 修 P2）重置=删除全部用户数据 → danger:true + 危险色按钮文案
+    // 重置 = 删除全部用户数据 → danger:true + 危险色按钮文案
     if (!await qaConfirm({
       danger: true,
       title: '重置为初始形态',

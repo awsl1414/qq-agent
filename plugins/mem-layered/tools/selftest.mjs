@@ -47,7 +47,7 @@ function ok(label, fn) {
 
 /**
  * 异步版 ok()。
- * ⚠️ 需要 await 的断言必须走这个：ok() 拿到 Promise 就直接当"通过"了 ——
+ * ⚠️ 需要 await 的断言必须走这个：ok() 拿到 Promise 就直接当"通过"了，
  *    里面的 assert 抛错只会变成 unhandled rejection，测试反而"全绿"。
  */
 async function okAsync(label, fn) {
@@ -81,7 +81,7 @@ function synth({ startOffsetDays, hours, chatKey = 'group:10001', idBase = 1 }) 
   // ⚠️ 必须对齐到**整点**，不能直接用 Date.now()。
   //    原来 base = now - N 天，分钟数与"当前时刻"相同：每小时 6 条从 HH:56 铺到 HH+1:01，
   //    于是"每个小时一个块"变成"每批消息横跨两个块"，块数随运行时刻漂移。
-  //    块数一变，df/n 就变，dfCutoffRatio=0.7 的剪枝就会时而剪掉「猫粮」时而留下 ——
+  //    块数一变，df/n 就变，dfCutoffRatio=0.7 的剪枝就会时而剪掉「猫粮」时而留下，
   //    表现为"同一份代码，上午全绿、下午三条失败"。（真踩到过。）
   const base = Math.floor((Date.now() - startOffsetDays * DAY) / 3600000) * 3600000;
   for (let h = 0; h < hours; h += 1) {
@@ -137,7 +137,7 @@ function makeEnv(root, overrides = {}) {
  * 模拟「隔了 gapDays 天又想起一次」，重复 times 次。
  *
  * ⚠️ 为什么不能直接连打若干次 markHit：新模型的增益是**间隔依赖**的
- *    （r = log2(1 + 间隔/S)），同一瞬间连打 r≈0、几乎不加分 ——
+ *    （r = log2(1 + 间隔/S)），同一瞬间连打 r≈0、几乎不加分，
  *    这正是要钉住的行为，不是 bug。要造出「记得牢」的块，只能靠真实的间隔回忆。
  *    这里先把 lastHitAt 往前拨 gapDays 再命中，等价于"上次想起是在 20 天前"。
  */
@@ -169,7 +169,7 @@ function defaults() {
     autoRecallCooldownMin: 30,
     minTriggerChars: 6,
     observeTools: true,
-    // —— 附加五项 ——
+    // 附加五项
     pendingTodos: true,
     crossTurn: true,
     crossTurnTtlMin: 90,
@@ -186,10 +186,10 @@ function defaults() {
     budgetGuard: true,
     dayPromptMax: 800000,
     chatPromptMax: 200000,
-    // —— 冲突自检 ——
+    // 冲突自检
     warnOnConflict: true,
     conflictWarnCooldownMin: 1440,
-    // —— 梗概墓碑 + 多线索 + 显著性（v1.5.0）——
+    // 梗概墓碑 + 多线索 + 显著性（v1.5.0）
     gistEnabled: true,
     gistMaxPerChat: 400,
     gistRetainDays: 1095,
@@ -199,7 +199,7 @@ function defaults() {
     diversityLambda: 0.3,
     autoRecallMinRel: 0.25,
     staleSnippetSkip: true,
-    // —— 人类记忆机制包 v1.7.0 ——
+    // 人类记忆机制包 v1.7.0
     linkBoost: 0.15,
     linkLearn: true,
     reminiscenceAmp: 0.12,
@@ -290,7 +290,7 @@ console.log('\nA. 增量巩固 / 检索 / 注入 / 归档 / 索引重建');
   });
   ok('冷却由调用方在"送达后"记账：没记账就不该被锁住', () => {
     // ⚠️ 这条钉的是一个真踩过的坑：如果 build() 自己就把冷却记掉，
-    //    appendToLastUser 找不到 user 消息时冷却已被吃掉 —— 这条旧事被白锁 30 分钟，
+    //    appendToLastUser 找不到 user 消息时冷却已被吃掉，这条旧事被白锁 30 分钟，
     //    而模型根本没看到它。
     const again = env.injector.build({ chatKey: 'group:10001', triggerText: '上次说的猫粮买了没' }).text;
     assert.ok(again.length > 0, '还没送达就被冷却挡住了');
@@ -341,7 +341,7 @@ console.log('\nB. 汇总（小时→日）与遗忘淘汰');
   const old = synth({ startOffsetDays: 10, hours: 4 });
   writeMessages(root, 'group:20002', old);
   // 先关掉汇总（阈值调到 999 天），确认巩固产出的确实只有小时块；
-  // 再把阈值改回 7 天手动触发一次 —— 这样能分别验证两件事。
+  // 再把阈值改回 7 天手动触发一次，这样能分别验证两件事。
   const env = makeEnv(root, { rollupAfterDays: 999, decayHalfLifeDays: 45, forgetAfterDays: 0 });
   env.consolidator.consolidateChat('group:20002');
 
@@ -382,9 +382,9 @@ console.log('\nB. 汇总（小时→日）与遗忘淘汰');
     assert.ok(page.ok && page.lines.length > 0);
   });
 
-  // —— B1 回归（2026-10-14 修）：迟到的旧时间戳消息不得覆盖已汇总的日块 ——
+  // B1 回归：迟到的旧时间戳消息不得覆盖已汇总的日块
   // 真实触发路径：历史回放 / 二次补拉 / 时钟偏差，让一条旧消息在某天
-  // **已汇总成日块之后**才到。旧代码只合并这批新小时块，整块覆盖日块 ——
+  // **已汇总成日块之后**才到。旧代码只合并这批新小时块，整块覆盖日块，
   // 该日此前汇总的碎片从索引与块文件里静默消失（无墓碑、无日志）。
   ok('迟到的旧消息不会覆盖已汇总的日块（二次汇总必须连同已存在的日块一起合并）', () => {
     const root = freshRoot('b7');
@@ -428,7 +428,7 @@ console.log('\nC. 词表剪枝 / 索引体积');
   const env = makeEnv(root, { dfCutoffRatio: 1, maxVocabPerChat: 20000 });
   env.consolidator.consolidateChat('group:30003');
   const s0 = env.store.stats('group:30003');
-  // ⚠️ minBlocksForCutoff: 1 —— 这里要测的是「剪枝机制本身」，不是样本量门槛。
+  // ⚠️ minBlocksForCutoff: 1，这里要测的是「剪枝机制本身」，不是样本量门槛。
   //    真实默认门槛是 2000 块，而本用例只有 6 块，不显式放开就一个词都剪不掉。
   const dropped = env.store.pruneVocab('group:30003', { maxVocab: 200, dfCutoffRatio: 0.5, minBlocksForCutoff: 1 });
   const s1 = env.store.stats('group:30003');
@@ -501,7 +501,7 @@ console.log('\nC. 词表剪枝 / 索引体积');
   });
   ok('规则① 语言收口：只剪 ASCII 短 token，中文高频实词一个不剪', () => {
     // 核心回归：旧规则 `t.length <= 3` 在中文里剪的是实词（吃/睡/照片），
-    // 因为 util.js 的 STOP 表已经把「的/了/是/我」滤掉了 —— 词表里的中文单字
+    // 因为 util.js 的 STOP 表已经把「的/了/是/我」滤掉了，词表里的中文单字
     // 全是实词。"短词 = 虚词" 这个前提只在英文成立，所以规则① 必须按语言收口。
     const root5 = freshRoot('c5');
     const env5 = makeEnv(root5, { dfCutoffRatio: 0.7, maxVocabPerChat: 100000 });
@@ -565,7 +565,7 @@ console.log('\nD. 附加五项（跨轮 · 待办 · 护栏 · 语义卡 · 旁�
   const get = () => s;
   const dataRoot = path.join(root, 'memory-v3');
 
-  // —— 跨轮工作记忆 ——
+  // 跨轮工作记忆
   const ct = new CrossTurn(dataRoot, get);
   ct.save('group:40004', {
     sent: [{ type: 'text', text: '我查一下这个显卡的价格' }],
@@ -593,7 +593,7 @@ console.log('\nD. 附加五项（跨轮 · 待办 · 护栏 · 语义卡 · 旁�
     assert.ok(!fs.existsSync(path.join(dataRoot, 'cross-turn', 'group_40005.json')));
   });
 
-  // —— 待办 ——
+  // 待办
   const pd = new Pending(dataRoot, get);
   ok('待办：能记下来并出现在列表里', () => {
     const r = pd.add({ chatKey: 'group:40004', text: '明天问一下阿甲的婚礼在哪办', expireInMinutes: 60 });
@@ -630,7 +630,7 @@ console.log('\nD. 附加五项（跨轮 · 待办 · 护栏 · 语义卡 · 旁�
     assert.ok(pd.sweep() >= 1, 'sweep 没清掉过期条目');
   });
 
-  // —— 成本护栏 ——
+  // 成本护栏
   const bgSettings = { ...defaults(), chatPromptMax: 0 };
   const bg = new Budget(dataRoot, () => bgSettings);
   ok('护栏：没有用量时不砍', () => assert.equal(bg.shouldReduce('group:40004').level, 0));
@@ -658,7 +658,7 @@ console.log('\nD. 附加五项（跨轮 · 待办 · 护栏 · 语义卡 · 旁�
     assert.equal(bg2.shouldReduce('group:B').level, 0, '别的会话被误伤');
   });
 
-  // —— 语义卡 ——
+  // 语义卡
   ok('语义卡：垃圾句在写入前就被拦下（内置版是事后清理，且那个方法从未被调用）', () => {
     assert.equal(Cards.classify('哈哈哈哈这也太草了'), null);
     assert.equal(Cards.classify('[图片]'), null);
@@ -696,7 +696,7 @@ console.log('\nD. 附加五项（跨轮 · 待办 · 护栏 · 语义卡 · 旁�
     assert.ok(new Cards(dataRoot, get).sweep() >= 1, '僵尸卡没被清掉');
   });
 
-  // —— 跨群旁听 ——
+  // 跨群旁听
   writeMessages(root, 'group:50005', [
     { id: 1, ts: Date.now() - 60000, self: false, senderId: '2001', senderName: '隔壁甲', text: '今天晚上一起开黑打排位' },
     { id: 2, ts: Date.now() - 50000, self: false, senderId: '2002', senderName: '隔壁乙', text: '开黑可以，排位我打野' },
@@ -722,7 +722,7 @@ console.log('\nD. 附加五项（跨轮 · 待办 · 护栏 · 语义卡 · 旁�
 // ── F. 回归：本轮修掉的问题逐条钉住 ─────────────────────────────────────
 console.log('\nF. 回归（设置项语义 · 权重继承 · 回填 · 截断）');
 {
-  // —— 设置项语义：没配置 ≠ 配了下限 ——
+  // 设置项语义：没配置 ≠ 配了下限
   ok('设置项未配置时用默认值，而不是被夹成下限', () => {
     assert.equal(num(undefined, 90, 1, 3650), 90);
     assert.equal(num(null, 500, 20, 5000), 500);
@@ -774,7 +774,7 @@ console.log('\nF. 回归（设置项语义 · 权重继承 · 回填 · 截断�
     assert.equal(c.match('婚礼', { chatKey: 'group:70010' }).length, 0, '不相关查询不该命中');
   });
 
-  // —— C5 回归（2026-10-14 修）：整串短语权重必须过停用词表 ——
+  // C5 回归：整串短语权重必须过停用词表
   // 曾经「我们」「什么」这类两字停用词查询会带着权重 4 上场，
   // 而停用词永远不进索引 → 必然落到子串回退，把 4000 次 fuzzy 预算
   // 整份烧掉后零命中返回（fuzzyBudget 还是跨 token 共享的）。
@@ -783,14 +783,14 @@ console.log('\nF. 回归（设置项语义 · 权重继承 · 回填 · 截断�
     assert.equal(queryTokens('我们').size, 0, '「我们」仍产出了 token');
     assert.equal(queryTokens('的').size, 0, '单字停用词仍产出了 token');
     // 「什么」的单字成分（什/么）不在停用词表里，会直查 postings（便宜，无回退扫描）；
-    // 但不能带着权重 4 的**整串**上场 —— 那才是烧掉 4000 次 fuzzy 预算的东西。
+    // 但不能带着权重 4 的**整串**上场，那才是烧掉 4000 次 fuzzy 预算的东西。
     const w = queryTokens('什么');
     assert.ok(!w.has('什么'), '「什么」仍带着整串权重 4 上场（会白烧 fuzzy 预算）');
     assert.ok(queryTokens('火锅').size > 0, '正常查询被误伤');
     assert.ok(queryTokens('显卡涨价').size > 0, '正常查询被误伤');
   });
 
-  // —— 权重继承 ——
+  // 权重继承
   ok('日块合并继承小时块的记忆强度（不被重置为 1/0，S 也要接过来）', () => {
     const root = freshRoot('f5');
     const key = 'group:71011';
@@ -800,7 +800,7 @@ console.log('\nF. 回归（设置项语义 · 权重继承 · 回填 · 截断�
     const ids = env.store.listBlockIds(key);
     assert.ok(ids.length >= 2, `块数 ${ids.length}`);
     // ⚠️ 必须"隔一段时间再想起"，不能连打三次：
-    //    增益现在是间隔依赖的（r = log2(1 + 间隔/S)），同一瞬间连打 r≈0、几乎不加分 ——
+    //    增益现在是间隔依赖的（r = log2(1 + 间隔/S)），同一瞬间连打 r≈0、几乎不加分，
     //    这正是要钉住的行为，不是 bug。想造出"记得牢"就得模拟真实的间隔回忆。
     hitAged(env.store, key, ids[0], 3, 20, 2);
     const before = env.store.blockMeta(key, ids[0]);
@@ -815,7 +815,7 @@ console.log('\nF. 回归（设置项语义 · 权重继承 · 回填 · 截断�
     assert.ok(after.hits >= 3, `合并后 hits=${after.hits}`);
     assert.ok(after.lastHitAt > 0, '合并后 lastHitAt 丢了');
     // 稳定性必须一起继承：否则"每两周被想起一次、S 已长到 120 天"的老块，
-    // 一滚成日块就被打回全局 45 天 —— 越老的块滚得越多、稳定性丢得越狠。
+    // 一滚成日块就被打回全局 45 天，越老的块滚得越多、稳定性丢得越狠。
     assert.ok(after.S >= before.S, `合并后稳定性从 ${before.S} 掉到 ${after.S}`);
   });
 
@@ -836,12 +836,12 @@ console.log('\nF. 回归（设置项语义 · 权重继承 · 回填 · 截断�
     const store2 = new LayeredStore(path.join(root, 'memory-v3'), () => env.settings);
     const got = store2.blockMeta(key, ids[0]).score;
     assert.equal(got, want, `重建后 score 从 ${want} 变成 ${got}`);
-    // S 不读回来的话，重建后 S 会退回全局 45 天 —— 权重看着还在，
+    // S 不读回来的话，重建后 S 会退回全局 45 天，权重看着还在，
     // 但衰减速度被悄悄改回默认值，"记得牢"这件事丢了。
     assert.equal(store2.blockMeta(key, ids[0]).S, beforeMeta.S, '重建后每块的稳定性丢了');
   });
 
-  // —— 注入截断 ——
+  // 注入截断
   ok('注入预算很小时截断保留，而不是一条都不给', () => {
     const root = freshRoot('f7');
     const key = 'group:73013';
@@ -854,7 +854,7 @@ console.log('\nF. 回归（设置项语义 · 权重继承 · 回填 · 截断�
     assert.ok(t.includes('旧事'), t);
   });
 
-  // —— 全局检索排序 ——
+  // 全局检索排序
   ok('全局检索优先扫最近活跃的会话（而不是按索引建立先后）', () => {
     const root = freshRoot('f8');
     const env = makeEnv(root);
@@ -869,7 +869,7 @@ console.log('\nF. 回归（设置项语义 · 权重继承 · 回填 · 截断�
     assert.equal(order[0], 'group:74000', `顺序不对：${order.join(' , ')}`);
   });
 
-  // —— 历史回填 ——
+  // 历史回填
   ok('会话超过单批上限时，早期消息最终也能进记忆库（不再静默丢弃）', () => {
     const root = freshRoot('f9');
     const key = 'group:75015';
@@ -898,7 +898,7 @@ console.log('\nF. 回归（设置项语义 · 权重继承 · 回填 · 截断�
     assert.equal(r2.added, 0);
   });
 
-  // —— 护栏会话表上限 ——
+  // 护栏会话表上限
   ok('护栏的会话表有上限（不会无限增长）', () => {
     const root = freshRoot('f11');
     const s = { ...defaults(), dayPromptMax: 0, chatPromptMax: 0 };
@@ -1085,7 +1085,7 @@ console.log('\nE. 端到端接线（假宿主目录 + import index.js）');
     await mod.hooks['before-llm-messages']({ sessionId: 'sess-2', chatKey, messages: sysOnly });
     assert.equal(sysOnly[0].content, 'SYSTEM-ONLY', 'system 被改了');
     assert.equal(count(), before, '没送达却记了被动命中');
-    // 反证：清掉冷却 + 给一条 user 消息，同一批块就该被记上 —— 说明上面不是"恰好没内容可注入"
+    // 反证：清掉冷却 + 给一条 user 消息，同一批块就该被记上，说明上面不是"恰好没内容可注入"
     const ok1 = [{ role: 'user', content: 'USER-BODY' }];
     await mod.hooks['before-context']({
       sessionId: 'sess-3', chatKey, triggerEntries: [{ text: '上次说的猫粮买了没', senderId: '1001' }]
@@ -1400,7 +1400,7 @@ console.log('\nG. 引擎冲突自检（内置「分层会话记忆」仍开启�
     assert.equal(snap.builtinActive, true);
     assert.equal(snap.selfFirst, false);
     assert.ok(typeof snap.hint === 'string' && snap.hint.includes('关掉'));
-    JSON.stringify(snap);   // 必须能序列化 —— 它要回给模型工具
+    JSON.stringify(snap);   // 必须能序列化，它要回给模型工具
   });
 
   ok('冲突：announce() 文案短、含关键指引、且明确"说一次就够"', () => {
@@ -1413,7 +1413,7 @@ console.log('\nG. 引擎冲突自检（内置「分层会话记忆」仍开启�
     assert.ok(a.includes('说一次就够'), `没拦住模型反复念叨：${a}`);
   });
 
-  // 探针必须"零 IO"：全新 import 后直接问探针，不该建出数据根 ——
+  // 探针必须"零 IO"：全新 import 后直接问探针，不该建出数据根，
   // 它是在 activate() 里被调的，那里多一次磁盘遍历就是白等。
   {
     const host2 = path.join(os.tmpdir(), `mem-layered-probe-${process.pid}`);
@@ -1455,7 +1455,7 @@ console.log('\nG. 引擎冲突自检（内置「分层会话记忆」仍开启�
 // 对应 docs/human-like-memory.html 的七项提案，逐条钉住。
 console.log('\nH. 人类化记忆模型（间隔增益 · 每块稳定性 S · 被动≠主动）');
 {
-  // —— H1 间隔依赖增益：密集命中不该把块顶到封顶 ——
+  // H1 间隔依赖增益：密集命中不该把块顶到封顶
   ok('密集命中（间隔≈0）几乎不加分 —— 掐断"越被注入越强"的正反馈', () => {
     const root = freshRoot('h1');
     const key = 'group:81001';
@@ -1471,7 +1471,7 @@ console.log('\nH. 人类化记忆模型（间隔增益 · 每块稳定性 S · �
     assert.equal(meta.hits, 8, `hits 应该照常计数，实际 ${meta.hits}`);
   });
 
-  // —— H2 间隔命中应该把 S 抬高 ——
+  // H2 间隔命中应该把 S 抬高
   ok('间隔命中把稳定性 S 抬高（同样 8 次，间隔 vs 密集差一个数量级）', () => {
     const root = freshRoot('h2');
     const key = 'group:81002';
@@ -1486,7 +1486,7 @@ console.log('\nH. 人类化记忆模型（间隔增益 · 每块稳定性 S · �
     assert.ok(meta.score > 1.35, `score=${meta.score}，间隔命中应该比密集命中（=1）明显高`);
   });
 
-  // —— H3 被动 vs 主动：passive 只记计数 ——
+  // H3 被动 vs 主动：passive 只记计数
   ok('被动命中（mode:passive）只记 passiveHits，score/S/锚点一个字节都不动', () => {
     const root = freshRoot('h3');
     const key = 'group:81003';
@@ -1521,7 +1521,7 @@ console.log('\nH. 人类化记忆模型（间隔增益 · 每块稳定性 S · �
     assert.ok(doomed.includes(id), '只被动看过 20 次的老块居然活下来了 —— 库会无限膨胀');
   });
 
-  // —— H4 检索计权三态 ——
+  // H4 检索计权三态
   ok("feedback:'off' 时检索一个字节都不写（score/S/hits 全不动）", () => {
     const root = freshRoot('h5');
     const key = 'group:81005';
@@ -1548,7 +1548,7 @@ console.log('\nH. 人类化记忆模型（间隔增益 · 每块稳定性 S · �
     const pm = env.store.blockMeta(key, p.chunkId);
     assert.equal(pm.passiveHits, 1, 'passive 没计数');
     assert.equal(pm.hits, 0, 'passive 不该动 hits');
-    // 主检索（默认 feedback:'full'）要真加分 —— 但间隔≈0，所以只能看到 hits 增长
+    // 主检索（默认 feedback:'full'）要真加分，但间隔≈0，所以只能看到 hits 增长
     env.recall.search('猫粮', { chatKey: key, limit: 1 });
     assert.ok(env.store.blockMeta(key, p.chunkId).hits >= 1, 'full 没记 hits');
   });
@@ -1571,7 +1571,7 @@ console.log('\nH. 人类化记忆模型（间隔增益 · 每块稳定性 S · �
     }
   });
 
-  // —— H5 稳定性回落 ——
+  // H5 稳定性回落
   ok('没有 S 的块回落到全局半衰期，而不是被夹成下限 1 天', () => {
     const root = freshRoot('h8');
     const env = makeEnv(root, { decayHalfLifeDays: 90 });
@@ -1600,7 +1600,7 @@ console.log('\nH. 人类化记忆模型（间隔增益 · 每块稳定性 S · �
     assert.ok(meta.score <= 1.6 + 1e-6, `score=${meta.score} 超了 R_MAX 的封顶`);
   });
 
-  // —— H6 衰减形状 ——
+  // H6 衰减形状
   ok('Weibull 形状 q<1 拖出长尾：180 天时比纯指数厚，且 t=S 处与纯指数重合', () => {
     const root = freshRoot('h10');
     // 固定 now：直接用 Date.now() 会在两次调用之间漂移几毫秒，
@@ -1623,11 +1623,11 @@ console.log('\nH. 人类化记忆模型（间隔增益 · 每块稳定性 S · �
     const root = freshRoot('h11');
     // ⚠️ "当前时刻"必须**只读一次并显式传给被测代码**。
     //    早先这里写 `when: Date.now() - 180*DAY`，让 effectiveScore 自己再读一次
-    //    Date.now() 当 now —— 两次调用之间差几毫秒，ageDays 就不是精确的 180，
+    //    Date.now() 当 now，两次调用之间差几毫秒，ageDays 就不是精确的 180，
     //    浮点结果抖出 1e-9 量级的偏差，于是这条断言**偶尔**失败（12 次里约 1 次）。
     //    测试里凡是"相对现在往前拨 N 天"的，都要把 now 钉死成同一个值。
     // ⚠️ reminiscenceAmp 显式关掉：这条断言验的是 **decayShape 的默认值处理**，
-    //    180 天已进入深忘区（>3S），自发恢复会叠一个回升项 —— 那是另一个特性，
+    //    180 天已进入深忘区（>3S），自发恢复会叠一个回升项，那是另一个特性，
     //    在这里属于噪声（v1.7.0 起两者正交，各自有各自的断言）。
     const now = Date.now();
     const meta = { score: 3, when: now - 180 * DAY, lastHitAt: 0, S: 45 };
@@ -1654,7 +1654,7 @@ console.log('\nH. 人类化记忆模型（间隔增益 · 每块稳定性 S · �
     assert.equal(meta.S, 45, `stabilityGain=0 时 S 不该增长，实际 ${meta.S}`);
   });
 
-  // —— H7 向后兼容 ——
+  // H7 向后兼容
   ok('旧签名 markHit(k, id, 1.15) 仍按"主动回忆"处理', () => {
     const root = freshRoot('h13');
     const key = 'group:81013';
@@ -1743,9 +1743,9 @@ console.log('\nJ. 梗概墓碑（模糊痕迹 · 节省效应）');
     assert.ok(env.store.blockMeta('group:90004', gid).hits >= 1, '复活本身是一次成功提取（测试效应）');
   });
 
-  // —— B2 回归（2026-10-14 修）：墓碑复活时 hits 必须继承原块的累计回忆次数 ——
+  // B2 回归：墓碑复活时 hits 必须继承原块的累计回忆次数
   // 曾经 gist.search 把存储的 hits 覆盖成"本次检索的关键词命中数"，
-  // reviveBlock 又拿这个临时值 +1 写回块 —— "被想起过 20 次"的块一复活
+  // reviveBlock 又拿这个临时值 +1 写回块，"被想起过 20 次"的块一复活
   // 只剩"关键词命中 5 次 + 1"。J4 的 `hits >= 1` 断言抓不到（它只查下限）。
   ok('J4b 墓碑复活后 hits 继承原块累计值（不被检索打分的临时值覆盖）', () => {
     const root = freshRoot('j4b');
@@ -1759,7 +1759,7 @@ console.log('\nJ. 梗概墓碑（模糊痕迹 · 节省效应）');
     // 直接构造"被想起过 20 次、但已经 400 天没人想起"的块
     // （不能用连打 markHit 造：增益是间隔依赖的，密集命中 r≈0）
     // ⚠️ v1.7.0：150 天这类"刚进深忘区"的块会被自发恢复托住（那是故意的，
-    //    见 N3），要造"真的衰到淘汰线以下"得推到 400 天 —— 回升项自己也衰减。
+    //    见 N3），要造"真的衰到淘汰线以下"得推到 400 天，回升项自己也衰减。
     const lastHitAt = Date.now() - 400 * DAY;
     env.store.noteBlock(key, dayId, { hits: 20, score: 1.0, S: 45, lastHitAt });
     const meta = env.store.blockMeta(key, dayId);
@@ -1879,7 +1879,7 @@ console.log('\nK. 多线索检索（按「在场的人」加权）');
       text: `火锅 的事情 再 详细 说说 第 ${i} 遍`
     })));
     // ⚠️ dfCutoffRatio=1（不剪）：测试语料只有一个块，df/n 恒为 1，
-    //    默认 0.7 会把所有短词（含「火锅」）全部剪掉 —— 检索必然空手而归。
+    //    默认 0.7 会把所有短词（含「火锅」）全部剪掉，检索必然空手而归。
     //    真实使用里块数是几十上百，df/n 才有区分度（这正是剪枝的用意）。
     const env = makeEnv(root, { dfCutoffRatio: 1, ...overrides });
     env.consolidator.consolidateChat(key);
@@ -1948,10 +1948,10 @@ console.log('\nL. 结果多样性 · 复活退避 · 懒自愈');
    * 用来验证「top-N 会不会是同一段对话的几个侧面」。
    */
   // 前 3 个块是同一话题（火锅，词汇高度重叠），后 2 个是别的话题。
-  // ⚠️ 每个话题必须有自己的**专属词**，不能靠"讨论/事情/相关"这类通用词凑 ——
+  // ⚠️ 每个话题必须有自己的**专属词**，不能靠"讨论/事情/相关"这类通用词凑，
   //    真实语料也是这样：不同话题的词汇本来就不一样。
   //    （早先用通用词凑出来的语料，两个不同话题块的关键词 4/5 相同，
-  //    纯 Jaccard 算出 0.67 的重叠 —— MMR 被"假重叠"骗住，根本打不散。）
+  //    纯 Jaccard 算出 0.67 的重叠，MMR 被"假重叠"骗住，根本打不散。）
   const TOPICS = [
     ['火锅', '涮肉', '蘸料', '麻辣', '锅底'],
     ['火锅', '涮肉', '蘸料', '鸳鸯', '毛肚'],
@@ -2067,7 +2067,7 @@ console.log('\nL. 结果多样性 · 复活退避 · 懒自愈');
     const g = env.gist.list(key).find((x) => x.id === gid);
     assert.equal(g.reviveFails, 3, '应当记下 3 次重建失败');
     assert.equal(g.unrevivable, true, '3 次之后应当标成救不回来');
-    // 第 4 次不该再试 —— 否则这条墓碑每被命中一次就要同步读一遍整个会话文件
+    // 第 4 次不该再试，否则这条墓碑每被命中一次就要同步读一遍整个会话文件
     let calls = 0;
     env.recall.revive = () => { calls += 1; return null; };
     const hits = env.recall.search('猫粮', { chatKey: key, limit: 3, feedback: 'off' });
@@ -2098,7 +2098,7 @@ console.log('\nL. 结果多样性 · 复活退避 · 懒自愈');
 
 // ── M. 省 token：碎片级跨轮去重 / 相关度早停 / 预算行宽联动 ─────────────
 // 目标只有一个：**同样的命中率，更少的字符**。三条新防线都设计成"少给重复与
-// 低分内容"，而不是"少给内容" —— 所以每条断言都要同时确认省了、且没把新内容挡掉。
+// 低分内容"，而不是"少给内容"，所以每条断言都要同时确认省了、且没把新内容挡掉。
 console.log('\nM. 省 token（跨轮碎片去重 · 相关度早停 · 预算行宽联动）');
 {
   const DAY = 86400000;
@@ -2140,7 +2140,7 @@ console.log('\nM. 省 token（跨轮碎片去重 · 相关度早停 · 预算行
     assert.ok(r1.text.length > 0, '第一轮应当能注入');
     assert.ok((env.injector.lastMids.get(key)?.size || 0) > 0, '应当记下给过哪些碎片');
 
-    // ⚠️ 只清**块级冷却**，保留 lastMids —— 块 id 没变、冷却已清，
+    // ⚠️ 只清**块级冷却**，保留 lastMids，块 id 没变、冷却已清，
     //    此刻还能拦住重复的就只剩"碎片身份"这一层。混淆两层防线就等于没测。
     env.injector.recent.delete(key);
     env.injector.lastLines = [];
@@ -2202,7 +2202,7 @@ console.log('\nM. 省 token（跨轮碎片去重 · 相关度早停 · 预算行
     const env = seed(root);
     env.consolidator.consolidateChat(key);
     // 预算 220。旧实现每条固定 90 字符上限，超预算就从后往前**整条**砍：
-    // 语料里每条原话约 15 字，四条本来都放得下 —— 但换成 90 字/条的长原话时
+    // 语料里每条原话约 15 字，四条本来都放得下，但换成 90 字/条的长原话时
     // 旧做法只能放 1 条多，剩下两条直接没了。联动后按预算摊行宽。
     const r = env.injector.build({ chatKey: key, triggerText: '火锅 好吃 约定', budgetScale: 1 });
     const rows = r.text.split('\n').filter((l) => l.startsWith('- '));
@@ -2265,7 +2265,7 @@ console.log('\nM. 省 token（跨轮碎片去重 · 相关度早停 · 预算行
       const q = '火锅 真好吃 约定 下次';
       let chars = 0;
       for (let i = 0; i < 6; i += 1) {
-        // 只清块冷却、保留碎片记忆 —— 真实场景里"同一话题连续聊几轮"就是这样
+        // 只清块冷却、保留碎片记忆，真实场景里"同一话题连续聊几轮"就是这样
         env.injector.recent.delete(key);
         env.injector.lastLines = [];
         const r = env.injector.build({ chatKey: key, triggerText: q });
@@ -2283,8 +2283,8 @@ console.log('\nM. 省 token（跨轮碎片去重 · 相关度早停 · 预算行
     assert.equal(shots(), 6, '两组跑的是同样的 6 轮');
   });
 
-  // M9（2026-10-15 补）：recallRowWidth > 0（用户在面板里钉死行宽）必须能跑通。
-  // 曾经的坑：inject.js 只 import 了 formatWhen，这个分支里的 num 未定义 ——
+  // M9：recallRowWidth > 0（用户在面板里钉死行宽）必须能跑通。
+  // 曾经的坑：inject.js 只 import 了 formatWhen，这个分支里的 num 未定义，
   // 用户一把行宽调成非 0，每轮自动注入就 ReferenceError，再被 buildInject 的
   // try/catch 吞掉，表现为「自动回忆静默消失、不报错」。
   // 由 tools/bench-tokens.mjs 的「三件套全关」配置（recallRowWidth: 90）实跑出来。
@@ -2321,7 +2321,7 @@ console.log('\nN. 人类记忆机制包 v1.7.0（共激活联想 · 自发恢复
     return block;
   };
 
-  // —— N1 共激活结缘 ——
+  // N1 共激活结缘
   ok('N1 同轮检索让命中块结缘（双向链接，索引丢了能从 state 恢复）', () => {
     const root = freshRoot('n1');
     const key = 'group:91001';
@@ -2369,7 +2369,7 @@ console.log('\nN. 人类记忆机制包 v1.7.0（共激活联想 · 自发恢复
     assert.equal(Number(back.links?.[ids[1]]), 20, '索引重建后 links 丢了');
   });
 
-  // —— N2 激活扩散（加分 + fan-out 带出）——
+  // N2 激活扩散（加分 + fan-out 带出）
   ok('N2 激活扩散：与 top 命中结缘的块，字面零匹配也会被带出来', () => {
     const root = freshRoot('n2');
     const key = 'group:91003';
@@ -2393,7 +2393,7 @@ console.log('\nN. 人类记忆机制包 v1.7.0（共激活联想 · 自发恢复
     assert.ok(!hits2.some((h) => h.chunkId === b), 'linkBoost=0 了还在扩散');
   });
 
-  // —— N3 自发恢复 ——
+  // N3 自发恢复
   ok('N3 自发恢复：先沉下去 → 弹一下 → 终局仍被淘汰', () => {
     const root = freshRoot('n3');
     const key = 'group:91004';
@@ -2437,7 +2437,7 @@ console.log('\nN. 人类记忆机制包 v1.7.0（共激活联想 · 自发恢复
     assert.ok(!doomed.includes(hourBlockId(key, now - 140 * DAY)), '140 天的块被误汰 —— 那正是"突然想起来"该救的');
   });
 
-  // —— N4 时段情境（编码特异性）——
+  // N4 时段情境（编码特异性）
   ok('N4 时段情境：同一内容，发生在当下时段的块排更前（可关）', () => {
     const root = freshRoot('n4');
     const key = 'group:91005';
@@ -2460,7 +2460,7 @@ console.log('\nN. 人类记忆机制包 v1.7.0（共激活联想 · 自发恢复
     assert.ok(h2[0].score / h2[1].score < 1.02, 'todBoost=1 了时段还在加分');
   });
 
-  // —— N5 睡眠重演挑块 ——
+  // N5 睡眠重演挑块
   ok('N5 睡眠重演挑块：gap≈S 且还想得起来的才选，冷却期内不选', () => {
     const root = freshRoot('n5');
     const key = 'group:91006';
@@ -2486,7 +2486,7 @@ console.log('\nN. 人类记忆机制包 v1.7.0（共激活联想 · 自发恢复
     assert.ok(store.dueReviews(key, { limit: 4 }).includes(cooling), '冷却过了还不选');
   });
 
-  // —— N6 重演注入 ——
+  // N6 重演注入
   ok('N6 重演注入：文本带【突然想起】、进冷却不重播、刚给过的原话不播、可整体关闭', () => {
     const root = freshRoot('n6');
     const key = 'group:91007';
@@ -2518,7 +2518,7 @@ console.log('\nN. 人类记忆机制包 v1.7.0（共激活联想 · 自发恢复
     assert.equal(env3.injector.buildReplay({ chatKey: key }).text, '', 'sleepReplay=false 没关掉');
   });
 
-  // —— N7 纯记忆边界守卫（v1.7.0 新增机制同样不许猜情绪）——
+  // N7 纯记忆边界守卫（v1.7.0 新增机制同样不许猜情绪）
   ok('N7 边界守卫：新机制只依赖时间与共现，不依赖内容情绪', () => {
     const root = freshRoot('n7');
     const key = 'group:91008';
@@ -2558,7 +2558,7 @@ console.log('\nI. 即插即用审计（manifest / 权限白名单 / 依赖 / 路
 {
   const pkg = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, 'plugin.json'), 'utf8'));
 
-  // —— 宿主 normalizeManifest 的规则（src/skills/manifest.js）——
+  // 宿主 normalizeManifest 的规则（src/skills/manifest.js）
   ok('I1 manifest 通过宿主 normalizeManifest 的全部规则', () => {
     assert.ok(/^[a-z0-9][a-z0-9._-]*$/i.test(pkg.id), `id 非法：${pkg.id}`);
     assert.ok(String(pkg.name || '').trim(), '缺 name');
@@ -2578,7 +2578,7 @@ console.log('\nI. 即插即用审计（manifest / 权限白名单 / 依赖 / 路
     for (const c of need) assert.ok(pkg.capabilities.includes(c), `缺能力：${c}`);
   });
 
-  // —— 宿主 createSkillApi 的白名单（src/plugin-loader.js:476-546）——
+  // 宿主 createSkillApi 的白名单（src/plugin-loader.js:476-546）
   ok('I3 所有 api.* 调用都在 createSkillApi 白名单内', () => {
     const API = new Set(['registerTool', 'config', 'storage', 'isSkillActive', 'capability', 'hasCapability', 'log', 'warn', 'error', 'fetch', 'utils']);
     const UTILS = new Set(['sleep', 'safeJsonParse']);
@@ -2600,7 +2600,7 @@ console.log('\nI. 即插即用审计（manifest / 权限白名单 / 依赖 / 路
     assert.equal(bad.length, 0, `越界调用：\n      ${bad.join('\n      ')}`);
   });
 
-  // —— 依赖与路径 ——
+  // 依赖与路径
   ok('I4 零 npm 依赖：只 import node: 内置模块与相对路径', () => {
     const bad = [];
     for (const f of listSourceFiles()) {
@@ -2620,7 +2620,7 @@ console.log('\nI. 即插即用审计（manifest / 权限白名单 / 依赖 / 路
       const s = fs.readFileSync(f, 'utf8');
       for (const m of s.matchAll(/\bfrom\s+['"](\.[^'"]+)['"]/g)) {
         const target = path.resolve(path.dirname(f), m[1]);
-        // ⚠️ lib/env.js 故意 import 宿主的 ../../../src/config.js —— 这是唯一允许越界的例外：
+        // ⚠️ lib/env.js 故意 import 宿主的 ../../../src/config.js，这是唯一允许越界的例外：
         //    它是"跟宿主拿 DATA_DIR"的正道，自己拼路径会在多 profile 下写错目录。
         const relToPlugin = path.relative(PLUGIN_DIR, target);
         const outside = relToPlugin.startsWith('..');
@@ -2637,7 +2637,7 @@ console.log('\nI. 即插即用审计（manifest / 权限白名单 / 依赖 / 路
 
   ok('I6 源码里没有绝对路径 / 工作区路径 / 机器名硬编码', () => {
     const bad = [];
-    // 盘符路径、UNC、POSIX 家目录。要跳过本文件 —— 这行正则字面量本身就在被扫的源码里。
+    // 盘符路径、UNC、POSIX 家目录。要跳过本文件，这行正则字面量本身就在被扫的源码里。
     const ABS = /(?:^|[^A-Za-z0-9_])[A-Za-z]:[\\/]|\\\\\\\\[A-Za-z0-9_.-]+\\|\/(?:Users|home|root|mnt|Volumes)\//;
     for (const f of listSourceFiles()) {
       const s = fs.readFileSync(f, 'utf8');
@@ -2648,7 +2648,7 @@ console.log('\nI. 即插即用审计（manifest / 权限白名单 / 依赖 / 路
     assert.equal(bad.length, 0, `硬编码路径：\n      ${bad.join('\n      ')}`);
   });
 
-  // —— 设置项（宿主只允许改 settings ∪ configSchema 里的键）——
+  // 设置项（宿主只允许改 settings ∪ configSchema 里的键）
   ok('I7 settings 与 configSchema 一一对应（否则有的设置改不了、有的改了没用）', () => {
     const sk = Object.keys(pkg.settings).sort();
     const ck = Object.keys(pkg.configSchema).sort();
@@ -2677,9 +2677,9 @@ console.log('\nI. 即插即用审计（manifest / 权限白名单 / 依赖 / 路
   });
 
   ok('I9b DEFAULTS 的默认值与 manifest.settings 逐键一致（防"改一处漏一处"）', () => {
-    // ⚠️ I9 只检查"键都在 manifest 里"，**不检查值**。2026-10-21 的词表塌缩事故
+    // I9 只检查"键都在 manifest 里"，不检查值。词表塌缩事故正是这样发生的：
     //    正是这样发生的：index.js 的 DEFAULTS 改成了 100000，plugin.json 的
-    //    settings 还是 20000，而设置合并后 manifest 的值优先 ——
+    //    settings 还是 20000，而设置合并后 manifest 的值优先，
     //    代码里的兜底值成了死代码，改了三处等于一处没改，且全程无报错。
     const src = fs.readFileSync(path.join(PLUGIN_DIR, 'index.js'), 'utf8');
     const body = /const DEFAULTS = \{([\s\S]*?)\n\};/.exec(src)[1];
@@ -2740,11 +2740,11 @@ console.log('\nI. 即插即用审计（manifest / 权限白名单 / 依赖 / 路
   });
 }
 
-// ── O. 索引维护性能：unindexBlock 按块词清单摘词（P1，2026-10-15 修）──────
-// 改之前：每次摘词遍历整个词表过滤 —— 实测 1000 块 / 10 万词表单次 51ms、
+// ── O. 索引维护性能：unindexBlock 按块词清单摘词 ─────────────────────────
+// 改之前：每次摘词遍历整个词表过滤，实测 1000 块 / 10 万词表单次 51ms、
 // 全量重索引 999 块 21.1s（首日回填 / force 重建就这个量级）。
 // 改之后：每块索引 meta 带自己贡献的词清单（terms），摘词只碰这些词
-// —— 同基准 1ms / 83ms。代价是索引体积 +13%（实测），精度零损失。
+// 同基准 1ms / 83ms。代价是索引体积 +13%（实测），精度零损失。
 console.log('\nO. 索引维护（按块词清单摘词 · pruneVocab 不物化大数组）');
 {
   const mkBlock = (b) => {
@@ -2829,7 +2829,7 @@ console.log('\nO. 索引维护（按块词清单摘词 · pruneVocab 不物化�
     for (const b of blocks) { store.writeBlock(key, b); store.indexBlock(key, b); }
     const idx = store.index(key);
     const before = new Set(Object.keys(idx.postings));
-    // minBlocksForCutoff: 1 —— 只有 2 个块，不显式放开样本量门槛就一个词都剪不掉
+    // minBlocksForCutoff: 1，只有 2 个块，不显式放开样本量门槛就一个词都剪不掉
     const dropped = store.pruneVocab(key, { maxVocab: 1000000, dfCutoffRatio: 0, minBlocksForCutoff: 1 });
     assert.ok(dropped > 0, '前置条件不成立：一个词都没剪掉');
     const pruned = [...before].filter((t) => !(t in idx.postings));
@@ -2906,7 +2906,7 @@ console.log('\nO. 索引维护（按块词清单摘词 · pruneVocab 不物化�
 }
 
 // ── P. 回填直通日块（v1.7.1：「出生即超龄」的小时块不落盘）───────────────
-// 首日回填时，超龄的小时块下一秒就会被合并成日块 —— 老路经要为此做
+// 首日回填时，超龄的小时块下一秒就会被合并成日块，老路经要为此做
 // 写→读→删 三次文件操作（本机 rmSync ≈ 21ms/次，360 天回填实测 32s）。
 // 新路径：它们先进内存桶，由 rollupChat 一次性合成日块，永不落盘。
 console.log('\nP. 回填直通日块（历史小时块不落盘 · 省 写→读→删 三连）');
@@ -2993,7 +2993,7 @@ console.log('\nP. 回填直通日块（历史小时块不落盘 · 省 写→读
 
 // ── Q. 多会话并发隔离（一个插件实例同时服务多个群）───────────────────────
 // 最致命的失效模式是"A 群内容串进 B 群提示词"；其次是共享注入器状态互相冲掉
-// （lastMids 曾被所有会话共享 —— B 群一轮 build 就把 A 群的 stale 记忆清光，
+// （lastMids 曾被所有会话共享，B 群一轮 build 就把 A 群的 stale 记忆清光，
 // 切回去重复原话拦不住，token 白烧。v1.7.1 修，Q2 钉住）。
 console.log('\nQ. 多会话隔离（内容零串味 · stale 记忆按会话独立 · 巩固互不污染）');
 {
@@ -3052,7 +3052,7 @@ console.log('\nQ. 多会话隔离（内容零串味 · stale 记忆按会话独�
     const env = makeEnv(root, { dfCutoffRatio: 1, peopleBoost: 1 });
     for (const k of [KA, KB]) env.consolidator.consolidateChat(k);
     // ⚠️ 断言要落到"结构性事实"上（lastMids 里两个会话各自非空且互不相同），
-    //    不能落在"a2 完全被拦"这种"结果性事实"上——后者会随检索排名变化而失真：
+    //    不能落在"a2 完全被拦"这种"结果性事实"上，后者会随检索排名变化而失真：
     //    a1 注入 A 群块 X 的 mid，a2 再检索时可能同时命中 X 和 Y，X 被 stale 拦住，
     //    但 Y 是新块、mid 不在 stale 里，就该注入；这时"完全被拦"就是错的期望。
     //    真正要钉的行为是"B 群那一轮不能冲掉 A 群的 Set"。
@@ -3137,8 +3137,8 @@ console.log('\nQ. 多会话隔离（内容零串味 · stale 记忆按会话独�
 //
 // 这一组守的不是"格式对不对"，而是**"省磁盘不许换召回"**：
 //   postings 里的块 id 从 33 字符的字符串换成 1~3 位的数字槽位、落盘不再缩进，
-//   体积降到 1/4 —— 但检索出来的块、顺序、分数必须逐位一样。
-// 为什么必须在这里钉住：格式变换写错了**不会报错**，只会让某些词查不到 ——
+//   体积降到 1/4，但检索出来的块、顺序、分数必须逐位一样。
+// 为什么必须在这里钉住：格式变换写错了**不会报错**，只会让某些词查不到，
 //   也就是说错了以后表现为"记忆偶尔想不起来"，比崩溃难查得多。
 {
   const root = freshRoot('r-format');
@@ -3161,7 +3161,7 @@ console.log('\nQ. 多会话隔离（内容零串味 · stale 记忆按会话独�
   const writeAsV2 = () => {
     fs.writeFileSync(idxFile, JSON.stringify(packIndex(env.store.index(key))), 'utf8');
   };
-  // feedback:'off' —— 否则检索本身会 markHit 改权重，两边比的就不是同一份权重了
+  // feedback:'off'，否则检索本身会 markHit 改权重，两边比的就不是同一份权重了
   const hitSig = () => makeEnv(root).recall
     .search('猫粮', { chatKey: key, limit: 3, feedback: 'off' })
     .map((h) => `${h.chunkId}@${h.score}`);
@@ -3177,7 +3177,7 @@ console.log('\nQ. 多会话隔离（内容零串味 · stale 记忆按会话独�
         assert.ok(Number.isInteger(p[0]) && p[0] >= 0 && p[0] < disk.ids.length, `槽位越界：${p[0]}`);
       }
     }
-    // ⚠️ 内存里**必须**还是字符串 id —— recall.js 的命中循环、unindexBlock 的
+    // ⚠️ 内存里**必须**还是字符串 id，recall.js 的命中循环、unindexBlock 的
     //    精确摘词、自测的 O1~O4 全按 `p[0] === 块id` 写。格式转换只许发生在磁盘边界。
     const mem = env.store.index(key);
     assert.ok(Object.keys(mem.postings).length, '内存索引是空的');
@@ -3193,7 +3193,7 @@ console.log('\nQ. 多会话隔离（内容零串味 · stale 记忆按会话独�
 
   ok('R3 槽位化的效果确实发生了（对比"只做紧凑化、不换 id"的对照）', () => {
     // ⚠️ 为什么不能只断言"文件小了"：那样**区分不出**"只把缩进去掉"和"真的把 id
-    //    换成了槽位" —— 前者也能让文件小三成，测试会假绿。这里直接和
+    //    换成了槽位"，前者也能让文件小三成，测试会假绿。这里直接和
     //    「紧凑序列化但仍用字符串 id」的对照比，要求再省一半以上。
     //    形状按真实数据造：33 字符的块 id，每条 id 被复用 8 次（实测群
     //    123456789 是 34402 条 posting / 30 个 id，复用约 1150 次）。
@@ -3297,9 +3297,9 @@ process.exit(failures ? 1 : 0);
  * 列出插件目录下所有 .js/.mjs 源文件（绝对路径）。
  * @param {{includeSelf?: boolean}} [opts]
  *   includeSelf：默认 **false**，即跳过本文件。拿正则扫源码的那几条检查（I3/I6/I10/I11）
- *   必须跳过自己 —— 那些检查的模式**字面量本身就写在本文件里**，扫自己必然自匹配：
+ *   必须跳过自己，那些检查的模式**字面量本身就写在本文件里**，扫自己必然自匹配：
  *   ABS 里写着 `/Users|home/`、CREDENTIAL 里写着 `.env`、I11 的禁用词表里写着
- *   `account.json` —— 都在被扫的源码里。（这一条是真踩到的假阳性。）
+ *   `account.json`，都在被扫的源码里。（这一条是真踩到的假阳性。）
  */
 function listSourceFiles({ includeSelf = false } = {}) {
   const out = [];

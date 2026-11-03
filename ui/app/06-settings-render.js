@@ -1,4 +1,4 @@
-// 〔设置渲染 / 模型目录 / 技能插件页〕——M9 拆分第 7 段
+// 〔设置渲染 / 模型目录 / 技能插件页〕
 'use strict';
 // ── 模型目录（多提供商；面板式选择 + 图片输入能力徽标） ──
 function visionBadge(providerId, model) {
@@ -17,58 +17,40 @@ function visionVerdictOf(providerId, model) {
   return (state.visionResults || {})[`${providerId}|||${model}`]?.verdict;
 }
 
-// 说明：这里曾经有一个 bindModelDdDismiss()，目标是 #model-dd / #model-pick-btn，
-// 但真正的模型选择控件 id 是 #cfg-model-pick / #cfg-model（记忆页是 #cfg-mem-model-pick），
-// 那两个 id 全项目从未被创建过 —— 函数也从未被调用，属于纯死代码，已删除。
-// 若将来需要一个"点击外部/Esc 收起目录"的通用行为，请在 modelModalShell 里统一实现。
-
-
-
+// 模型选择控件的 id 是 #cfg-model-pick / #cfg-model（记忆页是 #cfg-mem-model-pick）。
+// 将来若要一个"点击外部/Esc 收起目录"的通用行为，在 modelModalShell 里统一实现。
 
 function renderSettingsSidebar() {
   const s = state.status;
   const sidebar = $('#settings-sidebar');
   if (!sidebar) return;
-  // ── 分区合并（移植旧版）──
-  // 9 项菜单太长，找东西靠扫两遍。按"用户脑子里的任务"合并成 5 项：
-  //   模型与搜索（api+search）/ 人设与记忆（persona+memory）/ 聊天（allow+chat）/
-  //   运行环境（onebot+desktop）/ 工具与技能（tools）。
-  // 合并页 = 两个渲染函数直接字符串拼接（各自内部逻辑一行未动）。敢拼的前提：
-  // 两两表单的元素 id 无交集（api∩search、persona∩memory、allow∩chat、onebot∩desktop
-  // 全为空集），不会出现 getElementById 取错元素。
-  // ⚠️ 被并掉的 id（search / memory / chat / onebot）不再出现在菜单里，但 saveConfig
-  //    仍按这些 id 收集字段 —— 条件已放宽到合并后的宿主 id（见 08-modals.js saveConfig），
+  // 分区按"用户脑子里的任务"划分，顺序是「填模型 → 连 QQ → 选群 → 调性格」。
+  // 合并页 = 两个渲染函数直接字符串拼接，敢拼的前提是两两表单的元素 id 无交集，
+  // 不会出现 getElementById 取错元素。
+  // ⚠️ 被并掉的 id（search / memory / chat）不再出现在菜单里，但 saveConfig
+  //    仍按这些 id 收集字段，条件已放宽到合并后的宿主 id（见 08-modals.js saveConfig），
   //    否则合并页里另一半表单不会被保存（静默丢配置）。
-  // 2026-09-20 二次重排：原「运行环境」(desktop) 一页塞了 OneBot 连接 + 桌面端 +
-  //    界面 + 数据管理四类互不相关的内容，长滚动里主题混杂。拆成两页：
-  //    「连接与启动」(onebot) = 机器人怎么连上 QQ；「界面与应用」(app) = 软件本身
-  //    （主题/刷新/预览 → 自启/托盘 → 数据 → 更新）。'desktop' 保留为兼容别名。
-  //    2026-09-21：页签名从「应用与界面」改为「**界面与应用**」，并同步把区块顺序调成
-  //    界面 → 桌面端（按使用频率：主题是这页最常改的；自启/托盘装完设一次就基本不动）。
-  // 第三列是图标 path，与原型 v2 的 NAV 逐字符相同（照原型 .sn-logo）
-  // 2026-10-23：分区名从"实现模块"改成"我要做的事"，并把「连接 QQ」从第 5 提到第 2 ——
-  // 新人的顺序是「填模型 → 连 QQ → 选群 → 调性格」，而不是"模型与搜索 / 人设与记忆"。
-  // ⚠️ id 一个都不能改：settingsSection 的取值、hc-fix-btn 的 data-target、
-  //    各分区 h3 的锚点（settings-api 等）全靠它。
+  // 第三列是图标 path。⚠️ id 一个都不能改：settingsSection 的取值、
+  //    hc-fix-btn 的 data-target、各分区 h3 的锚点（settings-api 等）全靠它。
   const menu = [
     ['api', '连接模型', 'M4 7h16M4 12h10M4 17h7'],
     ['onebot', '连接 QQ', 'M5 12h14M12 5l7 7-7 7'],
     ['allow', '聊天与权限', 'M4 5h16v11H8l-4 4z'],
     ['persona', '性格与记忆', 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M5 20a7 7 0 0 1 14 0'],
     ['tools', '能力与工具', 'M14 6l4 4-8 8H6v-4z'],
-    // 2026-11-03：ffmpeg 不再随安装包分发，改为这里按需下载。
-    // 放「能力与工具」之后 —— 它决定的正是"机器人能处理哪些媒体"。
+    // ffmpeg 不随安装包分发，改为这里按需下载。
+    // 放「能力与工具」之后：它决定的正是"机器人能处理哪些媒体"。
     ['media', '媒体工具', 'M4 6h11v12H4z M15 10l5-3v10l-5-3z'],
     ['app', '外观与数据', 'M3 5h18v14H3z M3 9h18']
   ];
-  // ── 快捷开关（r43，照原型 v2 设置左栏底部那 4 个，全部映射真实字段）──
-  //   自动回复     = autoReply.enabled（r43 新增后端字段：关 = 只读模式，消息照常存档不回复）
-  //   记忆功能     = memory.enabled（r43 新增：关 = 提示词不注入记忆 + memory_* 工具停 + 整理停）
+  // ── 快捷开关（设置左栏底部，全部映射真实字段）──
+  //   自动回复     = autoReply.enabled（关 = 只读模式，消息照常存档不回复）
+  //   记忆功能     = memory.enabled（关 = 提示词不注入记忆 + memory_* 工具停 + 整理停）
   //   前缀缓存保活 = cacheWarm.enabled（与「模型与搜索」页的同名开关同一字段，两处联动）
   //   群聊 @ 才响应 = 全局响应档位是否为 1 档：开 = 拨到 1 档，关 = 回 3 档 50%
   //                  （写 store.contextSliderPos，后端保存时权威重算 contextTier）
   const qc = state.config || {};
-  // 峰谷时段判定（r46 审查补）：与 src/config.js 的 peakWindowActive/parseHHMM 逐条镜像 ——
+  // 峰谷时段判定：与 src/config.js 的 peakWindowActive/parseHHMM 逐条镜像。
   // 峰谷开启时实际档位走 peak/valley 双点（storeConfigForChat 会覆盖全局滑条），
   // 开关初始态必须按"当前时刻实际生效的那个点"算，否则显示与行为不符。
   // 返回值：null = 峰谷没开（不参与）；true/false = 当前是否在高峰时段。
@@ -107,8 +89,8 @@ function renderSettingsSidebar() {
     { id: 'cacheWarm', label: '前缀缓存保活', on: qc.cacheWarm?.enabled === true },
     { id: 'atOnly', label: '群聊 @ 才响应', on: atOnlyOn }
   ];
-  // 2026-10-23：侧栏常驻"配置就绪"三枚小标 —— 体检卡只在未就绪时出现在页头，
-  // 老用户不被打扰；但新人在任何分区都应该随时看到"还差哪一项"。
+  // 侧栏常驻"配置就绪"三枚小标：体检卡只在未就绪时出现在页头，老用户不被打扰，
+  // 但新人在任何分区都应该随时看到"还差哪一项"。
   // 口径与 assessReadiness 一致（地址+模型算「模型」一项）。
   const readyModel = !!String(qc.api?.baseUrl || '').trim() && !!String(qc.api?.model || '').trim();
   const readyAllow = !!(qc.allow?.groups?.length || qc.allow?.private?.length || qc.allowAllWhenEmpty);
@@ -128,10 +110,9 @@ function renderSettingsSidebar() {
     </div>
     <div class="settings-menu">
       ${menu.map(([id, label, ico]) => {
-        // 2026-10-23 萌新化 P4：未配过的分区在菜单项上点小橙点，配好消失。
-        // 口径与侧栏就绪标三枚 chip 完全一致（模型/QQ/白名单三项首次必配），
-        // 不扩到全部六项 —— "配没配过"对 persona/tools/app 没有可靠判据，
-        // 乱点圆点反而误导。老用户配好后菜单干净如初。
+        // 未配过的分区在菜单项上点小橙点，配好消失。口径与侧栏就绪标三枚 chip
+        // 完全一致（模型/QQ/白名单三项首次必配），不扩到全部六项：
+        // "配没配过"对 persona/tools/app 没有可靠判据，乱点圆点反而误导。
         const needDot = (id === 'api' && !readyModel) || (id === 'onebot' && !readyQq) || (id === 'allow' && !readyAllow);
         return `<button class="settings-menu-item ${state.settingsSection === id ? 'active' : ''}" data-section="${id}"><svg class="sm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="${ico}" stroke-linejoin="round" stroke-linecap="round"/></svg><span class="sm-t">${label}</span>${needDot ? '<span class="sm-dot" title="这项还没配置，点这里去设置"></span>' : ''}${id === 'app' && updateAvailable ? '<span class="update-dot" title="发现新版本"></span>' : ''}</button>`;
       }).join('')}
@@ -139,7 +120,7 @@ function renderSettingsSidebar() {
       <span class="settings-menu-ind" aria-hidden="true"></span>
     </div>
     <!-- 使用引导（OOBE）手动入口：群友反馈"把说明书设置开屏弹出"之外，
-         也要能随时回看。刻意**不带** data-section —— 下面的点击绑定靠它
+         也要能随时回看。刻意**不带** data-section，下面的点击绑定靠它
          区分"分区项 / 功能项"，见该处 if (!el.dataset.section) 守卫。 -->
     <button class="settings-menu-item ob-entry" id="open-onboarding-btn" type="button" title="重新查看使用引导（怎么把这个机器人跑起来）">
       <svg class="sm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9h-2a7 7 0 1 1-7-7V3z M11 8h2v5h-2z M11 14h2v2h-2z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"/></svg>
@@ -163,7 +144,7 @@ function renderSettingsSidebar() {
       else {
         // 「群聊 @ 才响应」：开 = 拨到 1 档，关 = 回 3 档 50%。峰谷开启时实际档位走
         // 峰谷双点（config.js storeConfigForChat 会覆盖全局滑条），双点必须一起拨，
-        // 否则开关拨了不动；峰谷关时只写全局滑条，不碰用户调好的峰谷曲线（r46 审查补）。
+        // 否则开关拨了不动；峰谷关时只写全局滑条，不碰用户调好的峰谷曲线。
         const pos = on ? tierToSlider(1, 0) : tierToSlider(3, 50);
         patch = { store: { contextSliderPos: pos } };
         if (state.config?.store?.peakSchedule?.enabled === true) {
@@ -198,7 +179,7 @@ function renderSettingsSidebar() {
           state.config = state.config || {};
           state.config.cacheWarm = { ...(state.config.cacheWarm || {}), enabled: on };
           // 双胞胎同步：设置页默认就停在「模型与搜索」区，表单里的 #cfg-cachewarm
-          // 与本开关是同一字段 —— 点同区菜单项会早退不重渲染，必须在这里直接刷。
+          // 与本开关是同一字段，点同区菜单项会早退不重渲染，必须在这里直接刷。
           const twin = document.querySelector('#cfg-cachewarm');
           if (twin && twin !== document.activeElement) twin.checked = on;
         }
@@ -208,7 +189,7 @@ function renderSettingsSidebar() {
       }
     });
   });
-  // 就绪小标：点击跳到对应分区。走真实菜单项的 click —— 复用它的 flush + 入场动画 +
+  // 就绪小标：点击跳到对应分区。走真实菜单项的 click，复用它的 flush + 入场动画 +
   // 重渲染，不另写一套切换逻辑（避免两条路径行为漂移）。
   sidebar.querySelectorAll('[data-rs-goto]').forEach((chip) => {
     chip.addEventListener('click', () => {
@@ -223,7 +204,7 @@ function renderSettingsSidebar() {
     if (typeof window.openOnboarding === 'function') window.openOnboarding();
   });
   sidebar.querySelectorAll('.settings-menu-item').forEach((el) => {
-    // 无 data-section 的是功能项（如「使用引导」入口），不走分区切换逻辑 ——
+    // 无 data-section 的是功能项（如「使用引导」入口），不走分区切换逻辑，
     // 没有这道守卫，state.settingsSection 会被写成 undefined，整页渲染崩掉。
     if (!el.dataset.section) return;
     el.addEventListener('click', () => {
@@ -235,26 +216,21 @@ function renderSettingsSidebar() {
       // 只切换 active 类（不重建侧栏）→ 指示条平滑滑动、悬停态不闪断
       sidebar.querySelectorAll('.settings-menu-item').forEach((b) => b.classList.toggle('active', b === el));
       moveMenuInd(sidebar, true);
-      // R123：① 先挂入场动画的欠条 —— 由下面"真正完成重建"的那一次 renderSettings
-      //   兑现并播放（见其后的 if (pendingSwitchAnim)）。绝不在 click 里立刻播：
-      //   一旦重建被推迟，动画就播在旧内容上，旧分区会半透明地"回来一下"再被
-      //   整体换掉（用户报的"闪一下"）。
+      // ① 先挂入场动画的欠条，由真正完成重建的那一次 renderSettings 兑现并播放。
+      //    在 click 里立刻播的话，重建一旦被推迟，动画就播在旧内容上，
+      //    旧分区会半透明地"回来一下"再被整体换掉（用户报的"闪一下"）。
       pendingSwitchAnim = true;
-      // R123：② 越过"自动保存在途"守卫，当场重建。
-      //   不越过的话，flushSettingsSaves() 起的这次保存会把重建推迟到 POST 返回后
-      //   （实测 DOM 在 +23ms 才掉包，后端忙时更久），换区变成"等网络"。
-      //   安全性：saveConfig（08:1639）是**同步把表单读完**再 POST 的 ——
-      //   flush 之后 DOM 已不再被保存流程需要；而新分区的字段不属于这次保存要
-      //   写回的范围（响应写的是旧分区的字段），不会被陈旧 state.config 覆盖。
+      // ② 越过"自动保存在途"守卫，当场重建，否则换区会变成"等网络"。
+      //    安全性：saveConfig 是同步把表单读完再 POST 的，flush 之后 DOM 已不再被
+      //    保存流程需要；新分区的字段也不在这次保存要写回的范围内。
       settingsSwitchBypass = true;
       try {
         renderSettings();
       } finally {
         settingsSwitchBypass = false;
       }
-      // R123：③ 撤掉"保存返回后再补一次重建"的待重绘。
-      //   重建已经在上面完成，POST 返回时 endSettingsGuard 再重建一次 = 20ms 内
-      //   两次全量 innerHTML 换血（第二次还会再播一遍动画）= 又闪一下。
+      // ③ 撤掉"保存返回后再补一次重建"的待重绘，否则 20ms 内两次全量 innerHTML
+      //    换血（第二次还会再播一遍动画），又闪一下。
       settingsGuard.needRerender = false;
     });
   });
@@ -262,45 +238,32 @@ function renderSettingsSidebar() {
 
 /** 把菜单滑动指示条对齐到当前 active 项。
  *  animate=false 用于定位；但若记住了上一次的位置（menuIndPrevTop），
- *  即使是重建后的首次定位也从旧位置滑过去 —— 否则切换时挂起的自动保存
+ *  即使是重建后的首次定位也从旧位置滑过去，否则切换时挂起的自动保存
  *  完成后会重建侧栏，指示条瞬移，滑动动画被打断。 */
 let menuIndPrevTop = null;
-let settingsSwitchAnim = null;   // R107：分区切换入场动画的句柄，连点时先 cancel 上一条
+let settingsSwitchAnim = null;   // 分区切换入场动画的句柄，连点时先 cancel 上一条
 
-/* R123：切分区的两条新契约 ——
+/* 切分区的两条契约：
      settingsSwitchBypass：允许这一次 renderSettings 越过"自动保存在途"守卫。
-     pendingSwitchAnim：入场动画的**欠条**，由真正完成重建的那一次 renderSettings
-     兑现并播放。
+     pendingSwitchAnim：入场动画的欠条，由真正完成重建的那一次 renderSettings 兑现。
 
-   为什么必须拆开：旧写法是 click → renderSettings() → form.animate() 三连，
-   而 flushSettingsSaves()（07:27）对每个登记的 flushSave 都无条件 doSave()（07:294），
-   于是每次切分区都会当场起一次保存 → 守卫 pending=1 → renderSettings 被挡下并
-   推迟到 POST 返回之后（实测：DOM 在 +23ms 才掉包，真机后端忙时更长）。
-   动画不等它：从 +0ms 起就在**旧分区**上把不透明度从 0 拉起来，旧内容以
-   20%~50% 的半透明态回来一下、再被整体换掉 —— 用户眼里就是"闪一下"。
-   现在：动画挂在"新建完成的那一刻"，谁建谁播；同时不再依赖网络往返。 */
+   为什么必须拆开：flushSettingsSaves() 会为每个登记的 flushSave 无条件 doSave()，
+   切分区当场起一次保存 → 守卫 pending=1 → renderSettings 被推迟到 POST 返回之后。
+   动画若不等它，就会在旧分区上播一遍，旧内容半透明地回来一下再被整体换掉，
+   用户眼里就是"闪一下"。现在动画挂在"新建完成的那一刻"，谁建谁播。 */
 let settingsSwitchBypass = false;
 let pendingSwitchAnim = false;
 
 /** 分区切换的入场过渡：Web Animations API，播完自动释放（不留合成层）。
- *  R107：从「单段淡入上移 7px」升级成 PCL2 MyPageRight 式**两段式弹出** ——
- *   0→62% 走 --ease-out-quart（OutFluent）快速到位，62%→100% 走 --ease-spring
- *   （OutBack）轻微过冲收尾。与 .view.active 的 pageIn、弹窗的 popIn 同一套手感。
- *  ⚠️ R127（2026-10-15 用户报「设置页动画有点卡顿」）：**去掉 scale**。
- *     本窗口 disableHardwareAcceleration() + --disable-gpu（electron/main.js 的 GPU 启动段），
- *     一切绘制走 CPU 光栅化。transform 的 translateY / opacity 提层后只搬层、
- *     不重画，软件渲染下也便宜；而 **scale 是唯一会迫使合成器每帧重光栅化**
- *     整个 #settings-form 的属性（工具页 = 30 张 tool-card、几百个节点），
- *     320ms 动画大面积掉帧 —— 用户看到的"卡顿"就是它。「被放下来」的到位感
- *     由 translateY + 两段 easing 保留（12px 仍比 pageIn 的 4px 强一个量级，
- *     不会和卡片阶梯打架），过冲收尾的"弹"由 translateY(-2px) 继承，
- *     只去掉缩放这一项。时长 320→240ms，少一帧是一帧。
- *  ⚠️ 卡片另有 .settings-pane > * 的阶梯 pageIn（每张 +25ms，位移只有 --shift-sm
- *     4px）—— 4px 与 12px 差一个量级，两层不会打架
- *     （R95 修掉的是同量级、同方向的"二次到位"顿挫）。
- *  ⚠️ WAAPI **不读 CSS 的 @media (prefers-reduced-motion)**：style.css 那条通配符
- *     只压 CSS animation/transition。所以这里必须自己判断，否则开了「减少动态效果」
- *     的用户照样看到 12px 位移。reduce 下退化成纯淡入、时长 1ms（与 CSS 一致）。
+ *  两段式弹出：0→62% 快速到位，62%→100% 轻微过冲收尾，与 pageIn、popIn 同一套手感。
+ *  ⚠️ 不要加 scale。本窗口关掉了硬件加速（electron/main.js 的 GPU 启动段），
+ *     一切绘制走 CPU 光栅化。translateY / opacity 提层后只搬层、不重画，很便宜；
+ *     scale 则会迫使合成器每帧重光栅化整个 #settings-form（工具页几百个节点），
+ *     大面积掉帧。
+ *  ⚠️ 卡片另有 .settings-pane > * 的阶梯 pageIn（每张 +25ms，位移 4px）。
+ *     这里的 12px 比它强一个量级，两层不会打架。
+ *  ⚠️ WAAPI 不读 CSS 的 @media (prefers-reduced-motion)，style.css 那条通配符
+ *     只压 CSS animation/transition，所以这里必须自己判断，reduce 下退化成纯淡入。
  *  ⚠️ 连点多个分区时先 cancel 上一条，避免两条动画叠着跑。 */
 function playSwitchAnim() {
   const form = $('#settings-form');
@@ -324,8 +287,8 @@ function moveMenuInd(sidebar, animate) {
   if (!ind) return;
   if (!act) { ind.style.opacity = '0'; menuIndPrevTop = null; return; }
   ind.style.opacity = '1';
-  // r101：蓝条与「二级导航」的 .sn-bar 同款 —— 上下各内缩 6px（36 - 12 = 24）。
-  //   top / height 是**内联**样式，CSS 覆盖不了，只能在这里算。
+  // 蓝条与「二级导航」的 .sn-bar 同款，上下各内缩 6px。
+  // top / height 是内联样式，CSS 覆盖不了，只能在这里算。
   const IND_IN = 6;
   const top = act.offsetTop + IND_IN;
   const h = Math.max(0, act.offsetHeight - IND_IN * 2);
@@ -344,32 +307,28 @@ function moveMenuInd(sidebar, animate) {
 
 function renderSettings() {
   // 渲染守卫：自动保存进行中（表单正在被读取 / state.config 即将被覆盖）时
-  // 不允许重建表单 DOM —— 会吹掉用户正在输入的未保存内容。
+  // 不允许重建表单 DOM，会吹掉用户正在输入的未保存内容。
   // 拦下的请求由 endSettingsGuard() 在保存完成后补放。
-  // ⚠️ R123：切分区**越过**守卫（settingsSwitchBypass）—— 见菜单项 click 处理里的
-  //   说明。那是一次用户主动的全量换区，保存要读的值已被 flushSettingsSaves()
-  //   读走并发出请求，重建不会丢数据；而落在守卫后面会把重建推迟到 POST 返回
-  //   之后（真机 20~300ms），入场动画却已经播在旧内容上 = 用户看到的"闪一下"。
+  // ⚠️ 切分区越过守卫（settingsSwitchBypass），见菜单项 click 处理里的说明。
+  //    落在守卫后面会把重建推迟到 POST 返回之后，入场动画却已经播在旧内容上。
   if (settingsGuard.pending > 0 && !settingsSwitchBypass) {
     settingsGuard.needRerender = true;
     return;
   }
-  // 焦点保护（2026-09-19 修"文本框偶发点不进/失焦"）：守卫只护住"保存进行中"的
-  // 窗口，但守卫之外仍有一批异步重渲染（群名补底 / 视觉扫描完成 / 技能开关保存 /
-  // 守卫补放的延迟渲染）会在用户打字途中重建 innerHTML —— 焦点、光标位置、
-  // 未落盘的输入值全部被吹掉。这里在重建前后做"焦点与选区快照恢复"：
+  // 焦点保护：守卫只护住"保存进行中"的窗口，守卫之外仍有一批异步重渲染
+  // （群名补底 / 视觉扫描完成 / 技能开关保存 / 守卫补放的延迟渲染）会在用户打字
+  // 途中重建 innerHTML，焦点、光标位置、未落盘的输入值全部被吹掉。
+  // 这里在重建前后做"焦点与选区快照恢复"：
   //   ① 记下正在聚焦的输入框 id + 光标位置 + 当前值；
-  //   ② 重建后按 id 找回元素，把值写回（渲染用的是 state.config，可能还没
-  //      带上防抖窗口内的输入），恢复焦点与光标。
-  //   ⚠️ 曾用 id 作唯一身份 —— 但**没有 id 的输入框**（如 `05-memory-settings.js` 的搜索框
-  //      的批量价格 `.bp-in/.bp-out/.bp-cached`）会走 `querySelector('#')`，
-  //      抛 SyntaxError 后被下面的 try/catch 静默吞掉，焦点再也找不回来。
-  //      R75 改成 id 优先 + **DOM 路径兜底**：路径是索引序列，与 id 无关。
+  //   ② 重建后按 id 找回元素，把值写回（渲染用的是 state.config，可能还没带上
+  //      防抖窗口内的输入），恢复焦点与光标。
+  //   ⚠️ 没有 id 的输入框（如批量价格的 .bp-in/.bp-out/.bp-cached）走
+  //      querySelector('#') 会抛 SyntaxError 被静默吞掉，焦点再也找不回来。
+  //      所以是 id 优先 + DOM 路径兜底：路径是索引序列，与 id 无关。
   const box = $('#settings-form');
-  // 2026-10-23 修复：整页重建会丢滚动位置（焦点恢复用的是 preventScroll，不做补偿）。
-  // 长页面（「工具与技能」30 张卡）滚到中部时，任何一次异步补渲染 —— 保存完成、
-  // loadSettings 慢路径、技能开关、群名补底 —— 都会把用户弹回顶部。
-  // 这里通用地找最近的滚动祖先（.settings-pane 或外层），重建后写回。
+  // 整页重建会丢滚动位置（焦点恢复用的是 preventScroll，不做补偿）。长页面滚到
+  // 中部时，任何一次异步补渲染（保存完成、loadSettings 慢路径、技能开关、群名补底）
+  // 都会把用户弹回顶部。这里通用地找最近的滚动祖先，重建后写回。
   const scroller = (() => {
     let n = box;
     while (n && n !== document.body) {
@@ -413,7 +372,7 @@ function renderSettings() {
     };
   })();
   const c = state.config;
-  // 组字中不清场（R75）：输入法正在组字时重建 DOM 会**连同组字状态一起炸掉**，
+  // 组字中不清场：输入法正在组字时重建 DOM 会连同组字状态一起炸掉，
   // 用户看到的就是"中文打到一半没反应"。延到上屏/取消后再补一次重绘。
   const composingEl = document.activeElement;
   // __composePending 防止组字期间反复被调用时挂上一串 once 监听（结束会连着重绘 N 次）
@@ -427,26 +386,23 @@ function renderSettings() {
     return;
   }
   renderSettingsSidebar();
-  // 2026-10-23：预览演示模式下 POST /api/config 被 00-preview.js 拦截（不落真实后端），
-  // 但保存反馈仍显示「✓ 已保存」—— 用户改半天，退出演示模式后全部消失。显式告知。
+  // 预览演示模式下 POST /api/config 被 00-preview.js 拦截（不落真实后端），
+  // 但保存反馈仍显示「✓ 已保存」。不告知的话用户改半天，退出演示模式后全部消失。
   const previewBanner = (typeof state !== 'undefined' && state.preview)
     ? '<div class="hint" style="margin:0 0 10px;color:var(--orange)">⚠️ 预览演示模式：这里的改动不会保存到真实配置。</div>'
     : '';
-  // 2026-10-23：只在「首次渲染 / 切分区」时播卡片阶梯（CSS 见 .settings-pane.anim-stagger）。
-  // 保存完成后的补渲染、loadSettings 慢路径、SSE 引发的重建都不再重播 ——
-  // 此前是无条件播，用户每改一个开关，整页卡片就重新淡入一次。
+  // 只在「首次渲染 / 切分区」时播卡片阶梯（CSS 见 .settings-pane.anim-stagger）。
+  // 无条件播的话，用户每改一个开关，整页卡片就重新淡入一次。
   const playStagger = pendingSwitchAnim || !box.dataset.staggerPlayed;
   box.dataset.staggerPlayed = '1';
   box.classList.toggle('anim-stagger', !!playStagger);
   box.innerHTML = `
     ${setPageHeadHtml()}${previewBanner}${renderSettingsSection(c)}`;
   bindSettingsEvents(c);
-  // R123：分区切换的入场动画在这里播 —— 内容刚落到新分区的 DOM 上，动画覆盖的
-  // 必然是新内容（旧写法在 click 里紧跟 renderSettings() 之后播，重建被守卫推迟
-  // 时就会播在旧内容上 = 旧分区半透明地回来一下再被换掉）。
+  // 分区切换的入场动画在这里播：内容刚落到新分区的 DOM 上，动画覆盖的必然是新内容。
   if (pendingSwitchAnim) { pendingSwitchAnim = false; playSwitchAnim(); }
   if (focusSnap) {
-    // id 优先（快），路径兜底（覆盖无 id 的输入框）——两者都失效时才放弃 + 取证。
+    // id 优先（快），路径兜底（覆盖无 id 的输入框），两者都失效时才放弃 + 取证。
     let back = null;
     if (focusSnap.id) {
       try { back = box.querySelector('#' + CSS.escape(focusSnap.id)); } catch { back = null; }
@@ -459,11 +415,11 @@ function renderSettings() {
         back.focus({ preventScroll: true });
       } catch { /* 恢复失败不致命 */ }
     } else if (back === null) {
-      // level 3 = error → 主进程 R71 的 console-message 监听会落盘（打包版也能取证）
+      // level 3 = error → 主进程的 console-message 监听会落盘（打包版也能取证）
       console.error(`[焦点恢复失败] id=${JSON.stringify(focusSnap.id)} path=${focusSnap.path} tag=${focusSnap.tag}`);
     }
   }
-  // 2026-10-23：滚动位置写回（与上面的 prevScrollTop 配对）。
+  // 滚动位置写回（与上面的 prevScrollTop 配对）。
   // 只在原本就滚动过时恢复，避免首次进入时把页面顶到某个旧位置。
   if (scroller && prevScrollTop > 0) scroller.scrollTop = prevScrollTop;
   // 群名补底（一次性）：分群按钮/活跃设置下拉第一次渲染时 state.chats 可能还没到
@@ -476,19 +432,16 @@ function renderSettings() {
   }
 }
 
-// r107：已移除「设置 → 扩展」分区（含 extRowHtml / renderExtensionsSection /
-// setExtModuleEnabled / bindExtensionsEvents）。技能 / 插件的全局启用开关改由
-// 「会话设置 → 扩展 → 技能 / 插件」承载（renderModulePage compact 模式），避免
-// 两处重复管理同一份数据。下载页只负责装新的（市场）。
+// 「设置 → 扩展」分区已移除。技能 / 插件的全局启用开关由「会话设置 → 扩展 →
+// 技能 / 插件」承载（renderModulePage compact 模式），避免两处重复管理同一份数据。
+// 下载页只负责装新的（市场）。
 
 function renderSettingsSection(c) {
   const sec = state.settingsSection || 'api';
-  // 合并页 = 两个渲染函数直接字符串拼接（各自内部逻辑一行未动），
-  // 各段自带的 <h3> 分组标题照常渲染，长页里仍能看出"这一段是什么"。
-  // 2026-09-21 重排「模型与搜索」：按使用习惯分三组、组间用虚线分隔 ——
+  // 合并页 = 两个渲染函数直接字符串拼接，各段自带的 <h3> 分组标题照常渲染，
+  // 长页里仍能看出"这一段是什么"。
+  // 「模型与搜索」按使用习惯分三组、组间用虚线分隔：
   //   ① 模型（主模型 → 备选模型）② 搜索（搜索服务 → 添加自定义服务[折叠]）③ 成本（成本核算 → 前缀缓存）
-  // 原先的顺序是 模型 → 备选 → 成本 → 缓存 → 搜索 → 添加搜索，主题来回横跳，
-  // 且「当前模型单价」卡被"前缀缓存"截断、成了无标题孤儿块。
   const sections = {
     api: () => renderApiSection(c) + renderSearchSection(c) + renderModelCostSection(c),
     persona: () => renderPersonaSection(c) + renderMemorySettingsSection(c),
@@ -507,11 +460,11 @@ function renderSettingsSection(c) {
 
 /* ── 「设置」页头 + 全局/会话分工提示条（照原型 v2 的 .page-head + .bs-hint）──
    ⚠️ 必须容忍「被借走」：全屏「会话设置」页会把 #settings-form 整体 appendChild 到
-      #bp-setup-scroll（14-chrome.js 的安装进度条），那时这块必须消失 —— 显隐交给 style.css 的
+      #bp-setup-scroll（14-chrome.js 的安装进度条），那时这块必须消失，显隐交给 style.css 的
       `#view-settings > #settings-form .set-page`，不靠 JS 判断当前宿主是谁。 */
 function setPageHeadHtml() {
-  // 2026-10-18：长提示默认完整显示，点「知道了」后收成一行（记住选择）。
-  // 老用户天天进设置，两行提示每次都在眼前，属于纯噪音；新用户第一次仍看全。
+  // 长提示默认完整显示，点「知道了」后收成一行（记住选择）。
+  // 老用户天天进设置，两行提示每次都在眼前属于纯噪音；新用户第一次仍看全。
   let hintClosed = false;
   try { hintClosed = localStorage.getItem('qa.settingsHintClosed') === '1'; } catch { /* 隐私模式 */ }
   const hintHtml = hintClosed
@@ -525,12 +478,11 @@ function setPageHeadHtml() {
         <span>这些是<b>全局设置</b>，对所有会话生效。想针对某个 QQ 群 / 私聊单独配置（人设覆盖、响应规则、成员屏蔽…），用左下角「<b>会话设置</b>」。</span>
         <button class="set-hint-x" type="button" id="set-hint-close" title="以后收成一行">知道了</button>
       </div>`;
-  // 就绪度体检卡（2026-10-19 复活）：r84 移除首启强制跳设置页后，"没填接口地址 /
-  // 模型 / 白名单"在界面上只剩顶栏就绪圆点的 hover 提示，新用户没有任何主动文案
-  // 告诉他缺什么、去哪填。体检卡的按钮绑定（.hc-fix-btn / #test-api-btn）一直在
-  // bindSettingsEvents 里活着，缺的只是渲染调用 —— 挂回页头即整链复活。
-  // 口径：只在**未就绪**时显示（就绪后老用户不该被常驻卡片打扰，r84 的教训）；
-  // 用户保存配置后 renderSettings 重渲染，缺失项补齐后卡片自动消失。
+  // 就绪度体检卡：没填接口地址 / 模型 / 白名单时，界面上只剩顶栏就绪圆点的 hover
+  // 提示，新用户没有任何主动文案告诉他缺什么、去哪填。按钮绑定（.hc-fix-btn /
+  // #test-api-btn）一直在 bindSettingsEvents 里，这里负责渲染。
+  // 口径：只在未就绪时显示，就绪后不该被常驻卡片打扰；保存配置后重渲染，
+  // 缺失项补齐后卡片自动消失。
   // OneBot 连接状态是渲染时刻快照（略滞后），实时口径以横幅 / 就绪圆点为准。
   const healthReady = assessReadiness(state.config, state.status).ready;
   return `
@@ -550,15 +502,15 @@ function setPageHeadHtml() {
     </div>`;
 }
 
-/* ── 设置搜索索引（2026-10-23 萌新化 P4）──────────────────────────────
+/* ── 设置搜索索引 ────────────────────────────────────────────────────
    小白最大的成本是"记路径"：想改密钥要在 6 个分区里猜。这张表把高频意图
    （用户会输入的说法）映射到「分区 + 高亮目标」，点一下直达。
    写法约定：
      · keys  = 用户可能输入的说法（含口语 / 拼音首字母 / 开发者术语），全小写比对；
      · target = 跳到分区后高亮的元素 id（可空 = 只切分区）；
      · 一条可以同时命中多个分区（如「令牌」→ onebot）。
-   匹配：输入串的任一字串作为子串出现在 key 里，或 key 包含输入串（防"ap"这种
-   超短输入全表乱炸，至少 1 个字符即生效，但结果数交给排序：分区优先级的权重）。 */
+   匹配：输入串的任一字串作为子串出现在 key 里，或 key 包含输入串。
+   结果排序按分区优先级权重 w。 */
 const SETTINGS_SEARCH_INDEX = [
   { keys: ['密钥', 'api key', 'apikey', 'key', 'sk-', '接口地址', 'base url', 'baseurl', '模型', '提供商', '服务商', '地址', 'moxing', 'miyue'], label: '模型与密钥', desc: '接口地址、密钥、选模型、测试连通', section: 'api', target: 'open-model-config-btn', w: 10 },
   { keys: ['群', '白名单', '好友', '允许', '谁能', '群号', 'qq号', 'qun', 'baimingdan'], label: '谁能找它（白名单）', desc: '勾选允许的群和好友', section: 'allow', target: 'pick-groups-btn', w: 10 },
@@ -566,12 +518,11 @@ const SETTINGS_SEARCH_INDEX = [
   { keys: ['积极度', '活跃', '档位', '回话', '回复', '限速', '发送', '间隔', '峰谷', '高峰', '省钱', '安静', 'jijidu', 'huifu'], label: '回复积极度 · 发送与限速', desc: '什么时候接话、说多快、高峰时段更安静', section: 'allow', target: 'open-active-config-btn', w: 8 },
   { keys: ['人设', '性格', '记忆', '提示词', 'prompt', '语气', '人格', 'renge', 'jiyi'], label: '性格与记忆', desc: '机器人是谁、记不记得事', section: 'persona', w: 7 },
   { keys: ['工具', '技能', '插件', '网图', '搜图', '搜索', '能力', 'gongju', 'jineng'], label: '能力与工具', desc: '允许机器人用哪些工具', section: 'tools', w: 7 },
-  // 2026-11-03：ffmpeg 改为按需下载后，这里成了它的主要发现路径 ——
-  // 用户搜的是"视频 / 动图 / 压缩"这些**现象**，不是 "ffmpeg" 这个实现名。
+  // ffmpeg 改为按需下载后，设置搜索成了它的主要发现路径。
+  // 用户搜的是"视频 / 动图 / 压缩"这些现象，不是 "ffmpeg" 这个实现名。
   { keys: ['ffmpeg', '视频', '抽帧', '图片压缩', '压缩', '转码', '媒体', '动图', 'gif', '壁纸转', 'shipin', 'meiti'], label: '媒体工具（ffmpeg）', desc: '视频抽帧、GIF 转视频、大图压缩要用它', section: 'media', w: 8 },
-  // 2026-10-23 晚：壁纸页收回「外观与数据」之后，设置搜索成了它的主要发现路径。
-  // 单列一条直达条目（target 指向下面那一节的 h3 锚点），而不是把「壁纸」塞进
-  // 「外观与数据」的 keys —— 后者只会带用户到分区顶部，还得自己往下滚一屏。
+  // 壁纸单列一条直达条目（target 指向那一节的 h3 锚点），而不是塞进
+  // 「外观与数据」的 keys：后者只会带用户到分区顶部，还得自己往下滚一屏。
   { keys: ['壁纸', '背景', '背景图', '小红车', '壁纸引擎', '引擎壁纸', 'bizhi', 'beijing'], label: '界面背景（本地图片 / 壁纸）', desc: '两层背景二选一：本地导入图，或 Wallpaper Engine 壁纸', section: 'app', target: 'settings-bg', w: 10 },
   { keys: ['主题', '皮肤', '外观', '数据', '重置', '备份', '更新', '小窗', '颜色', 'zhuti', 'waiguan'], label: '外观与数据', desc: '主题、数据目录、重置（危险区在底部）', section: 'app', w: 7 },
   { keys: ['屏蔽', '拉黑', '禁言', '成员', 'pingbi'], label: '屏蔽名单', desc: '谁的话当没看见', section: 'allow', target: 'blocklist-btn', w: 6 },
@@ -582,12 +533,12 @@ const SETTINGS_SEARCH_INDEX = [
   { keys: ['价格', '单价', '成本', 'jiage', 'chengben'], label: '成本核算与价格', desc: 'token 单价、自定义价格', section: 'api', w: 5 }
 ];
 
-/* ── 分区内容 → 卡片（照原型 v2 的 fieldset）──
+/* ── 分区内容 → 卡片 ──
    渲染函数把每个小节写成 `<h3>标题</h3> + 内容`，并在跨大组的边界放一条
-   `.settings-divider`。这里按**顶层** <h3> 把整串切成若干块、各自包进 .set-card；
-   那条 divider 落在卡片末尾，而卡片本身已经把这个边界表达出来了，一并删掉。
-   ⚠️ 只搬字符串，不碰任何控件的 id 与 DOM 层级 —— 06:136 的焦点恢复靠
-      #settings-form 的子元素索引路径定位，中间插一层包装就会对不上。
+   `.settings-divider`。这里按顶层 <h3> 把整串切成若干块、各自包进 .set-card；
+   那条 divider 落在卡片末尾，而卡片本身已经表达了这个边界，一并删掉。
+   ⚠️ 只搬字符串，不碰任何控件的 id 与 DOM 层级：焦点恢复靠 #settings-form 的
+      子元素索引路径定位，中间插一层包装就会对不上。
    ⚠️ 只用于 h3 位于顶层的分区；`usage-h3`（工具页的统计小标题）不切。 */
 function settingsCards(html) {
   const parts = html.split(/(?=<h3(?![^>]*usage-h3)(?:\s|>))/);
@@ -610,10 +561,10 @@ function renderApiSection(c) {
   };
   const visionModelDisplay = displayOf(c.api.visionModel);
   const videoModelDisplay = displayOf(c.api.videoModel);
-  // 2026-10-23 萌新化 P1：按"是否已配好模型"分叉渲染。
-  //   · 未配置（新人第一次进来）→ 整张卡只有两个输入框 + 一个按钮，不再把
+  // 按"是否已配好模型"分叉渲染：
+  //   · 未配置（新人第一次进来）→ 整张卡只有两个输入框 + 一个按钮，不把
   //     「模型配置 / 模型管理 / 添加提供商 / 模型目录 / 批量价格」5 个入口一次摊开；
-  //   · 已配置 → 原有结构一行不改（两按钮 + provider-hint 摘要 + 备用模型区块）。
+  //   · 已配置 → 两按钮 + provider-hint 摘要 + 备用模型区块。
   // 口径与 assessReadiness / 侧栏就绪标一致：地址 + 模型都有了才算"已连接"。
   const readyModel = !!String(c.api?.baseUrl || '').trim() && !!String(c.api?.model || '').trim();
   // ⚠️ 三个 hidden input 两个态都必须渲染：saveConfig 读它们带出
@@ -709,7 +660,7 @@ function renderModelCostSection(c) {
     </div></div>
 
     <!-- 当前模型的价格卡片：切换模型时内容跟着变。
-         紧跟在"价格从哪来"之后 —— 价格来源 → 这个模型多少钱 → 批量改价，读起来是一条线。 -->
+         紧跟在"价格从哪来"之后，价格来源 → 这个模型多少钱 → 批量改价，读起来是一条线。 -->
     <div class="price-card" id="model-price-card">
       <div class="pc-head">
         <span class="pc-title">当前模型单价</span>
@@ -916,14 +867,14 @@ function renderPersonaSection(c) {
   // （角色设定 360 + 附加规则 100 + 系统提示覆盖 120 ≈ 607px，占本页 2/3 高度；
   //  而这三样平时只看不改）。编辑走人设弹窗，弹窗自己 POST 保存。
   //  ⚠️ 字段撤出页面后，saveConfig 的 persona 分支靠 `val(sel, fallback)` 回落到
-  //     当前配置值 —— 不会把弹窗刚存的值覆盖成空（已确认 val 的兜底语义）。
+  //     当前配置值，不会把弹窗刚存的值覆盖成空（已确认 val 的兜底语义）。
   //  ⚠️ 这里**不能**沿用页面上的 #cfg-roletext 等 id：会和弹窗里的 #gp-* 并存冲突。
   const PARTICIPATION_LABEL = { low: '安静型', medium: '普通群友', high: '活跃型' };
   const roleText = String(c.persona.roleText || '').trim();
   const rolePreview = roleText
     ? esc(roleText.length > 96 ? `${roleText.slice(0, 96)}…` : roleText)
     : '（未设置角色设定，机器人会用内置默认提示词）';
-  // 2026-10-16：两个"覆盖全局人设"的隐形层，摘要卡必须显式报出来 ——
+  // 两个"覆盖全局人设"的隐形层，摘要卡必须显式报出来，
   // 否则用户切换全局人设后在这两种场景下看到旧行为，会以为切换坏了：
   //   ① 分会话独立人设（personaByChat）：优先级高于全局（personaForChat 逐会话
   //      合并）。统一模式下按钮网格是隐藏的，残留条目完全不可见。
@@ -992,33 +943,33 @@ function renderPersonaSection(c) {
 }
 
 /**
- * 「全局人设设置」模态框（2026-09-18）：统一人设关闭（分群模式）时，
- * persona 主编辑器不在场 —— 没有独立人设的会话跟随的全局字段就没了编辑入口。
+ * 「全局人设设置」模态框：统一人设关闭（分群模式）时，
+ * persona 主编辑器不在场，没有独立人设的会话跟随的全局字段就没了编辑入口。
  * 这里弹出同款字段（选择人设 / 参与度 / 角色设定 / 附加规则 / 系统提示覆盖 /
  * 机器人名字 / 群内展示名），保存直接 POST /api/config 的 persona 补丁。
  */
 
 /**
  * 人设编辑弹窗（统一/分群两种模式共用同一个弹窗）。
- *   统一人设模式：它就是"人设设置"本体 —— 页面上只留摘要卡 + 入口按钮（原来三个大
+ *   统一人设模式：它就是"人设设置"本体，页面上只留摘要卡 + 入口按钮（原来三个大
  *   文本框铺在页面上占 607px，是该页 2/3 高度）。
  *   分群模式：它管"未单独配置的会话所跟随的全局字段"。
- * ⚠️ 字段用 `#gp-*` 前缀，**故意不与页面的 `#cfg-*` 重名** —— 同名 id 会让
+ * ⚠️ 字段用 `#gp-*` 前缀，**故意不与页面的 `#cfg-*` 重名**，同名 id 会让
  *    `$('#id')` 抓到先出现的那个，自动保存链从此读错元素。保存走自己的 POST。
  */
 function openGlobalPersonaModal() {
   const c = state.config || {};
   const per = c.persona || {};
   const unified = c.personaUnified !== false;
-  // 2026-10-16：主人专属人设（owner-identity 插件）在运行时的优先级
-  // **高于**全局人设（orchestrator.js：`persona: ownerPersona || personaForChat`）。
+  // 主人专属人设（owner-identity 插件）在运行时的优先级高于全局人设
+  // （orchestrator.js：`persona: ownerPersona || personaForChat`）。
   // 启用时主人自己测试切换效果会"看起来不生效"。插件设置存在 config.skills 下，
   // 读出来给显式提示，别让用户以为切换坏了去反复重试。
   const ownerCfg = ((c.skills || {})['owner-identity']) || {};
   const ownerPersonaOn = ownerCfg.personaEnabled === true && String(ownerCfg.personaRoleText || '').trim();
   const overlay = modelModalShell({
     head: unified ? '人设设置' : '全局人设设置',
-    // 编辑型弹窗：点外部不关闭（误触丢内容太伤体验，2026-10-18）；×/取消/Esc 照常
+    // 编辑型弹窗：点外部不关闭（误触丢内容太伤体验）；×/取消/Esc 照常
     closeOnBackdrop: false,
     body: `
       <div class="field" style="margin-bottom:8px">
@@ -1056,7 +1007,7 @@ function openGlobalPersonaModal() {
            <button class="btn btn-primary" id="gp-save">保存</button>`
   });
 
-  // ── 未保存改动守卫（2026-10-17）：与分群独立人设弹窗同一套做法。
+  // ── 未保存改动守卫：与分群独立人设弹窗同一套做法。
   // Esc/点遮罩/× 会先弹确认（守卫实现在 08-modals.js modelModalShell），
   // 不再把写了一半的「管理员附加规则/角色设定」静默丢掉。取消/保存按钮不拦。
   const gpSnap = () => JSON.stringify([
@@ -1070,18 +1021,18 @@ function openGlobalPersonaModal() {
   const gpInit = gpSnap();
   overlay.__dirtyGuard = () => gpSnap() !== gpInit;
 
-  // 关闭本弹窗（保存 / 取消 / × / Esc / 点遮罩 —— 全部走 closeModelModal 的
+  // 关闭本弹窗（保存 / 取消 / × / Esc / 点遮罩，全部走 closeModelModal 的
   // qa-close）时通知引导：人设是**可选**步骤，"处理过"就该回引导接着走。
-  // 只认状态变化不行 —— 用户选回原版默认人设保存时 roleText 与模板一致，
-  // 状态没变，引导的守候永远等不到（2026-10-18 用户反馈）。
+  // 只认状态变化不行：用户选回原版默认人设保存时 roleText 与模板一致，
+  // 状态没变，引导的守候永远等不到。
   overlay.addEventListener('qa-close', () => {
     if (typeof window.qaOnboardingStepTouched === 'function') window.qaOnboardingStepTouched('persona');
   });
 
   // 选择人设 / 添加人设：都复用共享弹窗，但**填回本弹窗的 gp-* 字段**
   // （不传 target 的话会填到设置页的 cfg-* 里，而这个弹窗里根本看不到效果）
-  // focusSel：子弹窗（选择人设）关闭后焦点要交还的本弹窗可编辑目标 —— 否则焦点
-  // 回到 readonly 的 #gp-pick 上，之后 Ctrl+V 静默失效（2026-10-18 修粘贴问题）。
+  // focusSel：子弹窗（选择人设）关闭后焦点要交还的本弹窗可编辑目标，否则焦点
+  // 回到 readonly 的 #gp-pick 上，之后 Ctrl+V 静默失效。
   const gpTarget = { roleSel: '#gp-roletext', rulesSel: '#gp-customrules', pickSel: '#gp-pick', hintSel: '#gp-hint', focusSel: '#gp-roletext' };
   const gpHint = overlay.querySelector('#gp-hint');
   const gpRole = overlay.querySelector('#gp-roletext');
@@ -1090,7 +1041,7 @@ function openGlobalPersonaModal() {
   overlay.querySelector('#gp-new-btn').addEventListener('click', () => openPersonaCreateModal(gpTarget));
 
   // 删除自定义人设：当前角色设定命中某个 custom_ 模板时才可删（内置人设不给删）。
-  // 靠 roleEl 的 input 事件同步显隐 —— openPersonaPicker 改完值会派发一次，
+  // 靠 roleEl 的 input 事件同步显隐，openPersonaPicker 改完值会派发一次，
   // 所以从选择器里挑一个自定义人设后按钮会自己出现。
   const gpDel = overlay.querySelector('#gp-del-btn');
   const syncGpDel = () => {
@@ -1105,7 +1056,7 @@ function openGlobalPersonaModal() {
     const id = gpDel.dataset.personaId || '';
     const tpl = state.personaTemplates[id];
     if (!id.startsWith('custom_') || !tpl) return;
-    // ⚠️（2026-10-10 r86 修 P2）破坏性 → danger:true
+    // 破坏性操作 → danger:true
     if (!await qaConfirm({
       danger: true,
       confirmText: '删除人设',
@@ -1114,7 +1065,7 @@ function openGlobalPersonaModal() {
     try {
       await api(`/api/persona-templates/${id}`, { method: 'DELETE', body: '{}' });
       // 删掉后角色设定回落到内置默认（与页面版行为一致）。
-      // 只改弹窗内的字段，真正落盘靠「保存」—— 弹窗是"改完再存"的模型，
+      // 只改弹窗内的字段，真正落盘靠「保存」，弹窗是"改完再存"的模型，
       // 混进页面的自动保存链反而会被 loadSettings 重渲染吹掉。
       const fallback = state.personaTemplates.xiaojingyu;
       gpRole.value = fallback?.text || '';
@@ -1143,11 +1094,10 @@ function openGlobalPersonaModal() {
     };
     try {
       const r = await api('/api/config', { method: 'POST', body: JSON.stringify(patch) });
-      // ⚠️ 2026-10-16 修「切换人设不成功」：POST 响应里带着最新 config，
-      // **必须立即回写 state.config**。旧实现只调 loadSettings()（7 个接口
-      // 的 Promise.all，含联网价格表，慢到几百 ms~数秒），这段窗口内
-      // state.config 仍是旧人设 —— 期间任何一次自动保存（切页签 flush /
-      // 关窗 beforeunload / 防抖）都会把旧 persona 整段回传、把刚切的
+      // ⚠️ POST 响应里带着最新 config，必须立即回写 state.config。
+      // 只调 loadSettings()（7 个接口的 Promise.all，含联网价格表，慢到几百 ms~数秒）
+      // 的话，这段窗口内 state.config 仍是旧人设，期间任何一次自动保存（切页签
+      // flush / 关窗 beforeunload / 防抖）都会把旧 persona 整段回传、把刚切的
       // 人设深合并还原（saveConfig 的分支已改为不写不存在的字段，
       // 这里是双保险：把窗口压到零）。
       if (r?.config) state.config = r.config;
@@ -1196,7 +1146,7 @@ function openPerChatPersonaModal(chatKey) {
            <button class="btn btn-primary" id="pcp-save">保存</button>`
   });
 
-  // ── 未保存改动守卫（2026-10-17）──
+  // ── 未保存改动守卫 ──
   // 群友反馈"管理员附加规则没法自动保存"：本弹窗是"改完点保存"模型（不走表单
   // 自动保存链，原因见下方 saveToMap 注释），保存按钮本身没问题，坑在 Esc/点遮罩/×
   // 三条被动关闭路径会静默丢弃刚写的规则。现在这三条路径会先弹确认（守卫实现在
@@ -1212,18 +1162,18 @@ function openPerChatPersonaModal(chatKey) {
 
   // 选择人设 / 添加人设：统一走共享弹窗，**填回本弹窗的 pcp-* 字段**。
   // 原来这里自己抄了一份选择器、并且「添加人设」调用的是不带 target 的
-  // openPersonaCreateModal() —— 那会把新模板填进设置页的 #cfg-roletext，
+  // openPersonaCreateModal()，那会把新模板填进设置页的 #cfg-roletext，
   // 而分群模式下页面根本没有那个框（弹窗里看不到任何反应）。
   // focusSel 同 openGlobalPersonaModal：子弹窗关闭后焦点交还 #pcp-roletext，
-  // 不停在 readonly 的 #pcp-pick 上（2026-10-18 修粘贴问题）。
+  // 不停在 readonly 的 #pcp-pick 上。
   const pcpTarget = { roleSel: '#pcp-roletext', rulesSel: '#pcp-customrules', pickSel: '#pcp-pick', hintSel: '#pcp-hint', focusSel: '#pcp-roletext' };
   overlay.querySelector('#pcp-pick').addEventListener('click', () => openPersonaPicker(pcpTarget));
   overlay.querySelector('#pcp-new-btn').addEventListener('click', () => openPersonaCreateModal(pcpTarget));
 
   // 直接 POST 落盘：不走"写隐藏 JSON + 等表单链保存"的老路。
-  // 老路的两个坑（2026-09-17 用户实测）：
+  // 老路的两个坑：
   //   1. modal 挂在 body 下、不在 #settings-form 内，dispatchEvent(change) 冒泡
-  //      到不了 form 的委托监听 —— 从来没触发过自动保存；
+  //      到不了 form 的委托监听，从来没触发过自动保存；
   //   2. 就算触发了，随后的 loadSettings() 重建表单 DOM，隐藏 input 被重渲染成
   //      GET 回来的旧值，用户刚写的条目被无声丢弃 → 重开 modal 一片空白。
   const saveToMap = async (entry) => {
@@ -1268,11 +1218,11 @@ function openPerChatPersonaModal(chatKey) {
   });
 }
 
-/* 白名单条目归一化（r64）：后端权威格式是**裸号**（src/store.js 的 allowed() 与
+/* 白名单条目归一化：后端权威格式是裸号（src/store.js 的 allowed() 与
    src/routes.js 直接 `includes(String(id))`，设置页表单、跨会话发送工具同样按裸号比对）。
-   历史脏数据里可能残留 `group:xxx` / `private:xxx` 前缀（r60 之前 setAllowState 的写入
-   bug 遗留）。渲染与解析都必须剥掉前缀，否则会出现「输入框显示 group:xxx」以及
-   更隐蔽的「选择群弹窗里已加白名单的群勾不上、点确定把老项丢掉」。 */
+   历史脏数据里可能残留 `group:xxx` / `private:xxx` 前缀。渲染与解析都必须剥掉前缀，
+   否则会出现「输入框显示 group:xxx」以及更隐蔽的「选择群弹窗里已加白名单的群
+   勾不上、点确定把老项丢掉」。 */
 function bareAllowId(entry) {
   const m = /^(?:group|private):(.+)$/.exec(String(entry ?? ''));
   return m ? m[1] : String(entry ?? '');
@@ -1318,7 +1268,7 @@ function renderAllowSection(c) {
 /**
  * 取会话的群名（群聊才有）。
  * 群名由后端 /api/chats 附带（走 OneBot get_group_info，带缓存与超时保护），
- * 拿不到就返回空串 —— 调用方会自动退回只显示群号。
+ * 拿不到就返回空串，调用方会自动退回只显示群号。
  */
 function chatNameOf(chatKey) {
   const c = (state.chats || []).find((x) => x.key === chatKey);
@@ -1367,7 +1317,7 @@ function sliderDesc(pos) {
   // 3 档概率展示必须与后端判定同源：resolveContextTier 用 Math.random()*100 与
   // randomPercent 比较（即"骰子值 < 阈值"），滑条换算出的 randomPercent 就是这个阈值。
   // 之前这里展示的是 sliderToTier 的 randomPercent 四舍五入值，而后端在保存时会
-  // 重新权威换算一次 —— 两边都来自同一公式，但旧版 desc 里取整方式不同导致偶发不一致，
+  // 重新权威换算一次，两边都来自同一公式，但旧版 desc 里取整方式不同导致偶发不一致，
   // 现在统一保留一位小数（与 sliderToTier 一致）。
   if (tier === 3) return `<b>积极度 3/4 · 偶尔主动接话</b>：被 @ / 关键词必响应；此外每批普通消息有 <b>${randomPercent}%</b> 概率响应`;
   return '<b>积极度 4/4 · 每条都回</b>：任何消息都响应，且艾特/关键词/随机的判定全部失效';
@@ -1392,7 +1342,7 @@ function renderChatSection(c) {
   const st = c.store || {};
   // 响应档位/峰谷/指令禁言已移入「活跃设置」模态框（openActiveConfigModal），
   // 本区块只剩 主动话题 一个短块 + 两个收纳入口按钮。
-  // （屏蔽名单 2026-09-21 已上移到 renderAllowSection，跟白名单作伴）
+  // （屏蔽名单已上移到 renderAllowSection，跟白名单作伴）
 return `
     <h3>回复节奏</h3>
     <div class="field" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
@@ -1415,7 +1365,7 @@ return `
 
 function renderDesktopSection(c) {
   return `
-    <!-- 2026-09-21 重排：界面 提到桌面端之前（按使用频率 —— 主题是这页最常改的，
+    <!-- 2026-09-21 重排：界面 提到桌面端之前（按使用频率，主题是这页最常改的，
          自启/托盘装完设一次基本不动）；页签名同步改成「界面与应用」。
          分组：界面 + 桌面端 = "软件长什么样、怎么表现"；数据管理 + 版本更新 = "维护"，
          两组之间用虚线分开（同组内只用 h3 自带下边框）。 -->
@@ -1482,7 +1432,7 @@ function renderDesktopSection(c) {
 
     <!-- ── 界面背景（2026-10-23 晚合入）────────────────────────────────────
          原来「本地背景图」在「外观个性化」里、小红车壁纸是独立一级页，两处分开导致
-         一个必然踩的坑：两层背景其实是**互斥**的，而 WE 壁纸优先 ——
+         一个必然踩的坑：两层背景其实是**互斥**的，而 WE 壁纸优先，
          style.css:493 有一条 html[data-wp='on'] #app-bg { display: none }，
          壁纸一启用，本地图被整层隐藏。用户在设置里选完图看不到任何变化，只会以为按钮坏了。
          所以这里把两种来源摆到同一屏，并明确标出「当前生效的是哪一层」。
@@ -1514,7 +1464,7 @@ function renderDesktopSection(c) {
     <div class="field"><label>① 本地图片（一张静态图）</label>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <button class="btn btn-small" id="cfg-bg-pick" type="button">🖼 选择图片</button>
-        <!-- 清除（R50）：没有背景图时禁用 —— 可点但点了只是把空值再写一遍，
+        <!-- 清除（R50）：没有背景图时禁用，可点但点了只是把空值再写一遍，
              视觉上一枚"能点的危险按钮"摆在"没有东西可清"的地方也很违和 -->
         <button class="btn btn-small btn-danger" id="cfg-bg-clear" type="button" ${c.ui?.bgImage ? '' : 'disabled'} title="${c.ui?.bgImage ? '移除当前背景图' : '还没有设置背景图'}">清除</button>
         <select id="cfg-bgfit" style="width:120px">
@@ -1533,7 +1483,7 @@ function renderDesktopSection(c) {
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
         <button class="btn btn-small" id="cfg-open-wallpaper" type="button">🎨 打开壁纸库…</button>
         <button class="btn btn-small btn-danger" id="cfg-wp-off" type="button">关闭壁纸</button>
-        <!-- 自动撤壁纸时会把原选择备份到 wp-console-bg-prev，这里给一条退路 ——
+        <!-- 自动撤壁纸时会把原选择备份到 wp-console-bg-prev，这里给一条退路，
              否则"选了本地图，回来发现壁纸没了、还得重新在几百张里找"又是一个坑。 -->
         <button class="btn btn-small" id="cfg-wp-restore" type="button" hidden>↩ 恢复上次的壁纸</button>
       </div>
@@ -1614,14 +1564,12 @@ function renderDesktopSection(c) {
 }
 
 function renderOnebotSection(c) {
-  /* 2026-10-23：协议端解耦后的「连接 QQ」分区。
-     本分区只剩两件事：
-       ① 启动机器人的 QQ（一键启动 = **只启动 QQ**；协议端由用户自装、自启）；
+  /* 「连接 QQ」分区只剩两件事：
+       ① 启动机器人的 QQ（一键启动只启动 QQ；协议端由用户自装、自启）；
        ② 连接地址与令牌（协议端默认 3001/3000，改了才需要动）。
-     随内置协议端一起删掉的控件：自动拉起 SnowLuma、SnowLuma 程序目录、打开文件夹。
-     状态说明：renderSettings 是同步渲染，QQ 运行态是异步接口 —— 这里先渲染占位
+     renderSettings 是同步渲染，QQ 运行态是异步接口，所以这里先渲染占位
      （disabled 按钮 + "正在读取"），bindSettingsEvents 里的 qbRefresh() 拉到状态后
-     **只更新这块的文字与按钮态**，不重建表单（绑定不丢）。 */
+     只更新这块的文字与按钮态，不重建表单（绑定不丢）。 */
   const proto = c.protocol || {};
   return `
     <h3 id="settings-onebot">连接 QQ（启动与登录）</h3>
@@ -1671,7 +1619,7 @@ function renderOnebotSection(c) {
  */
 
 /**
- * 拉取技能/插件列表（内存态）。**不含磁盘重扫** —— 想让新放入的目录
+ * 拉取技能/插件列表（内存态）。**不含磁盘重扫**，想让新放入的目录
  * 被看到，走 rescanSkills()。
  */
 async function loadSkillsStatus() {
@@ -1716,11 +1664,11 @@ async function rescanSkills({ quiet = false } = {}) {
  * 技能设置弹窗。
  *
  * 为什么把设置放在技能自己的弹窗里（而不是塞进设置页）：
- *   · 这些字段**只对这个技能有意义** —— 分散在全局设置页里，用户根本对不上号
+ *   · 这些字段**只对这个技能有意义**，分散在全局设置页里，用户根本对不上号
  *   · 技能页本来就该是"这个技能能配什么"的唯一入口
  *   · 开关和设置放在一起，改完立刻能看到状态徽章变化
  *
- * 表单**完全按 manifest 的 configSchema 渲染**，前端不硬编码任何字段名 ——
+ * 表单**完全按 manifest 的 configSchema 渲染**，前端不硬编码任何字段名，
  * 加一个新技能、加一个字段，这里一行都不用改。
  * 支持的 type：boolean（复选框）/ number（数字输入）/ enum（下拉）/ string（文本框）
  * 另外 secret: true 的字段用密码框，且留空 = 不修改（后端也按同一约定处理）。
@@ -1745,7 +1693,7 @@ function renderSkillSettingsModal(skill) {
   // （见 src/skills/panel.js）。所以下面 schema 里剩下的全是"真配置项"，
   // 前端不必再过滤一遍，也不必再把它从「共 N 项设置」里减掉。
   const panels = Array.isArray(skill.panels) ? skill.panels : [];
-  // internal 字段（列表/对象类）不渲染成表单输入 —— 它们由专用界面管理。
+  // internal 字段（列表/对象类）不渲染成表单输入，它们由专用界面管理。
   // 但仍然要在弹窗里列出来并说明去哪改，否则用户会以为"这个设置根本不存在"。
   const allKeys = Object.keys(schema);
   const internalKeys = allKeys.filter((k) => schema[k]?.type === 'internal');
@@ -1776,8 +1724,8 @@ function renderSkillSettingsModal(skill) {
     } else if (d.type === 'enum' && (Array.isArray(d.values) || Array.isArray(d.options))) {
       // 枚举渲染成下拉：值写错会让技能行为异常，下拉从根上避免手抖。
       // 两种写法都支持：
-      //   values:  ['a','b']                —— 值即显示文本
-      //   options: [{ value, label }]       —— 值/显示分离（如把 0~3 档显示成中文档位）
+      //   values:  ['a','b']，值即显示文本
+      //   options: [{ value, label }]，值/显示分离（如把 0~3 档显示成中文档位）
       const opts = Array.isArray(d.options)
         ? d.options.map((o) => ({ value: o?.value, label: o?.label ?? o?.value }))
         : d.values.map((x) => ({ value: x, label: x }));
@@ -1841,20 +1789,20 @@ function renderSkillSettingsModal(skill) {
  * 打开插件自带的静态页。
  *
  * ⚠️ 这里**只接收后端算好的 URL**（`skill.panels[].url`），前端不拼路径。
- * 为什么：这条通道的三段 —— 后端静态服务、这个弹层、插件侧的 `api.panel` ——
+ * 为什么：这条通道的三段，后端静态服务、这个弹层、插件侧的 `api.panel`，
  * 必须对同一套路径规则与编码方式达成一致。前端要是自己拼一遍，两处拼法一旦
  * 有分歧（多一个斜杠、少一次 encodeURIComponent），症状就是"点了白屏"且不报错。
  * 规则与拼装都在 src/skills/panel.js，后端在加载时就校验完并算好 URL。
  *
  * 后端把 `<APP_ROOT>/plugins|skills/<id>/` 与 `<DATA_DIR>/plugin-data/<id>/`
  * 只读挂在 `/plugin-panel/<id>/` 下（见 src/app.js 静态服务的"插件自带页面"分支），
- * 插件因此可以在**不改 UI 代码**的前提下提供自己的界面 —— 表情库查看器、
+ * 插件因此可以在**不改 UI 代码**的前提下提供自己的界面，表情库查看器、
  * 日志面板、配置向导之类。
  *
  * 为什么用 iframe 而不是把插件 HTML 注进来：
  *   ① 插件页有自己的 `<script>`，注进来会被主页面 CSP 的 script-src 'self' 拦掉；
  *   ② 它的 `<style>` 会串味到整个控制台；
- *   ③ iframe 是现成的沙箱 —— 插件页拿不到主页面的 DOM、变量和事件。
+ *   ③ iframe 是现成的沙箱，插件页拿不到主页面的 DOM、变量和事件。
  * 代价是插件页要自己再发一次请求，且只能读 `/plugin-panel/` 与 `/api` 的公开数据。
  *
  * @param {string} url    形如 /plugin-panel/<id>/panel/viewer.html（后端产出，已编码）
@@ -1901,7 +1849,7 @@ function openPluginPanel(url, title) {
     try { window.removeEventListener('message', onPanelMsg); } catch { /* 未定义时忽略 */ }
     layer.remove();
   };
-  // 挂 document 捕获、且**在设置弹窗的 onEsc 之后注册** —— 那一层会先跑，
+  // 挂 document 捕获、且**在设置弹窗的 onEsc 之后注册**，那一层会先跑，
   // 它靠 `document.querySelector('.plugin-panel-overlay')` 判断上面还压着一层而让路，
   // 于是 Esc 只关这一层（见 openSkillSettings 里的 onEsc）。
   const onEsc = (e) => {
@@ -1911,7 +1859,7 @@ function openPluginPanel(url, title) {
 
   // 加载探活。iframe 的 error 事件对 HTTP 错误**不触发**（404 也算一次"成功"的导航），
   // 所以不能靠它。两条路一起用：
-  //   ① load 之后直接看文档内容 —— 页面与宿主同源，读得到 contentDocument。
+  //   ① load 之后直接看文档内容，页面与宿主同源，读得到 contentDocument。
   //      后端的 404/403 返回的是 text/plain 的 "Not Found" / "Forbidden"，
   //      浏览器会把它当文档渲染，于是能精确识别"页面其实没找到"；
   //   ② 4 秒还没 load（被 CSP 挡、连接层失败）就按"没加载出来"处理。
@@ -1932,12 +1880,12 @@ function openPluginPanel(url, title) {
     if (!closed) fallback.hidden = false;
   }, 4000);
 
-  // ── 面板 → 宿主 的命令桥（2026-10-18）─────────────────────────────────
+  // ── 面板 → 宿主 的命令桥 ─────────────────────────────────────────────
   // 插件面板是只读静态页（安全模型见 src/skills/panel.js），但群友需要能
   // 直接编辑表情备注/标签。约定：面板 postMessage({ type:'qa-plugin-cmd',
   // tool, args, reqId })，宿主校验来源后转发到 /api/plugin-tool（该端点
   // 自带工具白名单 + 来源校验），再把结果 postMessage 回去。
-  // ⚠️ 只认**自己嵌的这个 iframe**（e.source 比对），且 origin 必须同源；
+  // ⚠️ 只认自己嵌的这个 iframe（e.source 比对），且 origin 必须同源；
   //    结果 targetOrigin 也钉死同源，不往 '*' 发。
   const onPanelMsg = async (e) => {
     if (closed || e.origin !== location.origin) return;
@@ -1981,13 +1929,13 @@ function openSkillSettings(skillId) {
   overlay.className = 'modal-overlay';
   overlay.innerHTML = built.html;
   document.body.appendChild(overlay);
-  // 2026-10-23 修复：手搓遮罩纳入焦点陷阱（自动登记只认 .model-modal-overlay），
+  // 手搓遮罩必须纳入焦点陷阱（自动登记只认 .model-modal-overlay），
   // 否则 Tab 能跑出技能设置弹窗到背后的页面。
   registerFocusTrap(overlay);
 
-  // ── 关闭：归还焦点 + 解绑全局监听（2026-10-10 r86 修）──
-  // 此前 close 只 overlay.remove()：① 焦点落回 body，键盘/读屏用户关闭后迷失；
-  // ② Esc 监听挂在 overlay 自身 —— 焦点一旦 Tab 出弹窗就再也按不掉 Esc。
+  // ── 关闭：归还焦点 + 解绑全局监听 ──
+  // close 只 overlay.remove() 的话：① 焦点落回 body，键盘/读屏用户关闭后迷失；
+  // ② Esc 监听挂在 overlay 自身，焦点一旦 Tab 出弹窗就再也按不掉 Esc。
   const prevFocus = document.activeElement;   // 记住打开它的那个按钮
   let closed = false;
   const close = () => {
@@ -2000,13 +1948,13 @@ function openSkillSettings(skillId) {
     unregisterFocusTrap(overlay);
     overlay.remove();
   };
-  // ⚠️ Esc 走**捕获阶段**挂 document，而不是挂在 overlay 上：
-  //   挂 overlay 时只在"焦点在弹窗内"才收得到；挂 document 捕获则先于
-  //   14-chrome.js 的冒泡处理器执行，stopPropagation 后不会连带关掉全屏页。
+  // ⚠️ Esc 走捕获阶段挂 document，而不是挂在 overlay 上：挂 overlay 时只在
+  //    "焦点在弹窗内"才收得到；挂 document 捕获则先于 14-chrome.js 的冒泡处理器
+  //    执行，stopPropagation 后不会连带关掉全屏页。
   const onEsc = (e) => {
     if (e.key === 'Escape') {
       // 上面还压着一层插件页面弹层时让路：Esc 该先关那一层（它自己的处理器负责），
-      // 否则一次 Esc 会连设置弹窗一起关掉 —— 而用户只是想从查看器退回来。
+      // 否则一次 Esc 会连设置弹窗一起关掉，而用户只是想从查看器退回来。
       if (document.querySelector('.plugin-panel-overlay')) return;
       e.preventDefault(); e.stopPropagation(); close();
     }
@@ -2083,13 +2031,13 @@ function openSkillSettings(skillId) {
  *
  * 两型在**代码里完全同构**（同一条加载器、同一套清单字段、同一个开关），
  * 唯一的区别是"谁决定何时执行"：
- *   skill  （LLM 型）  —— 注册工具，模型看了 description 自己决定调不调
- *   plugin （确定性型）—— 提供能力/钩子，核心代码按能力名确定性调用，必然执行
+ *   skill  （LLM 型），注册工具，模型看了 description 自己决定调不调
+ *   plugin （确定性型），提供能力/钩子，核心代码按能力名确定性调用，必然执行
  *
  * 这件事对使用者太重要了（决定"这个功能会不会被模型忽略"），所以拆成两个页签，
- * 但渲染逻辑共用一份 —— 否则两页的卡片、分组、开关行为迟早会分叉。
+ * 但渲染逻辑共用一份，否则两页的卡片、分组、开关行为迟早会分叉。
  *
- * ⚠️ 状态一律用后端 /api/skills 的判定结果，前端**不自己推断**能不能用 ——
+ * ⚠️ 状态一律用后端 /api/skills 的判定结果，前端**不自己推断**能不能用，
  * 否则又会出现"界面说能用、实际不生效"的两套口径。
  */
 const MODULE_KINDS = {
@@ -2102,8 +2050,8 @@ const MODULE_KINDS = {
     emptyHint: `还没加载到任何技能。<br />LLM 型技能放在项目的 <code>skills/&lt;id&gt;/</code> 目录，需要 <code>skill.json</code> + <code>index.js</code>。`,
     lead: `技能是 <b>LLM 型</b>扩展：它们注册工具进模型的 function 列表，<b>用不用、什么时候用由模型自己判断</b>。<br />
       所以技能不会"一定生效" —— 模型可能一直不调用它。需要"条件满足必跑"的功能，应该做成插件（见旁边的「插件」页签）。`,
-    // 折叠条上那一行摘要（2026-10-09 r30）：完整说明收进 <details>，默认收起。
-    // 这一句必须把"这一页跟旁边那页的区别"讲完 —— 它是两页唯一真正重要的分野。
+    // 折叠条上那一行摘要：完整说明收进 <details>，默认收起。
+    // 这一句必须把"这一页跟旁边那页的区别"讲完，那是两页唯一真正重要的分野。
     noteSummary: '技能是 LLM 型扩展 —— 用不用、什么时候用，由模型自己判断',
     setupTitle: '新增技能',
     setupHint: `在 <code>skills/&lt;id&gt;/</code> 放 <code>skill.json</code> + <code>index.js</code>，
@@ -2129,11 +2077,11 @@ const MODULE_KINDS = {
 };
 
 /* ══════════════════════════════════════════════════════════════
-   卡片顺序（用户拖拽排序，2026-09-20）
+   卡片顺序（用户拖拽排序）
    ══════════════════════════════════════════════════════════════
    两层持久化，和主题一个套路：
-     1. localStorage —— 拖完立即生效，不等接口
-     2. 后端 config.ui.moduleOrder.{skill|plugin} —— 换设备/重装后还在
+     1. localStorage，拖完立即生效，不等接口
+     2. 后端 config.ui.moduleOrder.{skill|plugin}，换设备/重装后还在
    没排过序（取不到任何顺序）就保持后端给的原顺序，不做任何重排。
 */
 function moduleOrderKey(kind) { return `qqa-module-order-${kind}`; }
@@ -2152,7 +2100,7 @@ function readModuleOrder(kind) {
 }
 
 /**
- * 内置模块的默认展示顺序（2026-10-18）。
+ * 内置模块的默认展示顺序。
  *
  * 排序逻辑是"重要性与常用度"，不是目录字母序：
  *   每天在用的（记忆 / 表情 / 前缀缓存）→ 影响回答准确度的（发言人身份 /
@@ -2160,8 +2108,8 @@ function readModuleOrder(kind) {
  *   运维（自检 / 修复 / 工单）→ 进阶能力（语音 / 视频下载 / 锻造台 / 抽帧）。
  * 字母序会把 account-pool、cache-guard 顶到最前面，用户完全看不出哪个是核心。
  *
- * ⚠️ 只作**默认值**：用户拖拽过的顺序（localStorage / config.ui.moduleOrder）优先。
- * ⚠️ 新装或第三方插件不在此表 → 落最后，保持后端原相对顺序（applyModuleOrder 的稳定排序）。
+ * ⚠️ 只作默认值：用户拖拽过的顺序（localStorage / config.ui.moduleOrder）优先。
+ * ⚠️ 新装或第三方插件不在此表 → 落最后，保持后端原相对顺序。
  */
 const DEFAULT_MODULE_ORDER = {
   plugin: [
@@ -2175,7 +2123,7 @@ const DEFAULT_MODULE_ORDER = {
 
 /** 按保存的顺序重排条目；没排过的 / 新装的条目按原相对顺序落在最后。 */
 function applyModuleOrder(items, kind) {
-  // 用户没拖过 → 用内置默认顺序（2026-10-18），不再落到 plugins/ 目录的字母序
+  // 用户没拖过 → 用内置默认顺序，不落到 plugins/ 目录的字母序
   const ord = readModuleOrder(kind) || DEFAULT_MODULE_ORDER[kind];
   if (!ord || !ord.length) return items;
   const pos = new Map();
@@ -2204,16 +2152,13 @@ function saveModuleOrder(kind, grid) {
 /**
  * 给一页的卡片装上拖拽排序。
  *
- * 用 Pointer Events 手动实现（2026-09-20 晚，替换 HTML5 DnD）。旧 DnD 方案两个
- * 体验问题：
- *   1. 拖动时浏览器自带"半透明快照"（drag image）跟着光标走 —— 用户看到
- *      两个标签（"留下拖动的标签"）；
- *   2. 让位是"插入式"的：拖卡与目标之间的所有卡整体平移一格 —— 用户预期
- *      是"和目标卡直接互换"。
- * 新交互：
- *   · 按住卡片左缘 26px 热区（手柄列）移动 ≥5px 才算拖起 —— 点卡片仍是开关；
+ * 用 Pointer Events 手动实现，不用 HTML5 DnD：DnD 会让浏览器自带的半透明快照
+ * 跟着光标走（用户看到两个标签），而且让位是"插入式"的（拖卡与目标之间的所有卡
+ * 整体平移一格），与用户预期的"和目标卡直接互换"不符。
+ * 交互：
+ *   · 按住卡片左缘 26px 热区（手柄列）移动 ≥5px 才算拖起，点卡片仍是开关；
  *   · 拖起：克隆一张浮层卡跟手（微倾斜 + 大投影），原卡淡出占位；
- *   · 悬停到另一张卡上：**只交换这两张** —— 目标卡 180ms 滑到拖卡原槽位，
+ *   · 悬停到另一张卡上：**只交换这两张**，目标卡 180ms 滑到拖卡原槽位，
  *     其余卡片纹丝不动（目标不变时过渡只跑一次，丝滑不抖）；
  *   · 松手：一次性提交 DOM 顺序并持久化（localStorage + 后端）。
  */
@@ -2222,7 +2167,7 @@ function setupCardDrag(scope, kind) {
   if (!grid) return;
   // ⚠️ 本函数每渲染一次就跑一次（技能/插件页的初次加载、重扫、导入、删除、
   //    开关、拖拽重排后重渲染……）。window 级监听若只加不移，长会话里反复
-  //    操作会往 window 上叠出一串 pointermove/up 监听 —— 每次移动指针都把它们
+  //    操作会往 window 上叠出一串 pointermove/up 监听，每次移动指针都把它们
   //    全跑一遍（旧闭包的 drag 恒为 null 属空转，但监听器数量无上限地涨）。
   //    先把上一次挂在这块 scope 上的摘掉，再挂本次的（见函数尾）。
   const prevWin = scope.__cardDragWin;
@@ -2246,7 +2191,7 @@ function setupCardDrag(scope, kind) {
     clone.style.height = r.height + 'px';
     // ⚠️ 抬起效果（rotate + scale，见 .mcard-ghost）默认绕**中心**变换，会把抓取点
     // 从指针下挪走（实测约漂移 11px，卡片越大越明显）。把变换原点设为抓取点，
-    // 卡片就绕"手指按住的那一点"倾斜放大 —— 指针始终钉在按下时的位置。
+    // 卡片就绕"手指按住的那一点"倾斜放大，指针始终钉在按下时的位置。
     clone.style.transformOrigin = `${drag.offX}px ${drag.offY}px`;
     document.body.appendChild(clone);
     el.classList.add('mcard-src');
@@ -2286,11 +2231,9 @@ function setupCardDrag(scope, kind) {
       const order = [...d.cards];
       order[d.fromIdx] = d.cards[d.toIdx];
       order[d.toIdx] = d.cards[d.fromIdx];
-      // ⚠️ 落位必须「零动画」（r38，用户反馈"拖动结束后有一小段奇怪的动画"）：
-      //   appendChild 移动已有节点时，浏览器会把**重挂前**的样式（目标卡身上还挂着
-      //   inline translate）当成过渡起点 —— 松手后那张已经滑到位的卡会再滑一遍，
-      //   叠上 :hover 的 1px 上浮就是两段诡异滑动（实测 document.getAnimations()
-      //   松手后同卡上有 2 个 CSSTransition(transform)，跑约 100ms）。
+      // ⚠️ 落位必须零动画：appendChild 移动已有节点时，浏览器会把重挂前的样式
+      //   （目标卡身上还挂着 inline translate）当成过渡起点，松手后那张已经滑到位
+      //   的卡会再滑一遍，叠上 :hover 的 1px 上浮就是两段诡异滑动。
       //   正解：先禁过渡 → 提交 DOM / 清 transform → 强制 reflow 让"零过渡下的
       //   终态"先成为样式事实 → 再恢复过渡。一帧内钉死，无任何收尾动画。
       d.cards.forEach((c) => { c.style.transition = 'none'; });
@@ -2305,8 +2248,8 @@ function setupCardDrag(scope, kind) {
   };
 
   grid.querySelectorAll('.mcard').forEach((cardEl) => {
-    // 2026-10-23：键盘排序。拖拽是唯一的排序方式，键盘用户无法调整技能/插件顺序。
-    // 给卡片补 Alt+↑/↓（与拖拽同一套落位逻辑：交换相邻卡后立即落盘）。
+    // 键盘排序：只有拖拽的话键盘用户无法调整顺序。
+    // Alt+↑/↓ 与拖拽同一套落位逻辑，交换相邻卡后立即落盘。
     cardEl.addEventListener('keydown', (e) => {
       if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
       e.preventDefault();
@@ -2325,8 +2268,7 @@ function setupCardDrag(scope, kind) {
       // 不能整卡都算拖拽，否则开关点不准。
       if (e.clientX - r.left > 26) return;
       // offX/offY = 抓取点相对卡片左上角的偏移：拖起来后浮层卡按这个偏移跟手，
-      // 指针始终停在你按下的那个位置上（曾经是中心对齐，一拖起卡片就"跳"到
-      // 鼠标正下方，手感像被甩了一下——2026-09-20 用户反馈）。
+      // 指针始终停在按下的位置。中心对齐的话一拖起卡片就"跳"到鼠标正下方。
       drag = {
         el: cardEl, startX: e.clientX, startY: e.clientY,
         offX: e.clientX - r.left, offY: e.clientY - r.top, started: false
@@ -2344,13 +2286,12 @@ function setupCardDrag(scope, kind) {
     drag.clone.style.left = Math.round(e.clientX - drag.offX) + 'px';
     drag.clone.style.top = Math.round(e.clientY - drag.offY) + 'px';
     // 悬停到哪张卡 → 与它互换。
-    // ⚠️ 不能拿「指针点」判定：从上往下拖会路过中间的卡，擦个边就误触发互换，
-    //    被擦过的卡猛地滑上来又弹回去 —— 用户说的"意义不明的动画"就是它。
-    //    改用**浮层卡与槽位的重叠面积**判定，并且带**回滞**（2026-09-21）：
-    //    接管新目标要 >50%，但已接管的目标要等重叠 <30% 才放手。只有一条阈值时，
-    //    拖卡悬在目标槽位边缘（重叠在 50% 附近）+ 鼠标轻微上下修正，会让下方卡
-    //    反复"顶上去→滑回来"（用户反馈的"一小段上弹然后滑下来"）—— 30~50% 的
-    //    回滞带把这个抖动整个吸收掉：一旦顶上去，只要还压着 3 成就不松手。
+    // ⚠️ 不能拿指针点判定：从上往下拖会路过中间的卡，擦个边就误触发互换，
+    //    被擦过的卡猛地滑上来又弹回去。
+    //    改用浮层卡与槽位的重叠面积判定，并且带回滞：接管新目标要 >50%，
+    //    已接管的目标要等重叠 <30% 才放手。单条阈值时，拖卡悬在槽位边缘
+    //    （重叠在 50% 附近）加鼠标轻微修正，会让下方卡反复"顶上去→滑回来"；
+    //    30~50% 的回滞带把这个抖动整个吸收掉。
     const gr = drag.clone.getBoundingClientRect();
     /** 拖卡与第 i 个槽位的重叠面积占该槽位的比例 */
     const fracOf = (i) => {
@@ -2401,29 +2342,19 @@ function moduleStateFingerprint() {
 /**
  * 载入并渲染「技能 / 插件」管理页。
  *
- * ⚠️ 2026-10-20（修「从别的页签点『下载』会明显卡一下」）：
- *    根因不是后端慢（实测 /api/skills 9.7ms、/api/prompt-preview 2.2ms），
- *    而是这个函数**每次进入都从头来一遍**：
- *      清空成骨架 → 等两个接口 → 整页重建 → 重绑所有事件
- *    骨架是同步写进去的，所以它至少会被画到屏幕上一帧 —— 用户看到的就是
- *    「旧页 → 骨架闪白 → 完整页」的三段跳；再叠加 .view 刚从 display:none
- *    变成 flex（一次全量布局）、强制 reflow（第二次）、innerHTML 覆盖（第三次），
- *    点一下的代价被放大成肉眼可见的卡顿。
- *
- *    现在分三条路：
- *      ① 已有数据 + 普通进入（绝大多数情况，包括从导航栏切过来）
- *         → 直接用内存数据渲染，**同步一次 DOM 写入**就出完整页；
- *           与后端的对齐放到后台，指纹没变就一个字节都不动。
- *      ② 首次进入（还没数据）/ fresh 强制 → 数据没到之前**不清空**，
- *         只有慢过 120ms 才补骨架（本地接口通常 10ms 就回来了，
- *         那条"必闪一帧"的骨架就是这么省掉的）。
- *      ③ rescan（「刷新」按钮 / 装完插件）→ 保留骨架，因为这个动作本来就慢，
- *         需要即时反馈。
+ * ⚠️ 每次进入都从头来一遍（清空成骨架 → 等接口 → 整页重建 → 重绑事件）会让
+ * 页面"旧页 → 骨架闪白 → 完整页"三段跳，点一下就是肉眼可见的卡顿。
+ * 现在分三条路：
+ *   ① 已有数据 + 普通进入（绝大多数情况）→ 直接用内存数据渲染，同步一次 DOM
+ *      写入就出完整页；与后端的对齐放到后台，指纹没变就一个字节都不动。
+ *   ② 首次进入（还没数据）/ fresh 强制 → 数据没到之前不清空，只有慢过 120ms
+ *      才补骨架（本地接口通常 10ms 就回来了，那条"必闪一帧"的骨架就是这么省掉的）。
+ *   ③ rescan（「刷新」按钮 / 装完插件）→ 保留骨架，这个动作本来就慢，需要即时反馈。
  *
  * @param {'skill'|'plugin'} kind
  * @param {{rescan?: boolean, fresh?: boolean}} opts
- *   rescan —— 让后端真的重扫磁盘（慢，带骨架）。
- *   fresh  —— 数据刚被别处改过（如清理未安装残留），别用缓存先画一遍。
+ *   rescan，让后端真的重扫磁盘（慢，带骨架）。
+ *   fresh，数据刚被别处改过（如清理未安装残留），别用缓存先画一遍。
  */
 async function loadModulePage(kind, { rescan = false, fresh = false } = {}) {
   const meta = MODULE_KINDS[kind];
@@ -2437,7 +2368,7 @@ async function loadModulePage(kind, { rescan = false, fresh = false } = {}) {
   if (hasCache && !rescan && !fresh) {
     renderModulePage(kind);
     // 技能页自己**不再**显示预览（右栏已撤，见 renderModulePage 顶部注释），
-    // 但「设置 → 工具与技能」那份要的是最新数据 —— 所以还是刷，只是**不再 await**：
+    // 但「设置 → 工具与技能」那份要的是最新数据，所以还是刷，只是**不再 await**：
     // 它是纯后台预热，没有任何理由挡住这一帧。（加载慢时它的代价也就跟着消失了）
     if (kind === 'skill') refreshPromptPreview(state.config || {});
     const before = moduleStateFingerprint();
@@ -2455,13 +2386,10 @@ async function loadModulePage(kind, { rescan = false, fresh = false } = {}) {
   let settled = false;
   const skelTimer = setTimeout(() => {
     if (settled) return;
-    // ⚠️ 2026-10-22：**已有内容时不要用骨架覆盖**。
-    // 群友反馈「安装插件 / skills 会重置页面」「每次安装完都得重新划下去」——
-    // 安装后 rescan 走的就是这条路：等 /api/skills 的这段时间里把列表换成骨架，
-    // 容器内容先清空再填，scrollTop 必然归零（实测：一次性同步替换 innerHTML
-    // 是**保留**滚动位置的，700 还是 700；但只要中间出现一次"清空"就归零）。
-    // 保留旧内容直到新数据回来 —— 用户眼前的列表位置不动，代价只是这
-    // 100~300ms 里看到的还是稍旧的一份，比"被弹回顶部"好得多。
+    // ⚠️ 已有内容时不要用骨架覆盖。安装后 rescan 走的就是这条路，等 /api/skills
+    // 期间把列表换成骨架的话，容器内容先清空再填，scrollTop 必然归零。
+    // 一次性同步替换 innerHTML 是保留滚动位置的，只要中间出现一次"清空"就归零。
+    // 保留旧内容直到新数据回来，代价只是这 100~300ms 里看到的是稍旧的一份。
     if (box.querySelector('.module-grid')) return;
     try { box.innerHTML = renderModuleSkeleton(meta); } catch { /* 骨架画不出来也不影响后续渲染 */ }
   }, 120);
@@ -2488,22 +2416,22 @@ function renderModuleSkeleton(meta) {
  *
  * @param {'skill'|'plugin'} kind 只渲染该类型；另一类的条目**完全不进这一页**
  */
-/* 技能页 / 插件页各自的状态筛选（PCL「实例设置 → 资源」那排 全部 / 启用 / 禁用）。
-   r94 新增：模块一多，"想找那个被我关掉的技能"得把整页卡片从头扫一遍。
-   只放内存态，不落配置 —— 刷新页面回到「全部」是符合直觉的。 */
+/* 技能页 / 插件页各自的状态筛选（全部 / 启用 / 禁用）。
+   模块一多，"想找那个被我关掉的技能"得把整页卡片从头扫一遍。
+   只放内存态，不落配置：刷新页面回到「全部」是符合直觉的。 */
 const MODULE_FILTER = { skill: 'all', plugin: 'all' };
-/* 来源筛选（2026-10-22 新增）：把随应用分发的内置模块和自己后来装的隔开，方便管理。
-   与 MODULE_FILTER（状态）是**两个独立维度**，同时生效（AND）。
+/* 来源筛选：把随应用分发的内置模块和自己后来装的隔开，方便管理。
+   与 MODULE_FILTER（状态）是两个独立维度，同时生效（AND）。
    数据来自 /api/skills 每条上的 builtin 字段（后端按 builtin-modules.json 的目录名判定）。 */
 const MODULE_SOURCE = { skill: 'all', plugin: 'all' };
 
-/* r95：target / opts 是给「会话设置」页右栏复用的入口 —— 不传时行为与以前逐字相同。
+/* target / opts 是给「会话设置」页右栏复用的入口，不传时行为与以前逐字相同。
    · target：渲染到哪个容器（默认仍是本页自己的 #skills-page / #plugins-page）。
-   · opts.compact：精简版 —— 只出「标题 + 计数 + 状态筛选 + 卡片网格」。
-     省掉的三块（去市场 / ＋添加 / 刷新、未安装残留清理）都带**全局唯一 id**
+   · opts.compact：精简版，只出「标题 + 计数 + 状态筛选 + 卡片网格」。
+     省掉的三块（去市场 / ＋添加 / 刷新、未安装残留清理）都带全局唯一 id
      （#skills-refresh-btn、#skills-cleanup-btn…），而 #view-skills / #view-plugins
-     一直挂在 DOM 里 —— 两份同 id 的 DOM 会让 $() 只认先出现的那一个，
-     另一份的按钮全成哑的（点了没反应，还查不出原因）。 */
+     一直挂在 DOM 里。两份同 id 的 DOM 会让 $() 只认先出现的那一个，
+     另一份的按钮全成哑的。 */
 function renderModulePage(kind, target, opts) {
   const meta = MODULE_KINDS[kind];
   if (!meta) return '';
@@ -2511,7 +2439,7 @@ function renderModulePage(kind, target, opts) {
   const compact = !!(opts && opts.compact);
   const all = state.skills || [];
   // 只留本页该管的类型。
-  // ⚠️ kind 为 null（自定义根目录，如测试用的临时目录）时归入**技能页**而不是丢弃 ——
+  // ⚠️ kind 为 null（自定义根目录，如测试用的临时目录）时归入**技能页**而不是丢弃，
   // "界面上凭空少了一个条目"比"归错页"难排查得多（用户刚刚就踩过这个坑）。
   // 卡片上会标「目录未识别」提示作者去确认放置位置。
   const items = all.filter((s) => s.kind === meta.kind || (s.kind == null && meta.kind === 'skill'));
@@ -2525,7 +2453,7 @@ function renderModulePage(kind, target, opts) {
   };
 
   if (!items.length) {
-    // 2026-10-18：首次进入（扩展列表还没拉回来）与"真的一件都没装"必须分开 ——
+    // 首次进入（扩展列表还没拉回来）与"真的一件都没装"必须分开，
     // 否则切页签的瞬间会闪一下"还没有插件/技能"，看起来像数据丢了。
     if (!state.skillsReady) {
       const loading = `<div class="usage-wrap">
@@ -2561,14 +2489,12 @@ function renderModulePage(kind, target, opts) {
     return empty;
   }
 
-  // ── 半宽卡片 + 拖拽排序（2026-09-20 改版）──
-  // 上一版是「一整行大卡 + 按分类分组」：一屏放不下几个，翻很久。
-  // 现在：取消分类（分类图标/标签一并去掉），一屏两列半宽卡；
-  // 顺序由用户按住左侧手柄拖动决定，存 config.ui.moduleOrder + localStorage。
+  // ── 半宽卡片 + 拖拽排序 ──
+  // 取消分类，一屏两列半宽卡；顺序由用户按住左侧手柄拖动决定，
+  // 存 config.ui.moduleOrder + localStorage。
   // 卡左条颜色表达状态（绿=生效 / 灰=已关 / 红=加载失败 / 黄=依赖未就绪）。
-  // 设置钮图标（2026-09-20 换版）：用户点名要「齿轮」造型（线性 outline 风格）。
-  // 上一版用的滑块图标被换掉；这颗齿是 8 齿 + 中轴双圈，stroke 线性，
-  // 与顶栏自绘窗口按钮同一套图标语言（fill:none / stroke:currentColor 由 CSS 提供）。
+  // 设置钮用 8 齿 + 中轴双圈的齿轮，与顶栏自绘窗口按钮同一套线性图标语言
+  // （fill:none / stroke:currentColor 由 CSS 提供）。
   const GEAR_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true">'
     + '<circle cx="12" cy="12" r="3.2"/>'
     + '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>'
@@ -2600,8 +2526,8 @@ function renderModulePage(kind, target, opts) {
       : (!s.enabled ? '已关闭（点击开启）'
         : (active ? '生效中（点击关闭）' : `已启用但依赖未就绪：${s.reason || (s.missingRequires || []).join('、') || '原因未知'}`));
     const stateText = !loadedOk ? '加载失败' : (!s.enabled ? '已关闭' : (active ? '生效中' : '依赖未就绪'));
-    // 运行时熔断徽章（2026-10-19）：加载成功、开关开着、但工具连续失败触发了
-    // 护栏熔断 —— 这是"启用后跑不正常"的唯一目前可自动感知的信号，必须可见。
+    // 运行时熔断徽章：加载成功、开关开着、但工具连续失败触发了护栏熔断。
+    // 这是"启用后跑不正常"目前唯一能自动感知的信号，必须可见。
     // 熔断到期自动恢复（半开），成功一次即复位，所以徽章是临时态不是封禁。
     const brk = (s.breaker && s.breaker.open) ? s.breaker : null;
     const brkTitle = brk
@@ -2610,25 +2536,24 @@ function renderModulePage(kind, target, opts) {
     const brkBadge = brk
       ? `<span class="mcard-state mcard-brk" title="${esc(brkTitle)}">已熔断</span>`
       : '';
-    // 调用性诊断（2026-10-19）：生效中 ≠ 模型调得到。callability 由后端
-    // 按 skillId 聚合 /api/tools/availability 的结果：工具可以因为「单工具
-    // 开关 / 分类开关 / 视觉依赖」等被静默拦在模型列表外 —— 以前这种卡片
-    // 也显示"生效中"，用户体感就是"插件没法正常调用"。
+    // 调用性诊断：生效中 ≠ 模型调得到。callability 由后端按 skillId 聚合
+    // /api/tools/availability 的结果。工具可以因为单工具开关 / 分类开关 /
+    // 视觉依赖等被静默拦在模型列表外，而卡片仍显示"生效中"。
     const cal = (loadedOk && s.enabled && s.active && s.callability) ? s.callability : null;
     const calAllBlocked = !!(cal && cal.total > 0 && cal.callables === 0);
     const calBlockedBadge = calAllBlocked
       ? `<span class="mcard-state mcard-brk" title="它的 ${cal.total} 个工具当前全部进不了模型列表：${esc((cal.blocked[0] || {}).reason || '原因未知')}">工具被关</span>`
       : '';
     // 放置/引导 lint 警告：skills/ 里没工具（模型完全看不见）、注册了工具
-    // 却没有策略段引导等 —— 不是故障，但正是"写了东西却没人调用"的来源。
+    // 却没有策略段引导等。不是故障，但正是"写了东西却没人调用"的来源。
     const lintWarns = (loadedOk && Array.isArray(s.warnings)) ? s.warnings : [];
     const lintBadge = lintWarns.length
       ? `<span class="mcard-state mcard-brk" title="${esc(lintWarns.join('；').slice(0, 400))}">⚠️ 有警告</span>`
       : '';
     const allFields = Object.keys(s.configSchema || {});
     const panelCount = Array.isArray(s.panels) ? s.panels.length : 0;
-    // ⚙ 出现的条件要**同时**看设置项和界面入口：只有 panels、没有配置项的插件
-    // 一样需要这颗齿轮才能进弹窗 —— 否则它的界面就完全没入口了。
+    // ⚙ 出现的条件要同时看设置项和界面入口：只有 panels、没有配置项的插件
+    // 一样需要这颗齿轮才能进弹窗，否则它的界面就完全没入口了。
     const gearTitle = panelCount
       ? `界面 / 设置（${panelCount} 个界面 · ${allFields.length} 项设置）`
       : `设置（${allFields.length} 项）`;
@@ -2639,20 +2564,18 @@ function renderModulePage(kind, target, opts) {
     // 图标按钮的点击会 stopPropagation，不会触发整卡开关。
     const kindLabel = (s.kind || kind) === 'plugin' ? '插件' : '技能';
     const delBtn = `<button class="mcard-del" data-skill-id="${esc(s.id)}" data-skill-name="${esc(s.name)}" data-skill-kind="${esc(s.kind || kind || '')}" title="删除${kindLabel}（从磁盘移除整个文件夹，不可恢复）" aria-label="删除 ${esc(s.name)}">${TRASH_SVG}</button>`;
-    // 「信任并重试」按钮（2026-10-07 新增）：仅在**因高危能力被拦**时出现。
-    // 准入闸是为了保护用户，但用户自己写的插件常常确实需要 fs；
-    // 没有这一键就只剩"手改 data/config.json"或"把闸门关掉"两个坏选择。
-    // 按钮只在该模块处于这个特定失败状态时出现 —— 不是所有加载失败都能点信任。
+    // 「信任并重试」按钮仅在因高危能力被拦时出现。准入闸是为了保护用户，
+    // 但用户自己写的插件常常确实需要 fs，没有这一键就只剩"手改
+    // data/config.json"或"把闸门关掉"两个坏选择。不是所有加载失败都能点信任。
     const trustable = !loadedOk && /触碰了高危能力/.test(String(s.loadError || ''));
     const trustBtn = trustable
       ? `<button class="mcard-trust" data-skill-id="${esc(s.id)}" data-skill-dir="${esc(s.dir || s.id)}"
            title="我信任这个${kindLabel}，允许它使用本机能力（会记入信任名单）"
            aria-label="信任并重试 ${esc(s.name)}">信任并重试</button>`
       : '';
-    // 自动适配入口（2026-10-19）：加载失败、或加载正常但触发熔断（工具连续失败）
-    // 的模块，一键送去「升级扩展」工作台 —— 那是现成的适配 harness：
-    // 复制进暂存区 → 模型按本机环境改 → 五道闸门 + 自动修复回路 → 你确认后才
-    // 备份覆盖安装（可回滚）。全程不原地改，失败也不伤原文件。
+    // 自动适配入口：加载失败、或加载正常但触发熔断的模块，一键送去「升级扩展」
+    // 工作台（复制进暂存区 → 模型按本机环境改 → 五道闸门 + 自动修复回路 →
+    // 你确认后才备份覆盖安装）。全程不原地改，失败也不伤原文件。
     const adaptCandidate = !loadedOk || brk;
     const adaptDir = (String(s.dir || '').replace(/\\/g, '/').split('/').pop()) || s.id;
     const adaptBtn = adaptCandidate
@@ -2693,16 +2616,12 @@ function renderModulePage(kind, target, opts) {
   };
 
   // ── 两页共用一个骨架：标题 / 说明折叠条 / 卡片网格 / 尾注 / 新增说明 ──
-  // （2026-10-09 r30）这里原来还有个"技能页专属右栏"放提示词预览，撤掉了：
-  //   ① 原型里这一页根本没有预览栏 —— 预览在「设置 → 工具与技能」（真机设置页
-  //      本文件后面**已经有一份**，技能页那份是重复的）；
-  //   ② 它把技能页左栏挤到 630px，而插件页是 1048px —— 两页卡片宽 309 vs 464、
-  //      说明块 7 行 vs 5 行，实测差异全从这一栏来。
-  //   撤掉后两页左栏都是 1048，.usage-wrap(940) 上限两页同时触发，卡片/换行完全一致。
-  // 分类分组已取消：全部条目平铺进**一个** grid，顺序 = 用户拖出来的顺序。
+  // 技能页专属的提示词预览右栏已撤掉：预览在「设置 → 工具与技能」已经有一份，
+  // 那一栏还把技能页左栏挤窄，两页的卡片宽度与换行都不一致。
+  // 分类分组已取消：全部条目平铺进一个 grid，顺序 = 用户拖出来的顺序。
   const ordered = applyModuleOrder(items, kind);
-  // ── 状态筛选条（r94）──
-  // 计数直接复用上面按本页现算的 mine（后端 summary 是全量的，用它会串页）。
+  // ── 状态筛选条 ──
+  // 计数复用上面按本页现算的 mine（后端 summary 是全量的，用它会串页）。
   const filter = MODULE_FILTER[kind] || 'all';
   const filterTabs = [
     { id: 'all', label: '全部', n: mine.total },
@@ -2713,7 +2632,7 @@ function renderModulePage(kind, target, opts) {
   // 来源维度：内置 / 第三方（s.builtin 由后端按 builtin-modules.json 的目录名给出）
   const srcFilter = MODULE_SOURCE[kind] || 'all';
   const builtinCount = items.filter((s) => s.builtin).length;
-  // 过渡期兜底：后端还没带上 builtin 字段时（换了前端没重启进程），整组不显示 ——
+  // 过渡期兜底：后端还没带上 builtin 字段时（换了前端没重启进程），整组不显示。
   // 否则会写「内置 0 / 第三方 12」，看着像"内置的都不见了"，比不显示更吓人。
   const hasBuiltinInfo = items.some((s) => typeof s.builtin === 'boolean');
   const srcTabs = [
@@ -2731,7 +2650,7 @@ function renderModulePage(kind, target, opts) {
     return true;
   });
   // 两组筛选条：状态一行、来源一行。挤在一行放不下（状态 4 档 + 来源 3 档），
-  // 而且混在一起会让人以为"内置"也是一种状态 —— 分成两行、来源那行加个小标签。
+  // 而且混在一起会让人以为"内置"也是一种状态，分成两行、来源那行加个小标签。
   const filterBar = `<div class="mod-filters" style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 8px">`
     + filterTabs.map((f) => `<button type="button" class="btn btn-small" data-mod-filter="${f.id}"`
       // 选中态用主题强调色（与「会话设置 → 扩展」的子页签同一套写法，避免新增一次性 CSS）
@@ -2775,7 +2694,7 @@ function renderModulePage(kind, target, opts) {
       <button class="btn btn-small" id="skills-cleanup-btn">清理这些残留配置</button>`
     : '';
 
-  // 工具条（r95）：compact（会话设置页右栏）只留标题 + 计数 + 一颗「打开完整管理页」——
+  // 工具条：compact（会话设置页右栏）只留标题 + 计数 + 一颗「打开完整管理页」。
   // 其余三颗钮的 id 与「下载」页那一份同名，这里不能再来一份（见函数头注释）。
   const headHtml = compact
     ? `<div class="usage-head">
@@ -2795,10 +2714,9 @@ function renderModulePage(kind, target, opts) {
           </div>
         </div>`;
 
-  // r107：一键信任全部 banner —— 当本页存在"因高危能力被拦"的卡时，
-  //   在筛选条上方挂一条提示 + 一颗按钮，省得用户挨个点。
-  //   在 compact 模式（会话设置 → 扩展 那份）也照样渲染：那边也会显示这些卡。
-  //   判据与卡片自己渲染"信任并重试"按钮用的同一条 —— 不可能错挂/漏挂。
+  // 一键信任全部 banner：本页存在"因高危能力被拦"的卡时，在筛选条上方挂一条
+  // 提示 + 一颗按钮，省得用户挨个点。compact 模式也照样渲染，那边也会显示这些卡。
+  // 判据与卡片自己渲染"信任并重试"按钮用的同一条，不会错挂或漏挂。
   const trustableItems = items.filter((s) => !s.loaded && /触碰了高危能力/.test(String(s.loadError || '')));
   const trustAllBanner = trustableItems.length > 0
     ? `<div class="mod-trust-all">
@@ -2814,7 +2732,7 @@ function renderModulePage(kind, target, opts) {
         <!-- 说明折叠条（2026-10-09 r30）：原来这段是常显的 .hint 文字墙，
              技能页 7 行 121px、插件页 5 行 87px（其中 3 行两页逐字相同），
              顶部吃掉了 10~14% 的视口。现在收进原生 <details>，默认收起，
-             顶部只留一行摘要 —— 信息一字不丢，两页骨架也因此长得一样。
+             顶部只留一行摘要，信息一字不丢，两页骨架也因此长得一样。
              用原生 details 而不是自绘折叠：无 JS 参与，键盘/读屏天然可用。 -->
         <details class="module-note">
           <summary>
@@ -2854,44 +2772,42 @@ function renderPluginsPage() { return renderModulePage('plugin'); }
  *
  * @param {'skill'|'plugin'} kind
  * @param {Element} [scopeEl] 渲染容器。不传 = 本页自己的 #skills-page / #plugins-page；
- *        「会话设置」页右栏复用时传它（r95）。
- * @param {{compact?:boolean}} [opts] 与 renderModulePage 同一份 —— 重渲染时要原样带回去。
+ *        「会话设置」页右栏复用时传它。
+ * @param {{compact?:boolean}} [opts] 与 renderModulePage 同一份，重渲染时要原样带回去。
  */
 function bindModulePageEvents(kind, scopeEl, opts) {
   const meta = MODULE_KINDS[kind];
   if (!meta) return;
   const compact = !!(opts && opts.compact);
-  /* ⚠️ 绑定范围必须是**本次渲染的那个容器**：
-     两个视图（#view-skills / #view-plugins）一直挂在 DOM 里（只是 display 切换），
-     而「会话设置」页右栏是第三份 —— 用全局 $ / $$ 会把别的容器命中一遍，
-     同一个开关被绑两次，拨一下发两个请求。
-     r95 起 id 那几颗钮（刷新 / 去市场 / ＋添加 / 清理残留）一律走 q()：
-     compact 版根本没渲染它们，q() 返回 null → 直接跳过，不会再误绑到「下载」页那份。 */
+  /* ⚠️ 绑定范围必须是本次渲染的那个容器：两个视图（#view-skills / #view-plugins）
+     一直挂在 DOM 里（只是 display 切换），而「会话设置」页右栏是第三份。用全局
+     $ / $$ 会把别的容器也命中一遍，同一个开关被绑两次，拨一下发两个请求。
+     id 那几颗钮（刷新 / 去市场 / ＋添加 / 清理残留）一律走 q()：compact 版根本
+     没渲染它们，q() 返回 null 直接跳过，不会再误绑到「下载」页那份。 */
   const scope = scopeEl || $(meta.boxSel);
   if (!scope) return;
   const boxEl = scope;
   const q = (sel) => scope.querySelector(sel);
-  // 重渲染：把本次的容器与选项原样带回（不传 → 与 r94 及以前逐字相同）
+  // 重渲染：把本次的容器与选项原样带回
   const rerender = () => renderModulePage(kind, scopeEl, opts);
-  // 整页放置区：把 zip / 文件夹拖进来直接装（绑在容器上，页面重渲染不会丢）
+  // 整页放置区：把 zip / 文件夹拖进来直接装（绑在容器上，页面重渲染不会丢）。
   // ⚠️ compact（会话设置页右栏）不接拖放：拖进来的包装完之后只重画「下载」页那一份，
   //    这一页会停在旧列表上，看着像"没装上"。
   if (!compact) bindModuleDropZone(kind, boxEl);
   q(`#${meta.tab}-refresh-btn`)?.addEventListener('click', () => loadModulePage(kind, { rescan: true }));
-  // 「去市场逛逛」（r87）：直接切到应用内市场页 —— 这是最省事的装法，
-  // 所以放在「＋ 添加」左边更靠前的位置。
+  // 「去市场逛逛」：直接切到应用内市场页，这是最省事的装法，放在「＋ 添加」之前。
   q(`#${meta.tab}-market-btn`)?.addEventListener('click', () => {
     try { if (typeof switchTab === 'function') switchTab(meta.kind === 'plugin' ? 'pluginmarket' : 'skillmarket'); }
     catch (e) { /* 忽略：切页失败不应打断当前页 */ }
   });
-  // 「添加技能/插件」：三个去处 —— 市场 / 导入本地 / 自己造（2026-10-10 r87 改版）。
+  // 「添加技能/插件」：三个去处，市场 / 导入本地 / 自己造。
   q(`#${meta.tab}-create-btn`)?.addEventListener('click', () => openAddModuleModal(kind));
   // 残留配置清理（只在技能页渲染，按钮也只在这一页出现）
   q('#skills-cleanup-btn')?.addEventListener('click', async () => {
     const btn = q('#skills-cleanup-btn');
     if (!btn || !state.uninstalledSkills?.length) return;
     const ids = state.uninstalledSkills.map((u) => u.id);
-    // ⚠️（2026-10-10 r86 修 P2）清理配置=删除条目 → danger:true
+    // 清理配置 = 删除条目 → danger:true
     if (!await qaConfirm({
       danger: true,
       confirmText: `清理 ${ids.length} 条`,
@@ -2901,21 +2817,17 @@ function bindModulePageEvents(kind, scopeEl, opts) {
     try {
       const r = await api('/api/skills/cleanup', { method: 'POST', body: JSON.stringify({ ids }) });
       if (r.config) state.config = r.config;
-      // fresh：刚清掉一批残留配置，缓存里那份已经不对了 —— 不能先拿它画一遍再等后台对齐
+      // fresh：刚清掉一批残留配置，缓存里那份已经不对了，不能先拿它画一遍再等后台对齐
       await loadModulePage('skill', { fresh: true });
     } catch (e) {
       qaAlert(`清理失败：${e?.message || e}`);
       btn.disabled = false;
     }
   });
-  // 注意这里是 $$ （返回数组）不是 $（返回单个元素）：
-  // 卡片可能有多个，用 $ 会拿到一个元素然后 .forEach 报错。
-  // ⚠️ 绑定范围必须限定在**本页容器内**：两个页面同时存在于 DOM 里（只是 view 切换显隐），
-  // 用全局 $$ 会把另一页的卡片也绑一遍 —— 同一个开关被绑两次，一次切换会发两个请求。
-  // compact 版多一颗「打开完整管理页」（r95）：关掉全屏页、切到「下载 → 技能 / 插件」。
+  // compact 版多一颗「打开完整管理页」：关掉全屏页、切到「下载 → 技能 / 插件」。
   // ⚠️ 关页与切页之间必须隔一拍：15-chat-chrome.js 的 sync() 会在微任务里把 tab
-  //    还原成"打开全屏页之前那一页"，同一 tick 里的 switchTab 会被它顶掉（r95 实测）。
-  //    closeBigPageThen 就是 14-chrome.js 里那份带延时的版本；取不到时退回本地同款实现。
+  //    还原成"打开全屏页之前那一页"，同一 tick 里的 switchTab 会被它顶掉。
+  //    closeBigPageThen 是 14-chrome.js 里带延时的版本；取不到时退回本地同款实现。
   q('[data-mod-fullpage]')?.addEventListener('click', () => {
     const tab = meta.tab;
     if (typeof window.closeBigPageThen === 'function') { window.closeBigPageThen(tab); return; }
@@ -2923,14 +2835,14 @@ function bindModulePageEvents(kind, scopeEl, opts) {
     if (back) back.click();
     setTimeout(() => { try { if (typeof switchTab === 'function') switchTab(tab); } catch (e) { /* 忽略 */ } }, 0);
   });
-  // 状态筛选（r94）：只切内存里的筛选态后重渲染本页，不重新拉数据、不发请求。
+  // 状态筛选：只切内存里的筛选态后重渲染本页，不重新拉数据、不发请求。
   scope.querySelectorAll('[data-mod-filter]').forEach((b) => {
     b.addEventListener('click', () => {
       MODULE_FILTER[kind] = b.dataset.modFilter;
       rerender();
     });
   });
-  // 来源筛选（内置 / 第三方）—— 与状态筛选独立，各自记各自的选中档
+  // 来源筛选（内置 / 第三方），与状态筛选独立，各自记各自的选中档
   scope.querySelectorAll('[data-mod-src]').forEach((b) => {
     b.addEventListener('click', () => {
       MODULE_SOURCE[kind] = b.dataset.modSrc;
@@ -2938,8 +2850,7 @@ function bindModulePageEvents(kind, scopeEl, opts) {
     });
   });
   // 齿轮按钮：卡片里的唯一入口（class 名是 mcard-gear）。
-  // ⚠️ 2026-10-21：这里原先还带一个 `.skill-settings-btn`，全仓搜不到任何地方产出这个 class
-  //    （HTML/CSS/模板都没有），属于改版后残留的死选择器 —— 已删，别再照着旧代码加回来。
+  // 不要再用 .skill-settings-btn，那个 class 全仓没有任何地方产出。
   scope.querySelectorAll('.mcard-gear').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();   // 齿轮在卡片内部，点它不能触发整卡开关
@@ -2956,7 +2867,7 @@ function bindModulePageEvents(kind, scopeEl, opts) {
       const isPlugin = btn.dataset.skillKind === 'plugin';
       const kindLabel = isPlugin ? '插件' : '技能';
       const dirLabel = isPlugin ? 'plugins' : 'skills';
-      // ⚠️（2026-10-10 r86 修 P2）从磁盘整体移除 → danger:true
+      // 从磁盘整体移除 → danger:true
       if (!await qaConfirm({
         danger: true,
         confirmText: `删除${kindLabel}`,
@@ -2975,15 +2886,14 @@ function bindModulePageEvents(kind, scopeEl, opts) {
     });
     btn.addEventListener('keydown', (e) => e.stopPropagation());
   });
-  // 信任并重试（2026-10-07 新增）：只有「因高危能力被拦」的卡片上才有这个钮。
+  // 信任并重试：只有「因高危能力被拦」的卡片上才有这个钮。
   // 后端会校验它此刻确实处于该状态（不是万能放行口），登记后立刻 reloadSkills，
-  // 用户点完就能看到结果 —— 不用去手改 data/config.json，也不用把闸门整个关掉。
-  // r107：抽出 trustPluginInline() 给「卡片点信任」和「一键信任全部」共用。
-  // bug fix：原先 `body: { id: dir }` 直接传对象，fetch 行为在不同 Electron 版本里
-  //   不一致（有的自动 JSON.stringify 有的把对象 toString 成 "[object Object]"），
-  //   后端拿到非 JSON body 就回 "缺少 id"。统一改成 JSON.stringify。
-  // 错误文案：把后端"缺少 id / 找不到模块 / 当前不是因高危能力被拦截"等技术错误
-  //   翻译成用户能看懂的提示 —— 不暴露 JSON 格式规约。
+  // 用户点完就能看到结果，不用手改 data/config.json，也不用把闸门整个关掉。
+  // trustPluginInline() 给「卡片点信任」和「一键信任全部」共用。
+  // ⚠️ body 必须 JSON.stringify：直接传对象时不同 Electron 版本行为不一致
+  //    （有的自动序列化，有的 toString 成 "[object Object]"），后端会回"缺少 id"。
+  // translateTrustError 把后端的"缺少 id / 找不到模块 / 当前不是因高危能力被拦截"
+  //    翻译成用户能看懂的提示，不暴露 JSON 格式规约。
   async function trustPluginInline(dir) {
     const r = await api('/api/skills/trust', { method: 'POST', body: JSON.stringify({ id: dir }) });
     if (r.config) state.config = r.config;
@@ -2996,12 +2906,12 @@ function bindModulePageEvents(kind, scopeEl, opts) {
     if (m.includes('当前不是因高危能力')) return '该插件当前不处于"需信任"状态（可能已被自动恢复）。';
     return m || '未知错误';
   }
-  // 自动适配（2026-10-19）：把「加载失败 / 熔断中」的模块送去 harness 的
-  // 「升级扩展」工作台（self-doctor 前端页，extension-forge 供能力）并自动
-  // 起草适配草稿。升级管线 = 复制进暂存区 → 模型按本机环境改 → 五道闸门
-  // （带自动修复回路）→ 人工确认 → 备份原版后覆盖安装 → 随时可回滚。
-  // 与「信任并重试」的分工：信任管"能力被闸拦下"（人审即可），适配管
-  // "代码本身跑不起来"（需要模型动手）。
+  // 自动适配：把「加载失败 / 熔断中」的模块送去 harness 的「升级扩展」工作台
+  // （self-doctor 前端页，extension-forge 供能力）并自动起草适配草稿。
+  // 升级管线 = 复制进暂存区 → 模型按本机环境改 → 五道闸门（带自动修复回路）
+  // → 人工确认 → 备份原版后覆盖安装 → 随时可回滚。
+  // 与「信任并重试」的分工：信任管"能力被闸拦下"（人审即可），
+  // 适配管"代码本身跑不起来"（需要模型动手）。
   async function goAdaptInForge({ kind, dir, name }) {
     const kindLabel = kind === 'plugin' ? '插件' : '技能';
     // 先探 forge 是否可用：没启用就直接告诉用户去哪开，别让用户跳过去看半页空
@@ -3011,7 +2921,7 @@ function bindModulePageEvents(kind, scopeEl, opts) {
         qaAlert(`自动适配由「扩展锻造台」插件提供 —— 它当前未启用。\n\n去「下载 → 已安装 → 插件」找到 extension-forge 并启用，然后回来点这个「自动适配」。`);
         return;
       }
-    } catch { /* 探测失败继续跳 —— 升级页内部还有一层未启用提示兜底 */ }
+    } catch { /* 探测失败继续跳，升级页内部还有一层未启用提示兜底 */ }
     if (typeof switchTab !== 'function' || typeof switchDoctorSub !== 'function' || typeof runUpgradeStart !== 'function') {
       qaAlert('升级扩展工作台不可用（前端脚本可能不是最新），请刷新页面后重试。');
       return;
@@ -3038,8 +2948,8 @@ function bindModulePageEvents(kind, scopeEl, opts) {
       const id = btn.dataset.skillId;
       const dir = btn.dataset.skillDir || id;
       const name = btn.closest('.mcard')?.querySelector('.mcard-name')?.textContent || id;
-      // r107：把"config.trustedPlugins 里的「xxx」"这种技术细节摘掉，
-      //   改成"加入信任名单"一句话讲清楚后果 —— 用户不关心配置字段名。
+      // 不写"config.trustedPlugins 里的「xxx」"这种技术细节，
+      // 用"加入信任名单"讲清后果，用户不关心配置字段名。
       const ok = await qaConfirm(
         `信任「${name}」并允许它使用本机能力吗？\n\n`
         + `它会读取文件、调用进程、访问网络 —— 与本程序同进程运行，\n`
@@ -3054,7 +2964,7 @@ function bindModulePageEvents(kind, scopeEl, opts) {
         const r = await trustPluginInline(dir);
         await loadSkillsStatus();
         rerender();
-        // 成功时不需要额外提示 —— renderModulePage 之后卡片自己就从
+        // 成功时不需要额外提示，renderModulePage 之后卡片自己就从
         // "加载失败" 变回可用了，那就是反馈。（本项目只有阻塞式对话框，
         // 没有 toast；为一个成功态弹窗反而是干扰。）
         if (r.stillFailing) qaAlert(`已记入信任名单，但仍然加载失败：\n${r.stillFailing}`);
@@ -3066,11 +2976,10 @@ function bindModulePageEvents(kind, scopeEl, opts) {
     });
     btn.addEventListener('keydown', (e) => e.stopPropagation());
   });
-  // 一键信任全部（r107）：与卡片级「信任并重试」共用 trustPluginInline + translateTrustError。
-  // ⚠️ 必须用**全量** items 算 trustable（不能用 DOM 里的 .mcard-trust 钮来代算）：
-  //   筛选条停在「生效 / 已关」时，被拦的卡根本没渲染出来 → 钮为 0 颗，
-  //   却仍按 banner 文案提示"已信任 N 个"，造成"点了没反应"的错觉。
-  //   所以这里原样重算一遍（判据与 banner、与卡片按钮同一条正则），保证对得上。
+  // 一键信任全部：与卡片级「信任并重试」共用 trustPluginInline + translateTrustError。
+  // ⚠️ 必须用全量 items 算 trustable，不能数 DOM 里的 .mcard-trust 钮：
+  //    筛选条停在「生效 / 已关」时被拦的卡根本没渲染出来，钮为 0 颗，
+  //    却仍按 banner 文案提示"已信任 N 个"。判据与 banner、卡片按钮同一条正则。
   const allTrustBtn = q('#mod-trust-all-btn');
   if (allTrustBtn) {
     allTrustBtn.addEventListener('click', async () => {
@@ -3105,7 +3014,6 @@ function bindModulePageEvents(kind, scopeEl, opts) {
       }
     });
   }
-  // 上传到市场：入口已收进「设置」弹窗（卡片上不再放 ⬆ 钮）。
   // ── 切换启停：点滑块开关 或 点卡片其余区域（保留旧习惯）。
   // 两者共用同一条请求链；开关上的 click 会 stopPropagation，避免卡片再触发一次。
   const toggleModule = async (id, next, busyEl) => {
@@ -3145,16 +3053,16 @@ function bindModulePageEvents(kind, scopeEl, opts) {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
     });
   });
-  // 拖拽排序：放在最后 —— 它要读 grid 里最终的卡片顺序
+  // 拖拽排序：放在最后，它要读 grid 里最终的卡片顺序
   setupCardDrag(scope, kind);
 }
 
-// 工具分类的顺序与名字提到模块级：buildToolCategoryHTML（局部刷新共用）
+// 工具分类的顺序与名字提到模块级：buildToolCategoryHTML（局部刷新）
 // 和 renderToolsSection（整页渲染）必须读到同一份定义。
-// 工具分类：KNOWN_TOOL_CATEGORIES 只决定「已知分类的先后排序」。
-// 实际渲染哪些块由「已注册工具里真实出现的分类」决定 —— 新增插件只要
-// registerTool 用了合法 category，设置页就自动出现对应分类块，无需回来改这里（保证插件通用性）。
-// 旧版这里写死 6 类，漏了 media/knowledge/utility，导致这些分类下的工具在设置页完全不可见、也无法开关。
+// KNOWN_TOOL_CATEGORIES 只决定已知分类的先后排序。实际渲染哪些块由「已注册工具里
+// 真实出现的分类」决定：新增插件只要 registerTool 用了合法 category，设置页就自动
+// 出现对应分类块，无需回来改这里。写死分类列表会漏掉未列出的分类，那些工具在
+// 设置页完全不可见、也无法开关。
 const KNOWN_TOOL_CATEGORIES = ['messaging', 'sticker', 'query', 'memory', 'web', 'system', 'media', 'knowledge', 'utility', 'model', 'message', 'fun'];
 const TOOL_CATEGORY_NAMES = {
   messaging: '💬 消息发送',
@@ -3191,7 +3099,7 @@ function buildToolCategoryHTML(cat) {
   const catTools = tools.filter((t) => t.category === cat);
   if (!catTools.length) return '';
   // 分类总开关：关 = 整类工具全部停用（后端本来就按 categories[cat] 拦，
-  // 这里补的是**视觉**：子开关要跟着显示成关、且不可拨，而不是"开着却没生效"）。
+  // 这里补的是视觉：子开关跟着显示成关、且不可拨，而不是"开着却没生效"）。
   const catEnabled = toolsCfg.categories?.[cat] !== false;
   const expandedCategories = state.expandedToolCategories || new Set(['messaging']);
   const isExpanded = expandedCategories.has(cat);
@@ -3206,10 +3114,9 @@ function buildToolCategoryHTML(cat) {
     // 开关收编进消息发送分类，用户在工具卡上直接控制，不再单独设全局勾选框。
     const isSendTo = t.id === 'send_to';
     const ownChecked = isSendTo ? (toolsCfg.crossChatSend === true) : enabled;
-    // 2026-10-20 补「两层开关互指」：send_image / search_images 除了这里的工具开关，
-    //   还受 security.imageSend.enabled 这个安全总开关管。总开关被显式关掉（false）时，
-    //   卡片开着也白开 —— 与其等模型调用失败再报错，不如在用户第一次看到这张卡时就说明。
-    //   注意 2026-10-23 起该总开关默认开启，只有显式 false 才需要提示。
+    // 「两层开关互指」：send_image / search_images 除了这里的工具开关，还受
+    // security.imageSend.enabled 这个安全总开关管。总开关被显式关掉时卡片开着也
+    // 白开，与其等模型调用失败再报错，不如在用户第一次看到这张卡时就说明。
     const needsImageSend = (t.id === 'send_image' || t.id === 'search_images')
       && ((c.security || {}).imageSend || {}).enabled === false;
     // 实际生效 = 自己开着 **且** 分类总开关开着；总开关关时子开关显示关 + disabled
@@ -3242,7 +3149,7 @@ function buildToolCategoryHTML(cat) {
       <div class="tool-category ${isExpanded ? 'expanded' : 'collapsed'}" data-category="${cat}">
         <div class="tool-category-header" data-category="${cat}">
           <span class="tool-category-arrow">${isExpanded ? '▼' : '▶'}</span>
-          <!-- R76：不要在这里写 inline onclick —— CSP script-src 'self' 会把它拦下
+          <!-- R76：不要在这里写 inline onclick，CSP script-src 'self' 会把它拦下
                （日志里 4 条 Refused to execute inline event handler 就是它），
                且 07-settings-events.js 的委托监听已做了同样的阻止冒泡。 -->
           <label class="tool-category-toggle">
@@ -3306,28 +3213,26 @@ function renderToolsSection(c) {
 }
 
 /**
- * 「媒体工具」分区（2026-11-03）。
+ * 「媒体工具」分区。
  *
- * ffmpeg 不再随安装包分发（79MB，安装包从 186.3MB 降到约 107MB），改为这里
- * 按需下载到 data/runtime/ffmpeg/bin/。它只服务四项：大图压缩、GIF 转视频、
- * 视频抽帧、动态壁纸导入 —— 没下载时这四项各自降级，不影响启动与纯文字聊天。
+ * ffmpeg 不随安装包分发，改为这里按需下载到 data/runtime/ffmpeg/bin/。
+ * 它只服务四项：大图压缩、GIF 转视频、视频抽帧、动态壁纸导入。没下载时这四项
+ * 各自降级，不影响启动与纯文字聊天。
  *
  * 页面结构：状态条 → 安装指引（按平台） → 未安装时的说明 → 下载/进度 → 下载源 → 手动路径。
  * 状态是异步拉的（GET /api/ffmpeg/status），首帧先渲染占位，
- * bindSettingsEvents 里的 ffmpegRefresh() 拉到后**只更新这块文字与按钮态**，
+ * bindSettingsEvents 里的 ffmpegRefresh() 拉到后只更新这块文字与按钮态，
  * 不重建表单（与「连接 QQ」的 qbRefresh 同一套做法）。
  *
- * 平台差异（2026-11-03）：ffmpeg 从"只有 Windows 能程序内下载"扩到全平台后，
- * 同一个区块在不同系统上该给的东西完全不同 —— macOS 没有可靠的免编译二进制，
- * 给 brew 命令；Linux 首选发行版包管理器，下载只是兜底。这些数据都来自
- * /api/ffmpeg/status 的 installGuide / canAutoInstall，本函数是纯同步渲染，
- * 拿不到 → 安装指引区首帧保持 hidden 占位，由 paint() 异步注入。
+ * 平台差异：macOS 没有可靠的免编译二进制，给 brew 命令；Linux 首选发行版包管理器，
+ * 下载只是兜底。这些数据都来自 /api/ffmpeg/status 的 installGuide / canAutoInstall，
+ * 本函数是纯同步渲染，拿不到时安装指引区首帧保持 hidden 占位，由 paint() 异步注入。
  *
  * ⚠️ 高级折叠区里那四节（下载 / 下载源 / Token / 删除）只能靠标题上的
  *    `.ffmpeg-dl-only` 整卡隐藏，不能只藏外层 `#ffmpeg-adv`：settingsCards()
- *    按**顶层** <h3> 切卡，切分点落在折叠区中间，外层 div 会被 </section>
+ *    按顶层 <h3> 切卡，切分点落在折叠区中间，外层 div 会被 </section>
  *    提前闭合，于是四个小节各自成了独立卡片。
- * ⚠️ 本模板内不要写含 `<h3` 字样的 HTML 注释 —— settingsCards() 的切分正则
+ * ⚠️ 本模板内不要写含 `<h3` 字样的 HTML 注释：settingsCards() 的切分正则
  *    不认注释边界，会把注释里的文本切成一张空卡片。
  */
 function renderMediaSection(c) {
@@ -3357,7 +3262,7 @@ function renderMediaSection(c) {
     <!-- 安装指引（按平台）：内容依赖 /api/ffmpeg/status，首帧只能是空占位。
          paint() 拿到 installGuide 后才填内容并取消 hidden；Windows 上
          installGuide 为 null，这块永远不出现（Windows 的安装路径就是下面的下载按钮）。
-         已装好时整体折叠成一行 —— 状态条刚说完"能用"，紧接着教怎么装是自相矛盾的。 -->
+         已装好时整体折叠成一行，状态条刚说完"能用"，紧接着教怎么装是自相矛盾的。 -->
     <details id="ffmpeg-install-guide-wrap" class="fold-sub" hidden>
       <summary id="ffmpeg-install-guide-summary" class="hint" style="cursor:pointer;margin-bottom:10px">安装方式</summary>
       <div id="ffmpeg-install-guide" style="margin-bottom:14px"></div>
@@ -3444,10 +3349,9 @@ function renderMediaSection(c) {
 
 /**
  * 完整提示词预览文本（设置-工具与技能 & 技能页右侧共用同一份）。
- * 数据来自 GET /api/prompt-preview —— 后端用运行时同一套
- * buildSystemPrompt + getToolAvailability 组装，按当前启停状态实时反映；
- * 前端不再自己拼（曾经前端复制了一份静态模板，永远是"全启用"的样子，
- * 与实际发送的提示词越漂越远）。
+ * 数据来自 GET /api/prompt-preview：后端用运行时同一套 buildSystemPrompt +
+ * getToolAvailability 组装，按当前启停状态实时反映。前端不要自己拼：
+ * 复制一份静态模板只会永远是"全启用"的样子，与实际发送的提示词越漂越远。
  * 后端返回结果缓存在 state.promptPreview；render* 渲染时同步取，
  * 开关变动后由 refreshPromptPreview() 异步拉新并原地更新 DOM。
  */
@@ -3458,9 +3362,8 @@ function renderPromptPreviewText() {
   const toolLines = tools.length
     ? tools.map((t) => `- ${t.id}：${t.description}`).join('\n')
     : '（当前没有可用工具）';
-  // ⚠️ 方案 A（2026-10-11）：易变片段（思考模式/系统自检/开发模式）已从系统提示
-  //    拆出、实际拼在**用户提示词末尾**。预览里把它们单独列一段并注明去向，
-  //    否则用户会以为"这些说明怎么没有了"。
+  // ⚠️ 易变片段（思考模式/系统自检/开发模式）已从系统提示拆出，实际拼在
+  //    用户提示词末尾。预览里单独列一段并注明去向，否则用户会以为这些说明没了。
   const volatile = typeof d.volatileNote === 'string' && d.volatileNote.trim()
     ? `\n\n【以下内容实际拼在用户提示词末尾（不进系统提示，保前缀缓存命中）】\n${d.volatileNote}`
     : '';
@@ -3469,14 +3372,13 @@ function renderPromptPreviewText() {
 
 /**
  * 拉取/刷新提示词预览。
- * 实时性设计（2026-09-17）：预览读的是**后端活配置**（getConfig），而设置的
- * 自动保存有 600ms 防抖 —— 直接刷看到的是旧状态。所以本函数可带 overrides
- * （与配置同结构的临时补丁）：请求发给 /api/prompt-preview，后端先深合并补丁
- * 再组装（不落盘），预览即刻反映刚点的开关，不用等自动保存落地。
+ * 预览读的是后端活配置（getConfig），而设置的自动保存有 600ms 防抖，直接刷看到的
+ * 是旧状态。所以本函数可带 overrides（与配置同结构的临时补丁）：请求发给
+ * /api/prompt-preview，后端先深合并补丁再组装（不落盘），预览即刻反映刚点的开关。
  */
 async function refreshPromptPreview(overrides = null) {
   try {
-    // 空对象不附 body（GET 语义）——没有补丁就按后端活配置组装
+    // 空对象不附 body（GET 语义），没有补丁就按后端活配置组装
     const hasOverrides = overrides && Object.keys(overrides).length > 0;
     const d = await api('/api/prompt-preview', hasOverrides ? {
       method: 'POST',

@@ -1,4 +1,4 @@
-// 〔屏蔽名单 / 意见收集 / 更新检查 / 金句上传〕——M9 拆分第 11 段
+// 〔屏蔽名单 / 意见收集 / 更新检查 / 金句上传〕
 'use strict';
 // ── 屏蔽名单 ──
 function openBlocklistModal() {
@@ -18,8 +18,8 @@ function openBlocklistModal() {
   api('/api/community/blocklist').then((d) => {
     if (d.ok && Array.isArray(d.ids)) { pendingGlobal = new Set(d.ids.map(String)); renderRight(); }
   }).catch(() => {});
-  // 机器人自己的 QQ 号：从状态接口取（cfg.onebot?.selfId 这个字段根本不存在，
-  // 曾经恒为空串 —— "过滤机器人自己"形同虚设，机器人自己出现在可屏蔽列表里）
+  // 机器人自己的 QQ 号：从状态接口取。cfg.onebot?.selfId 这个字段不存在，恒为空串，
+  // 只靠它过滤会让机器人自己出现在可屏蔽列表里。
   const selfId = String(state.status?.onebot?.self?.userId || cfg.onebot?.selfId || '');
   let activeGid = allowIds[0];
   let members = [];       // 当前群成员缓存（{userId, nickname, card}）
@@ -162,7 +162,7 @@ function fbLoadDraft() {
   } catch { return { nickname: '', text: '', images: [] }; }
 }
 
-/** 图片压缩：最大边 1200px、JPEG 0.75 —— 够看清，又不会把 localStorage 塞爆。 */
+/** 图片压缩：最大边 1200px、JPEG 0.75，够看清，又不会把 localStorage 塞爆。 */
 function fbCompressImage(file) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -222,9 +222,8 @@ function openFeedbackModal() {
       <button class="btn btn-primary hidden" id="fb-submit">确认上传</button>`
   });
 
-  // 退出通用未保存守卫：本弹窗已把昵称/意见/附图实时存进 localStorage（300ms 防抖），
-  // 上方提示文案也写了"误点弹窗外面也不会丢"——再弹"丢弃确认"会与承诺矛盾，
-  // 且草稿本来就不会丢。交给 _noDirtyGuard 跳过 modelModalShell 的通用守卫。
+  // 退出通用未保存守卫：昵称/意见/附图已实时存进 localStorage（300ms 防抖），
+  // 再弹"丢弃确认"会和上方"误点弹窗外面也不会丢"的承诺矛盾。
   overlay._noDirtyGuard = true;
 
   const $q = (sel) => overlay.querySelector(sel);
@@ -354,9 +353,9 @@ function openSite() {
 }
 
 // ── 自动检查更新 ──
-// 节奏：启动时一次 + 之后每小时一次。
+// 启动时查一次，之后每小时一次。
 // 更新检查默认关闭（config.update.enabled），后端此时直接返回 disabled、不发网络请求；
-// 前端照常走同一条路径，只是不亮红点、不弹浮窗 —— 这样将来打开开关无需改前端。
+// 前端照常走同一条路径，只是不亮红点、不弹浮窗，这样将来打开开关无需改前端。
 // 有更新 → 弹浮窗引导下载；用户手动关掉浮窗 → 本次启动内不再弹（重启恢复）。
 // 但只要检测到新版，设置侧栏「桌面端」右侧就一直挂红点，直到版本追平。
 let updateAvailable = false;
@@ -370,8 +369,8 @@ function updateStatusText() {
 }
 
 function renderUpdateDot() {
-  // 侧栏菜单每次重渲染都会重建（菜单 HTML 里已按 updateAvailable 画了点）；
-  // 这里兜底处理"侧栏已渲染完、检测结果刚到"的情况。
+  // 侧栏菜单每次重渲染都会重建（菜单 HTML 里已按 updateAvailable 画了点），
+  // 这里兜底"侧栏已渲染完、检测结果刚到"的情况。
   const item = document.querySelector('.settings-menu-item[data-section="app"]');
   if (!item) return;
   let dot = item.querySelector('.update-dot');
@@ -486,9 +485,8 @@ function openQuoteConfirmModal() {
     if (!nickname) { hint.textContent = '先填个昵称'; return; }
     overlay.querySelector('#q-submit').disabled = true;
     try {
-      // ── 先取图：QQ 图床 URL 会过期（老消息全网 400），
-      //    让本地后端走 OneBot get_image 从 NapCat 缓存里把原图读出来转 dataURL，
-      //      随消息一起上传 —— 服务器不再依赖 URL 时效。
+      // ── 先取图：QQ 图床 URL 会过期（老消息全网 400）。本地后端走 OneBot
+      //    get_image 从 NapCat 缓存读出原图转 dataURL 一起上传，服务器就不依赖 URL 时效。
       const mediaItems = [];
       const mediaOwners = [];   // 记录每个 item 属于哪条消息，方便回填
       for (const m of picked) {
@@ -518,8 +516,7 @@ function openQuoteConfirmModal() {
       } else {
         hint.textContent = '上传中…';
       }
-      // ── 人机验证（2026-10-17）：kondius.cn 上传端点强制校验 captchaVerifyParam，
-      //    缺失一律 403「请先完成人机验证」。弹滑块通过后把 param 带上。
+      // ── 人机验证：kondius.cn 上传端点强制校验 captchaVerifyParam，缺失一律 403。
       hint.textContent = '请完成人机验证…';
       let captchaVerifyParam;
       try {
@@ -584,14 +581,9 @@ $('#quote-confirm-btn')?.addEventListener('click', () => openQuoteConfirmModal()
 $('#session-clear-btn')?.addEventListener('click', async () => {
   const total = (state.sessions || []).length;
   const running = (state.sessions || []).filter((s) => s.status === 'running' || s.status === 'waiting').length;
-  // ⚠️（2026-10-10 r86 修 P2）破坏性 → danger:true
-  // ⚠️（2026-10-17 N8）文案修正：原文写"不影响用量统计的历史数据"，
-  //    但当时 `data/usage-ledger/` 与 `usage-archived-days.json` 都不存在 ——
-  //    那句话在**当时是假的**：会话文件一删，用量页的历史按天数据就只能靠
-  //    已生成的日快照活着，没生成快照的日子直接归零。
-  //    现在服务端已在 clearFinished() 里补了"删文件前先归档进账本"（见 sessions.js），
-  //    按天汇总真的能保住了；但**逐次调用明细**（下钻到模型/时刻）随会话文件一起消失，
-  //    所以文案改成如实说明这个残余损失，不再笼统地说"不影响"。
+  // 破坏性操作 → danger:true。
+  // 服务端删文件前会把按天汇总归档进用量账本（sessions.js 的 clearFinished），
+  // 但逐次调用明细（模型/时刻）随会话文件一起消失，文案要如实说明这个残余损失。
   if (!await qaConfirm({
     danger: true,
     confirmText: '清空已结束',
@@ -609,8 +601,8 @@ $('#session-clear-btn')?.addEventListener('click', async () => {
 });
 
 // 会话列表「群发」：选若干群/私聊（或全选），发一条同样的消息。
-// 走已存在的 /api/chats/:kind_:id/test-send 逐个发送（它会把消息记进存档，
-// 与手动测试消息同一口径）；逐个发、逐个报结果，失败不中断后续目标。
+// 走 /api/chats/:kind_:id/test-send 逐个发送（它会把消息记进存档，与手动测试消息同一口径），
+// 逐个报结果，失败不中断后续目标。
 $('#session-broadcast-btn')?.addEventListener('click', async () => {
   let groups = [], friends = [];
   try {

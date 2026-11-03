@@ -24,7 +24,7 @@
 2. **它有没有独立的变更理由？** 改 A 从不导致改 B，才值得分开
 3. **拆完接口比实现长吗？** 如果传参和返回值比逻辑本身还多，别拆
 
-现有解耦是**按能力名**而非按模块名（`getCapabilityProviders`），这是有价值的范例：换实现不改调用方。反例是"为了拆而拆"：`createRoutes(deps)` 已经有 23 个注入项，再加之前先确认真的需要。
+现有解耦是按能力名而非按模块名（`getCapabilityProviders`），这是有价值的范例：换实现不改调用方。反例是"为了拆而拆"：`createRoutes(deps)` 已经有 27 个注入项，再加之前先确认真的需要。
 
 ## 修问题：找根因，从底层修
 
@@ -80,18 +80,18 @@ const MUTE_REVERIFY_MS = 15_000;               // 与协议端 60s single-flight
 if (Buffer.byteLength(text) > 30000) throw new Error('too large');
 ```
 
-常量名用 `SCREAMING_SNAKE_CASE`，带上单位后缀。项目里已有 70 个这样的常量（`*_MS` / `*_BYTES` / `*_SEC`），沿用这个惯例。**改一个值就要改一处**，不要在多处同步。
+常量名用 `SCREAMING_SNAKE_CASE`，带上单位后缀。项目里已有近百个这样的常量（`*_MS` / `*_BYTES` / `*_SEC`），沿用这个惯例。改一个值就要改一处，不要在多处同步。
 
 ### 其他通用约定
 
-- **不用魔法字符串**做状态/类型判断，用导出的常量或 `Set`（项目里 `CATEGORY_META`、`VOLATILE_SECTION_IDS` 是范例）
-- **不用 `==`**，一律 `===`（`null` 判断可写 `x == null`，这是唯一例外）
-- **不用 `var`**；`const` 优先，需要重赋值才用 `let`
-- **不用 `arguments`**，用剩余参数
-- **异步错误必须被处理**：`await` 或 `.catch()`，不要留下悬空的 Promise。项目里 `src/harness/doctor/scan.js` 会扫出未处理的 Promise
-- **空 `catch` 必须写注释**说明为什么可以忽略，否则它和"漏掉错误处理"无法区分
-- **不用 `console.log` 记日志**，走 `src/logger.js`（`electron/` 与少数入口除外，见各自文件头注释）
-- **文件路径用 `path.join`**，不手拼字符串
+- 不用魔法字符串做状态/类型判断，用导出的常量或 `Set`（项目里 `CATEGORY_META`、`VOLATILE_SECTION_IDS` 是范例）
+- 不用 `==`，一律 `===`（`null` 判断可写 `x == null`，这是唯一例外）
+- 不用 `var`；`const` 优先，需要重赋值才用 `let`
+- 不用 `arguments`，用剩余参数
+- 异步错误必须被处理：`await` 或 `.catch()`，不要留下悬空的 Promise。项目里 `src/harness/doctor/scan.js` 会扫出未处理的 Promise
+- 空 `catch` 必须写注释说明为什么可以忽略，否则它和"漏掉错误处理"无法区分
+- 不用 `console.log` 记日志，走 `src/logger.js`（`electron/` 与少数入口除外，见各自文件头注释）
+- 文件路径用 `path.join`，不手拼字符串
 
 ## 更新日志（`CHANGELOG.md`）
 
@@ -102,7 +102,7 @@ if (Buffer.byteLength(text) > 30000) throw new Error('too large');
 **升版本时的动作**：
 
 1. 改 `VERSION`（纯文本，一行，给人看的唯一入口）
-2. 同步 `package.json` 的 `version` 与 CHANGELOG 的新版本标题 —— 三处必须一致，
+2. 同步 `package.json` 的 `version` 与 CHANGELOG 的新版本标题，三处必须一致，
    `pnpm run verify:version` 会在构建与 CI 期拦下不一致
 3. 把 `## 未发布` 下的内容整块转成新版本条目，加上版本号与日期
 4. **压缩**：删掉调试过程、中间尝试、被否决的方案、内部报告路径、逐轮次编号、时间戳

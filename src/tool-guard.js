@@ -1,35 +1,31 @@
 // 扩展工具的**运行时护栏**（与 forge 闸门互补：闸门管"装进来之前"，这里管"跑起来之后"）。
 //
-// ── 为什么需要它 ──
-//   五道闸全是静态检查，抓不住运行期行为。小白搓出来的扩展最常见的三种翻车：
-//     1. execute 里 await 一个永不返回的东西（fetch 没超时、等错 promise）
-//        → orchestrator 整条卡死，机器人"装完就没反应"。
-//     2. 把几 MB 的网页/日志整个 return → 直接进 prompt → token 爆炸。
-//     3. 写错了但过不了模型自查，每轮对话都被模型调一次、每次都失败
-//        → 白白烧掉 maxRounds。
-//   内置工具（tools.js 里的 defs）不走这条路，不受影响 —— 护栏只包
-//   createSkillApi.registerTool 注册进来的扩展工具。
+// 五道静态闸抓不住运行期行为，扩展最常见的三种翻车：
+//   1. execute 里 await 一个永不返回的东西（fetch 没超时、等错 promise）
+//      → orchestrator 整条卡死，机器人"装完就没反应"。
+//   2. 把几 MB 的网页/日志整个 return → 直接进 prompt → token 爆炸。
+//   3. 写错了但过不了模型自查，每轮对话都被模型调一次、每次都失败
+//      → 白白烧掉 maxRounds。
+// 内置工具（tools.js 里的 defs）不走这条路，护栏只包
+// createSkillApi.registerTool 注册进来的扩展工具。
 //
-// ── 熔断协议 ──
-//   同一扩展（skillId）的**任意工具**连续失败 ≥5 次 → 熔断 5 分钟：期间该扩展
-//   所有工具直接返回说明性错误（模型立刻知道该换路，不再烧轮次）。
-//   熔断到期自动"半开"：计数清零重新观察，成功一次即复位。
-//   状态在内存（重启清零）—— 刻意的：熔断是止血措施，不是封禁。
+// 熔断：同一扩展（skillId）的**任意工具**连续失败 ≥5 次 → 熔断 5 分钟，期间该扩展
+// 所有工具直接返回说明性错误（模型立刻知道该换路，不再烧轮次）。到期自动半开：
+// 计数清零重新观察，成功一次即复位。状态在内存（重启清零），熔断是止血措施，不是封禁。
 //
-// ── 已知边界（刻意不做）──
-//   · 同步死循环（while(true){...}）阻塞事件循环时，Promise.race 的超时也排不上队
-//     —— 彻底解决需要 worker 沙箱（大工程）。静态闸的 unbounded-loop notice
-//     与熔断（卡死不会计失败，但用户能看到机器人无响应）是当前能做的部分。
+// 已知边界（刻意不做）：
+//   · 同步死循环（while(true){...}）阻塞事件循环时，Promise.race 的超时也排不上队，
+//     彻底解决需要 worker 沙箱。静态闸的 unbounded-loop notice 与熔断是当前能做的部分。
 //   · 无法取消已经跑起来的 execute：超时只是让调用方不再等它，泄漏的 promise
-//     结束时其结果会被丢弃（Promise.race 语义）。
+//     结束时结果会被丢弃（Promise.race 语义）。
 
 /** 护栏参数（集中一处，改阈值改这里）。 */
 export const TOOL_GUARD = {
   timeoutMs: 120000,        // 单次 execute 上限：覆盖"正经重活"（转写/下载/压缩），卡死场景 120s 也放得开
-  maxContentChars: 30000,   // 单段文本上限（≈7-10K tok），超长截断 —— 返回是给模型看的，不是存档
+  maxContentChars: 30000,   // 单段文本上限（≈7-10K tok），超长截断；返回是给模型看的，不是存档
   maxPartsChars: 60000,     // parts 数组总量上限
   failThreshold: 5,         // 连续失败 N 次 → 熔断
-  cooldownMs: 5 * 60000     // 熔断时长；到期半开（计数清零重新观察）
+  cooldownMs: 5 * 60000     // 熔断时长
 };
 
 /** skillId -> { fails, openUntil, lastTool } */
@@ -106,7 +102,7 @@ export function normalizeToolOutput(out) {
 
 /**
  * 给扩展工具的 execute 套上护栏。返回一个**新的** execute 函数
- * （不修改原 def —— 失败的重试与覆盖注册都不受影响）。
+ * （不修改原 def，失败的重试与覆盖注册都不受影响）。
  * @param {Function} execute 原 execute(ctx, args)
  * @param {string} skillId 扩展 id（熔断粒度）
  * @param {string} toolId 工具 id（日志定位）

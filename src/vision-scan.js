@@ -36,13 +36,12 @@ export function modelImageVerdict(providerId, modelId) {
  * 探测单个模型。返回 { verdict, note, httpStatus, latencyMs }。
  * verdict: 'vision' 接受图片内容；'no-vision' 明确拒绝图片内容；'unknown' 无法判定。
  *
- * 2026-10-20（扫"测试/探测请求与实跑不同源"这个 bug 家族时发现的同源问题）：
- * 请求此前**硬编码** OpenAI 形态的 `/chat/completions`，于是 anthropic / google
- * 提供商的每个模型都打到不存在的路径上 → 404/400 → 一律判 'unknown'，
- * 表现是"配了 Claude / Gemini 就永远探测不出能不能看图，看图工具被永久门控"。
- * 现在改走 `buildProtocolRequest()` —— 与真实对话同一条翻译边界，URL / 鉴权头 / body
+ * 请求走 `buildProtocolRequest()`，与真实对话同一条翻译边界，URL / 鉴权头 / body
  * 按 provider 自己的协议生成（图片内容块三家都能翻译，见 anthropicBody / googleBody）。
- * 顺带补上 `dispatcherFor()`：此前不走代理，配了 proxy 的实例会"实跑能看图、探测 unknown"。
+ * 硬编码 OpenAI 形态的 `/chat/completions` 会让 anthropic / google 的每个模型
+ * 打到不存在的路径上，一律判 'unknown'，表现为"配了 Claude / Gemini 就永远探测不出
+ * 能不能看图，看图工具被永久门控"。
+ * 同时带 `dispatcherFor()`：不走代理的话，配了 proxy 的实例会"实跑能看图、探测 unknown"。
  */
 export async function detectModelVision({ baseUrl, apiKey, model, protocol = '' }, timeoutMs = 25000) {
   const started = Date.now();
@@ -118,8 +117,8 @@ export async function scanModelsVision({ providers, emit = null, limit = 3, time
   const total = tasks.length;
   let done = 0;
 
-  // 结果先在内存累积，扫描结束（或每满 5 条 / 每 2 秒）统一写一次盘。
-  // 原先每个模型都调一次 updateConfig → 每次 deepMerge + structuredClone 全量配置
+  // 结果先在内存累积，每满 5 条 / 每 2 秒统一写一次盘。
+  // 每个模型都调一次 updateConfig 的话，每次 deepMerge + structuredClone 全量配置
   // + fs.writeFileSync 同步落盘。扫 50 个模型 = 50 次全量序列化 + 50 次阻塞写盘，
   // 扫描期间主线程被 I/O 拖住，中途崩溃还会留下半写状态。
   const pending = new Map();
@@ -131,7 +130,7 @@ export async function scanModelsVision({ providers, emit = null, limit = 3, time
     updateConfig({ modelVision: patch });
   };
   const flushTimer = setInterval(flushPending, 2000);
-  flushTimer.unref?.();   // R80（R79-5）：别拖住进程退出（旧逻辑没 unref）
+  flushTimer.unref?.();   // 别拖住进程退出
 
   const runTask = async (task) => {
     const key = `${task.providerId}|||${task.model}`;
@@ -162,9 +161,9 @@ export async function scanModelsVision({ providers, emit = null, limit = 3, time
       });
     }
   });
-  // R80（R79-5）：clearInterval + flushPending 挪进 finally。旧逻辑只在正常
-  // 收尾路径做这两步，扫描中途抛错（updateConfig 失败等）时定时器泄漏 →
-  // 每 2 秒一次的 flushPending 拖住进程不退出。
+  // clearInterval + flushPending 必须在 finally 里：只在正常收尾路径做这两步的话，
+  // 扫描中途抛错（updateConfig 失败等）会漏掉定时器，每 2 秒一次的 flushPending
+  // 拖住进程不退出。
   try {
     await Promise.all(workers);
   } finally {

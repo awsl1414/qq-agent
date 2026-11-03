@@ -1,4 +1,4 @@
-// 小红车（Wallpaper Engine）控制层（内置模块 src/wallpaper/we-control.js）——
+// 小红车（Wallpaper Engine）控制层（内置模块 src/wallpaper/we-control.js），
 // 纯 Node 实现，不依赖 Electron / 本项目的其它模块。原 skills/wallpaper-engine/we.js。
 //
 // 为什么走命令行，而不是 WE 的 Web API：
@@ -27,7 +27,7 @@ export const WORKSHOP_APPID = '431960';
 const EXE_NAMES = ['wallpaper64.exe', 'wallpaper32.exe'];
 
 // -control 的动作表。左列是给模型/用户看的口径，右列是 WE 认的实参。
-// 没在这里列的动作一律拒绝 —— 不能让模型随便拼一个字符串就传给进程命令行。
+// 没在这里列的动作一律拒绝，不能让模型随便拼一个字符串就传给进程命令行。
 const CONTROL_ACTIONS = {
   pause: 'pause',
   play: 'play',
@@ -459,7 +459,7 @@ export async function openWallpaper(install, entry, { monitor = '' } = {}) {
  * 「下一张」。
  *
  * 先发 WE 自己的 nextWallpaper（播放列表模式下它才是对的：会按播放列表顺序走，
- * 还会遵守 WE 的过渡设置）。但如果用户没开播放列表，这条命令什么都不做 ——
+ * 还会遵守 WE 的过渡设置）。但如果用户没开播放列表，这条命令什么都不做，
  * 所以回读 config.json 确认真的变了，没变就退回"随机换一张不同的"。
  */
 export async function nextWallpaper(install, list, currentEntry) {
@@ -467,7 +467,7 @@ export async function nextWallpaper(install, list, currentEntry) {
   const r = await runControl(install, 'next');
   if (r.ok) {
     // 等 6 秒：有播放列表时 WE 会先做过渡动画、再写 config.json，太快判定"没换"会误判成
-    // "没有播放列表"，于是又随机盖掉一张 —— 用户会觉得"让它下一张，它乱换"。
+    // "没有播放列表"，于是又随机盖掉一张，用户会觉得"让它下一张，它乱换"。
     const deadline = Date.now() + 6000;
     while (Date.now() < deadline) {
       await new Promise((res) => setTimeout(res, 400));
@@ -516,7 +516,7 @@ export function normalizeText(s) {
  *
  * 为什么要这张表：WE 的 tags 全是英文（Anime / Nature / Pixel art …），
  * 而用户说的都是中文（"二次元""像素""风景"）。不翻译的话，说"来个像素风的"
- * 会一个都匹配不到 —— 明明库里就有 Pixel art 壁纸。
+ * 会一个都匹配不到，明明库里就有 Pixel art 壁纸。
  * 只收常用标签，够覆盖绝大多数据说；匹配不到就退回标题匹配，不会更糟。
  */
 const TAG_ALIAS = {
@@ -552,7 +552,7 @@ const TAG_ALIAS = {
  * 分档（为什么这么设计）：
  *   2000  直接给了创意工坊 id
  *   1000  完全一致
- *   500+  标题里包含查询词（越靠前、越短越好）—— 绝大多数"换张XX"都命中这一档
+ *   500+  标题里包含查询词（越靠前、越短越好），绝大多数"换张XX"都命中这一档
  *   100+  查询词的每个字都出现在标题里（"初音未来" vs "Miku 初音未来：Fallen"）
  *   420   命中中文标签对应的英文 tag（"像素" → Pixel art）
  *   0~99  部分命中（按覆盖率），只用于"找不到就推荐几个相近的"
@@ -604,7 +604,7 @@ export function searchWallpapers(list, query) {
  *
  * 创意工坊的 contentrating 分 Everyone / Questionable / Mature 三档；空值（官方项目、
  * 一部分本地项目没写）按安全处理。成人向壁纸**可以换**（那是主人的桌面），
- * 但它的预览图不该发进群 —— 发了是号没了，不是丢面子的问题。
+ * 但它的预览图不该发进群，发了是号没了，不是丢面子的问题。
  */
 export function isSafeRating(entry) {
   const r = String(entry?.rating ?? '').toLowerCase();

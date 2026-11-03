@@ -1,9 +1,9 @@
 // 人设模板库。
-// xiaojingyu —— 唯一的默认人设。DeepSeek 小鲸鱼 QQ 群友版（2026-10-18 重写：
-//              群友反馈旧版"怼人太厉害"，整体降攻击性；同时系统提示只保留基础规范，
-//              人格/社交风格全部由人设卡承担 —— 本卡必须自包含）。
-// ⚠️ 原版 v1（xiaojingyu_classic）已移除。旧版全文保留在下面的
-//    LEGACY_XIAOJINGYU_TEXT 常量里，**仅用于老配置迁移判定**，不出现在人设列表。
+// xiaojingyu 是唯一的默认人设。DeepSeek 小鲸鱼 QQ 群友版：群友反馈旧版"怼人太厉害"，
+// 已整体降攻击性；系统提示只保留基础规范，人格/社交风格全部由人设卡承担，
+// 本卡必须自包含。
+// 原版 v1（xiaojingyu_classic）已移除，全文保留在下面的 LEGACY_XIAOJINGYU_TEXT 里，
+// 仅用于老配置迁移判定，不出现在人设列表。
 export const LEGACY_XIAOJINGYU_TEXT = `# 角色卡：DeepSeek 小鲸鱼 —— QQ 群友版
 
 ## 一、你是谁

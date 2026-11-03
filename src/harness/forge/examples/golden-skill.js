@@ -1,11 +1,11 @@
 // 金标准示例：一个能通过全部闸门的技能入口长什么样。
 // 模仿要点（起草时对照这几条写）：
 //   1. execute **先校验参数**：非法输入返回 { isError: true } + 一句"怎么改才对"，
-//      绝不抛异常 —— 抛出去的错误模型看不懂该怎么修正。
+//      绝不抛异常，抛出去的错误模型看不懂该怎么修正。
 //   2. 返回给模型的 content 要**短**：结论 + 一句核对信息。结果是要进提示词的，
-//      不是存档 —— 别贴过程、别贴大段原文。
+//      不是存档，别贴过程、别贴大段原文。
 //   3. 日志用 api.log()（自动带扩展名前缀），不要 console.log。
-//   4. 纯 JS 能做的不用 fs / 网络 / eval —— 依赖越少越稳，闸门也越干净。
+//   4. 纯 JS 能做的不用 fs / 网络 / eval，依赖越少越稳，闸门也越干净。
 //   5. 工具 id 与 skill.json 里 tools[].id 一字不差；参数结构两边一致。
 //   6. category 是**两套词表**别混用：清单级（skill.json 顶层）= model/message/
 //      knowledge/media/utility/fun/query；工具级（tools[] 元素里）= messaging/
@@ -40,7 +40,7 @@ export function register(api) {
   });
 }
 
-// 纯函数放工具外面：register 只管注册，转换逻辑独立、好测好改。
+// 纯函数放工具外面：register 只管注册，转换逻辑独立，好测好改。
 function toChineseAmount(n) {
   const DIG = ['零', '壹', '贰', '叁', '肆', '伍', '陆', '柒', '捌', '玖'];
   const UNIT = ['', '拾', '佰', '仟'];

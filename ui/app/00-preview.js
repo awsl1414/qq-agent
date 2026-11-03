@@ -1,9 +1,9 @@
-// 〔预览演示模式〕—— 2026-09-20 新增
+// 〔预览演示模式〕
 //
-// 用途：没有真实机器人/后端时也能演示软件 —— 「消息」「用量」页模拟平时
-// 正常运行的状态：会话列表有运行中/等待中/已发言/出错的会话，运行中的会话
-// 会真的"干活"（翻记录 → 查记忆 → 联网 → 思考 → 发出），用量页三张图表、
-// 五张统计卡都有像样的模拟数字，且今日数字随模拟器缓慢上涨。
+// 用途：没有真实机器人/后端时也能演示软件。「消息」「用量」页模拟平时运行的
+// 状态：会话列表有运行中/等待中/已发言/出错的会话，运行中的会话会真的"干活"
+// （翻记录 → 查记忆 → 联网 → 思考 → 发出），用量页三张图表、五张统计卡都有
+// 像样的模拟数字，且今日数字随模拟器缓慢上涨。
 //
 // 入口：设置 →「界面与应用」→ 界面区块的「预览演示模式」滑动开关（切换后写入/
 //       清除 #preview 哈希并重载整个界面）；或直接以 index.html#preview 打开。
@@ -13,11 +13,10 @@
 // 原理：拦截 window.fetch（本文件在 00-core.js 之后、init 之前执行，
 //       覆盖一切 api() 调用）：
 //   · 路由表命中的 GET 返回模拟数据（status/sessions/chats/usage/config/
-//     skills/tools），未命中的 GET 透传真实网络 —— 本机有后端时其余页面照常；
-//   · POST/DELETE 一律不落真实后端（预览绝不写脏数据），返回 {ok:true}；
-//     ⚠️ 唯两例外：POST /api/config 必须回 {config: 合并后的配置}——
-//     回 {ok:true} 会把 state.config 清空（saveConfig 的已知坑）；
-//     DELETE /api/sessions/<id> 顺手把模拟会话删掉，否则列表里阴魂不散。
+//     skills/tools），未命中的 GET 透传真实网络，本机有后端时其余页面照常；
+//   · POST/DELETE 一律不落真实后端（预览绝不写脏数据），返回 {ok:true}。
+//     两个例外：POST /api/config 必须回 {config: 合并后的配置}，回 {ok:true}
+//     会把 state.config 清空；DELETE /api/sessions/<id> 顺手把模拟会话删掉。
 //   · SSE（connectSSE）在预览下短路（见 02-sse-sessions.js），
 //     会话推进由下面的模拟器定时器负责。
 'use strict';
@@ -38,15 +37,14 @@
   const now = Date.now();
   const MODEL_ID = 'deepseek-v3.2';
 
-  // 预览用的版本号：不再手写 '0.4.6'（发版必漏改，会出现"预览说 0.4.6、
-  // 真机说 0.4.7"）。版本由后端在 <html data-app-version> 上注入
-  // （真源 = package.json，见 src/app.js 的静态文件响应）；读不到就用
-  // '0.0.0-preview' —— 一眼看出这是预览 mock，而不是误以为线上真有个 0.4.6。
+  // 预览用的版本号：不要手写字面量，发版必漏改，会出现"预览和真机版本不一致"。
+  // 版本由后端在 <html data-app-version> 上注入（真源 = package.json，
+  // 见 src/app.js 的静态文件响应）；读不到就用 '0.0.0-preview'，
+  // 一眼看出这是预览 mock，而不是误以为线上真有个该版本号。
   const PV_VERSION = document.documentElement.dataset.appVersion || '0.0.0-preview';
 
   // ⚠️ 字段必须与后端 GET /api/chats 同形：04-archive-usage.js 的存档左栏直接读
-  //    c.total / c.lastText / c.lastTs / c.unread —— 少一个就渲染成「undefined 条」。
-  //    （真机由后端补齐，只有预览 mock 会缺，属于预览失真而非产品 bug，但仍要修对。）
+  //    c.total / c.lastText / c.lastTs / c.unread，少一个就渲染成「undefined 条」。
   const CHATS = [
     { key: 'group:7366472817', chatName: 'AI 工具交流群', total: 14, unread: 2, lastText: '这周末天气不错，正好。', lastTs: now - 12 * 60e3 },
     { key: 'group:284591630',  chatName: '洛西的开发日常', total: 9,  unread: 0, lastText: '先不用了。', lastTs: now - 48 * 60e3 },
@@ -54,10 +52,9 @@
     { key: 'group:918273645',  chatName: '机器人测试群',   total: 5,  unread: 0, lastText: '好，收工。', lastTs: now - 90 * 60e3 }
   ];
 
-  // ── OneBot 群 / 好友列表模拟（GET /api/onebot/groups | /friends，r62）──
-  // ⚠️ 之前没模拟：添加会话弹窗点「拉取群聊」会落到 realFetch → 预览下 502。
-  //    这里给两份小列表，其中若干已在 CHATS 里（故意留"已添加"的重复项，
-  //    好验证弹窗里"已添加"会被禁选）。
+  // ── OneBot 群 / 好友列表模拟（GET /api/onebot/groups | /friends）──
+  // 不模拟的话，添加会话弹窗点「拉取群聊」会落到 realFetch，预览下 502。
+  // 其中若干已在 CHATS 里，故意留"已添加"的重复项，好验证弹窗里会被禁选。
   const MOCK_ONEBOT_GROUPS = [
     { id: '7366472817', name: 'AI 工具交流群' },
     { id: '284591630',  name: '洛西的开发日常' },
@@ -73,9 +70,8 @@
   ];
 
   // ── 存档消息模拟（GET /api/chats/<key 下划线格式>/messages）──
-  // ⚠️ 这个接口之前没有模拟，落在 `/api/chats` 那条上，返回的是 `{ chats: [...] }`，
-  //    04-archive-usage.js 取 `data.messages` 得到 undefined → 存档表永远是空的
-  //    （从「会话选择」左栏点「存档」时看着就像"没反应"）。
+  // ⚠️ 必须单独匹配：落进 `/api/chats` 那条会返回 `{ chats: [...] }`，
+  //    04-archive-usage.js 取 `data.messages` 得到 undefined，存档表永远是空的。
   //    模拟数据按会话生成，行数足够触发分页与滚动加载。
   const PV_ARCH = {
     'group:7366472817': [
@@ -136,17 +132,16 @@
     }));
   }
 
-  // ⚠️ 必须**覆盖设置页每个分区读到的字段**。缺项不会优雅降级：
+  // ⚠️ 必须覆盖设置页每个分区读到的字段。缺项不会优雅降级：
   //    06-settings-render.js 里大量是 `c.persona.botName` / `c.proactive.enabled`
-  //    / `c.protocol.wsUrl` 这种不带 ?. 的直取 —— 少一个键，对应分区直接抛
-  //    "Cannot read properties of undefined"，切过去看到的是空页（预览模式一度如此）。
-  // 预览用的内置人设文本。**必须与 MOCK_CONFIG.persona.roleText 完全一致** ——
-  // 「选择人设」是拿当前角色设定文本去反查命中的模板，不一致就永远显示"点击选择人设"。
+  //    / `c.protocol.wsUrl` 这种不带 ?. 的直取，少一个键对应分区就抛
+  //    "Cannot read properties of undefined"，切过去看到的是空页。
+  // 预览用的内置人设文本，必须与 MOCK_CONFIG.persona.roleText 完全一致：
+  // 「选择人设」拿当前角色设定文本去反查命中的模板，不一致就永远显示"点击选择人设"。
   const PV_PERSONA_TEXT = '你是「洛西」，一个活跃在 QQ 群里的 AI 伙伴。说话口语化、简短，一次别超过三句；群里聊得热闹时可以发表情包凑趣。';
 
-  // 人设模板：2 个内置 + 1 个自定义。选择/添加/删除人设 全读它 ——
-  // 不 mock 的话预览下点「选择人设」永远弹"人设列表为空"，
-  // 弹窗里的「删除当前自定义人设」按钮也永远不会出现。
+  // 人设模板：2 个内置 + 1 个自定义。选择/添加/删除人设都读它，
+  // 不 mock 的话预览下点「选择人设」永远弹"人设列表为空"。
   let pvCustomPersonas = [
     { name: '毒舌老哥', text: '你是个嘴上不饶人、心里很软的群友。吐槽要短、要准，别真伤人。', customRules: '玩笑止于调侃，涉及家人/外貌的话题一律不接。' }
   ];
@@ -171,15 +166,14 @@
       videoModel: '',
       useOfficialPrice: true
     },
-    // ⚠️ 后端白名单权威格式是**裸号**（src/store.js allowed() / routes.js 直接
-    //    includes(String(id))）。这里以前写的是带前缀的 chatKey —— 于是预览下
-    //    设置页输入框会显示 group:xxx、选择弹窗勾选态也对不上，与真机契约不一致。
+    // ⚠️ 后端白名单权威格式是裸号（src/store.js allowed() / routes.js 直接
+    //    includes(String(id))）。写成带前缀的 chatKey 会让预览的设置页输入框
+    //    显示 group:xxx、选择弹窗勾选态也对不上，与真机契约不一致。
     allow: { groups: ['7366472817', '284591630', '918273645'], private: ['10001'] },
     allowAllWhenEmpty: false,
     webSearch: {
       enabled: true,
-      // R38：预览默认选中一条自定义服务 —— 复现真实使用场景（URL 输入框可见），
-      // 也让「添加自定义搜索服务」入口按钮与上方控件间距的验收有真实上下文。
+      // 预览默认选中一条自定义服务，复现真实使用场景（URL 输入框可见）。
       provider: 'custom:demo-bing',
       providers: [
         { id: 'demo-bing', name: 'Bing 兼容页', type: 'bing', baseUrl: 'https://cn.bing.com/search', hasApiKey: false }
@@ -205,25 +199,25 @@
       systemPromptOverride: ''
     },
     personaUnified: true,
-    // 会话卡片上要显示"该群的回复频率"，预览里得能看出三档差别：
-    // 故意一个用纯 id 作键、一个用 chatKey 作键 —— 同时覆盖后端 personaForChat
-    // 认的两种格式（只认一种会出现"设了却不生效"）。没列的群跟随全局（普通群友）。
+    // 会话卡片上要显示"该群的回复频率"，预览里得能看出三档差别。
+    // 故意一个用纯 id 作键、一个用 chatKey 作键，同时覆盖后端 personaForChat
+    // 认的两种格式。没列的群跟随全局（普通群友）。
     personaByChat: {
       '7366472817': { participation: 'high' },        // AI 工具交流群 → 活跃型
       'group:284591630': { participation: 'low' }      // 洛西的开发日常 → 安静型
     },
     memory: {
-      enabled: true,                     // r43 快捷开关「记忆功能」总开关
+      enabled: true,                     // 快捷开关「记忆功能」总开关
       consolidateEnabled: true,
       useChatModel: true,
       provider: '',
       model: '',
       consolidateMinIntervalMs: 21600000
     },
-    autoReply: { enabled: true },        // r43 快捷开关「自动回复」总开关
+    autoReply: { enabled: true },        // 快捷开关「自动回复」总开关
     cacheWarm: { enabled: false, intervalMin: 10 },
-    // 「会话设置」页（r33）读的三块按会话数据 —— 预览里补上有内容的样例，
-    // 否则那一页永远是"跟随全局 / 未禁言 / 名单为空"，看不出"按会话"到底长什么样。
+    // 「会话设置」页读的三块按会话数据：补上有内容的样例，否则那一页永远是
+    // "跟随全局 / 未禁言 / 名单为空"，看不出"按会话"到底长什么样。
     store: {
       unifiedTier: false,                                    // 分群档位模式：档位下拉才会出现
       contextSliderPos: 100,                                 // 全局兜底 = 4 档全响应
@@ -232,7 +226,7 @@
     },
     commandMute: { enabled: true, command: '/安静', durationMin: 30, active: { '284591630': 0 } }, // 开发日常手动禁言中
     blocklist: { '7366472817': ['10086', '10087', '10088'] }, // AI 工具交流群屏蔽了 3 人
-    // 2026-10-23：snowluma 块 → protocol（协议端由用户自装，配置里只剩端点与令牌）。
+    // protocol：协议端由用户自装，配置里只剩端点与令牌。
     protocol: {
       wsUrl: 'ws://127.0.0.1:3901',
       httpUrl: 'http://127.0.0.1:3900',
@@ -279,7 +273,7 @@
     { id: 'qr-helper',   kind: 'plugin', name: '二维码工具箱', version: '1.0.0', description: '生成与识别群二维码。',                   dir: 'plugins/qr-helper',   loaded: false, enabled: true, active: false, loadError: '插件入口缺失：plugins/qr-helper/index.js 不存在' }
   ];
 
-  /* ── 市场模拟（r87：应用内市场页的预览数据）──
+  /* ── 市场模拟（应用内市场页的预览数据）──
      形状刻意与后端 /api/market/list 的字段白名单一致（去掉 authorId 等内部字段），
      并混入一条 pending（无 installCode）+ 一条已安装的，覆盖三种卡片状态。
      下载量/更新时间给的是与线上同类型的真实量级，便于验证排序与紧凑格式。 */
@@ -421,7 +415,7 @@
       sent: []
     },
     {
-      // r88：这条刻意用**用户截图里那条真实报错**，用来验证「说人话」卡片。
+      // 这条刻意用真实报错，用来验证「说人话」卡片。
       // errorHuman / errorRaw 的形状与后端 src/error-l10n.js 产出的完全一致。
       id: 'pv-err-1', chatKey: 'group:7366472817', status: 'error',
       trigger: '群消息：@洛西Bot 帮我算下这个', triggerSummary: '群消息 · @洛西Bot',
@@ -440,8 +434,8 @@
       messages: [], sent: []
     },
     {
-      // r88 兜底路径样本：没有 errorHuman（未知错误 / 老数据）→ 应原样显示红字，
-      // 不能因为"美化"把信息吞掉。这条用来锁住那个退化行为。
+      // 兜底路径样本：没有 errorHuman（未知错误 / 老数据）→ 应原样显示红字，
+      // 不能因为"美化"把信息吞掉。这条锁住那个退化行为。
       id: 'pv-err-2', chatKey: 'private:10001', status: 'error',
       trigger: '私聊：在吗', triggerSummary: '私聊 · 在吗',
       startedAt: now - 150 * 60e3, endedAt: now - 149 * 60e3, rounds: 1, webSearchCount: 0,
@@ -484,9 +478,9 @@
     return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
   }
 
-  // ⚠️ 必须按**状态**找，不能按 id 前缀找：会话 id 恒为 pv-run-*，
+  // ⚠️ 必须按状态找，不能按 id 前缀找：会话 id 恒为 pv-run-*，
   //    一旦收尾变成 done，按前缀匹配仍会把它捞回来继续"推进"，
-  //    结果 Account 分支永远走不到、新一轮会话永远开不起来。
+  //    新一轮会话永远开不起来。
   function currentRunning() { return pvSessions.find((s) => s.status === 'running'); }
 
   function pushNewRunningSession() {
@@ -533,11 +527,9 @@
       // 运行中的会话按剧本推进；剧本演完 → 发出消息收尾，隔两拍开新会话
       const cur = currentRunning();
       if (cur) {
-        // 用 stepIdx 推进剧本（不再拿 rounds 反推索引）：
-        //   此前最后一步的 rounds 目标值与自身持平 → rounds 饱和在 4，
-        //   而收尾条件是 `rounds > RUNNING_STEPS.length`（即 ≥5）—— 恒不成立，
-        //   于是会话永远停在「正在组织回复…」、每 5 秒还往详情里 push 一条重复消息，
-        //   且永远不会发言 / 完成 / 开新一轮（2026-09-24 UI 审查 P1）。
+        // 用 stepIdx 推进剧本，不要拿 rounds 反推索引：最后一步的 rounds 目标值
+        // 与自身持平，rounds 会饱和，会话永远停在「正在组织回复…」且反复 push
+        // 同一条消息，永远不会发言 / 完成 / 开新一轮。
         const i = Number.isInteger(cur.stepIdx) ? cur.stepIdx : 0;
         const step = RUNNING_STEPS[i];
         if (step) {
@@ -672,9 +664,8 @@
     return { rows, totals: {} };
   }
 
-  // r90：预览侧的「QQ 从哪儿来」开关 —— 三种形态都能眼看：
-  //   portable（默认，保持原有预览画面）/ local（新版萌新流程：直接用本机 QQ）
-  //   / none（真没装 QQ）。
+  // 预览侧的「QQ 从哪儿来」开关，三种形态都能看：
+  //   portable（默认）/ local（直接用本机 QQ）/ none（真没装 QQ）。
   //   写法：index.html#preview&qq=local  或  index.html?preview=1&qq=local
   //   mock POST /api/qq-portable/setup 会置成 portable（模拟复制完成）。
   const pvQqArg = String(
@@ -690,14 +681,13 @@
 
   function mockStatus() {
     return {
-      // r42：补 diagnosis 字段 —— routes.js 未连接时会给出四种人话原因之一，
-      // 「连接」页的诊断行与 OneBot 卡都读它。预览默认已连接（diagnosis 为空串），
-      // 探针用外层 fetch 包装改写 connected:false 来测未连接分支。
+      // diagnosis：routes.js 未连接时会给出四种人话原因之一，
+      // 「连接」页的诊断行与 OneBot 卡都读它。预览默认已连接（空串）。
       onebot: (() => { const on = pvOnline(); return { connected: on, everConnected: on, diagnosis: on ? '' : '等待协议端上报连接', self: { nickname: '洛西Bot', user_id: 2846117254 } }; })(),
-      // ⚠️ 这几项必须给全：设置页「连接 QQ」与连接页都会读 ready/running/pid/dir/source。
+      // ⚠️ 这几项必须给全：设置页「连接 QQ」与连接页都会读 ready/running/pid/dir/source，
       //    少给一项就会渲染出自相矛盾的画面（比如"运行中"却又提示"请先运行 pnpm run setup"）。
-      // r90：ready 语义已变成"有能启动的 QQ"，所以 local 形态也是 ready:true ——
-      //   靠 source 字段区分文案，靠 portableInstalled 判断独立副本装没装。
+      // ready 的语义是"有能启动的 QQ"，所以 local 形态也是 ready:true，
+      // 靠 source 字段区分文案，靠 portableInstalled 判断独立副本装没装。
       qqPortable: (() => {
         const LOCAL = 'C:\\Program Files\\Tencent\\QQNT';
         const idleSetup = { running: false, step: '', done: 0, total: 0, error: null, ok: false };
@@ -724,8 +714,7 @@
           localQqDir: null, source: 'portable', portableInstalled: true
         };
       })(),
-      // 2026-10-23：原 snowluma 块（running/pid/dir/webuiUrl）随内置协议端删除，
-      // 只剩连接页要读的端点与端口监听状态。
+      // 只剩连接页要读的端点与端口监听状态（内置协议端已删除）。
       protocol: {
         wsUrl: pvConfig.protocol?.wsUrl || 'ws://127.0.0.1:3901',
         httpUrl: pvConfig.protocol?.httpUrl || 'http://127.0.0.1:3900',
@@ -740,8 +729,7 @@
   }
 
   // ── 日志模拟：连接页的「应用日志」面板 ──
-  // 2026-10-23：原 SnowLuma 运行日志 / QQ 内核日志两块随内置协议端删除
-  // （协议端的日志归它自己的控制台），这里只剩应用日志。
+  // 协议端的日志归它自己的控制台，这里只有应用日志。
   let pvLogLevel = 'info';
   const clock = (agoMs) => new Date(Date.now() - agoMs).toLocaleTimeString('zh-CN', { hour12: false });
 
@@ -777,22 +765,21 @@
     }));
   }
 
-  // ⚠️ 可变副本：预览下"已保存的配置"就存在这里。
-  //    以前 GET 恒定返回上面那个字面量、POST 只把合并结果塞进响应就扔了 ——
-  //    于是"改设置→保存→页面重新拉取"会**回滚成原值**（真实后端是持久化的）。
-  //    预览模式本来就要演示"改设置并生效"，所以必须记住写回。
+  // ⚠️ 可变副本：预览下"已保存的配置"存在这里。GET 恒定返回上面那个字面量、
+  //    POST 只把合并结果塞进响应就扔掉的话，"改设置→保存→页面重新拉取"会回滚
+  //    成原值。预览模式要演示"改设置并生效"，所以必须记住写回。
   let pvConfig = MOCK_CONFIG;
 
   // ══════════════════ fetch 拦截 ══════════════════
   const realFetch = window.fetch.bind(window);
   const jsonRes = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
 
-  /* 与后端 src/config.js#deepMerge **逐行同款**（含 __replace__ 整体替换约定）。
-     ⚠️ r33 之前这里是"浅一层"的合并 —— 而「会话设置」页保存用的 patch 是
-        `{ store: { groupSliderPos: { __replace__: {...} } } }`、`{ allow: { groups: {__replace__: [...]} } }`
-        这种**嵌套**写法，浅合并会把 `{__replace__: …}` 原样存进 pvConfig；
-        再读回来 `allow.groups` 就不是数组了（探针实测 `cfg.groups.indexOf is not a function`）。
-        所以必须做成递归的。 */
+  /* 与后端 src/config.js#deepMerge 逐行同款（含 __replace__ 整体替换约定）。
+     ⚠️ 必须递归。「会话设置」页保存用的 patch 是
+        `{ store: { groupSliderPos: { __replace__: {...} } } }`、
+        `{ allow: { groups: {__replace__: [...]} } }` 这种嵌套写法，
+        浅合并会把 `{__replace__: …}` 原样存进 pvConfig，再读回来
+        `allow.groups` 就不是数组了（`cfg.groups.indexOf is not a function`）。 */
   function deepMerge2(base, patch) {
     if (patch === null || patch === undefined) return JSON.parse(JSON.stringify(base ?? {}));
     if (typeof base !== 'object' || base === null || Array.isArray(base)) return JSON.parse(JSON.stringify(patch));
@@ -821,15 +808,14 @@
 
       if (method === 'GET') {
         if (u.startsWith('/api/status')) return Promise.resolve(jsonRes(mockStatus()));
-        // 2026-10-23：/api/snowluma/logs 随 SnowLuma 页删除；连接页只读应用日志。
         // /api/onebot-token 供端点设置里的「显示」按钮读明文（真实后端同形）。
         if (u.startsWith('/api/onebot-token')) {
           const which = new URL(u, 'http://preview.local').searchParams.get('which');
           return Promise.resolve(jsonRes({ token: which === 'http' ? '' : 'pv-demo-token' }));
         }
         if (u.startsWith('/api/qq-portable/logs')) return Promise.resolve(jsonRes({ logs: mockQqLogs() }));
-        // r90：「重新检测 QQ」会带 ?force=1 打这个接口 —— 必须在这里接住，
-        //   落到最下面的 realFetch 就是 404（预览没有真后端），按钮会报"检测失败"。
+        // 「重新检测 QQ」会带 ?force=1 打这个接口，不接住就落到 realFetch，
+        // 预览没有真后端会 404，按钮报"检测失败"。
         if (u.startsWith('/api/qq-portable/status')) return Promise.resolve(jsonRes(mockStatus().qqPortable));
         if (u.startsWith('/api/logs')) return Promise.resolve(jsonRes({ logs: mockAppLogs(), level: pvLogLevel }));
         if (u.startsWith('/api/sessions/')) {
@@ -838,9 +824,9 @@
           return Promise.resolve(s ? jsonRes(s) : jsonRes({ error: '会话不存在（预览模拟）' }, 404));
         }
         if (u.startsWith('/api/sessions')) return Promise.resolve(jsonRes({ sessions: pvSessions }));
-        // ⚠️ 顺序要紧：`/api/chats/<key>/messages` 必须排在 `/api/chats` **前面**。
+        // ⚠️ 顺序要紧：`/api/chats/<key>/messages` 必须排在 `/api/chats` 前面，
         //    否则存档页拿到的是 `{ chats: [...] }`，data.messages 为 undefined，
-        //    「存档」视图永远是一张空表 —— 从会话选择左栏点进去看着就像"没反应"。
+        //    「存档」视图永远是一张空表。
         if (/^\/api\/chats\/[^/?]+\/messages/.test(u)) {
           const seg = decodeURIComponent(u.slice('/api/chats/'.length).split('/')[0]);
           return Promise.resolve(jsonRes({ messages: mockChatMessages(seg.replace('_', ':')) }));
@@ -848,9 +834,7 @@
         if (u.startsWith('/api/chats')) return Promise.resolve(jsonRes({ chats: CHATS }));
         if (u.startsWith('/api/onebot/groups')) return Promise.resolve(jsonRes({ groups: MOCK_ONEBOT_GROUPS }));
         if (u.startsWith('/api/onebot/friends')) return Promise.resolve(jsonRes({ friends: MOCK_ONEBOT_FRIENDS }));
-        // 补两个后端真实存在、预览此前漏 mock 的 GET（routes.js 的会话与设置接口）——
-        // 漏了会落到 realFetch → 预览下 502：10-feedback.js 的更新检查、
-        // 02-sse-sessions.js / 05-memory-settings.js 的视觉扫描结果。
+        // 更新检查与视觉扫描结果：漏 mock 会落到 realFetch，预览下 502。
         if (u.startsWith('/api/update-check')) return Promise.resolve(jsonRes({ ok: true, current: PV_VERSION, disabled: true, hasUpdate: false, reason: '在线更新检查未启用' }));
         if (u.startsWith('/api/version')) return Promise.resolve(jsonRes({ version: PV_VERSION }));
         if (u.startsWith('/api/vision/results')) return Promise.resolve(jsonRes({ results: {}, scanning: false }));
@@ -862,7 +846,7 @@
         if (u.startsWith('/api/persona-templates')) return Promise.resolve(jsonRes({ templates: mockPersonaTemplates() }));
         if (u.startsWith('/api/model-prices')) return Promise.resolve(jsonRes({ prices: [], current: null }));
         if (u.startsWith('/api/skills')) return Promise.resolve(jsonRes({ skills: MOCK_SKILLS, summary: { total: MOCK_SKILLS.length, active: 6 }, uninstalled: [] }));
-        // 市场列表（r87）：kind 取自 query，与后端字段白名单同形
+        // 市场列表：kind 取自 query，与后端字段白名单同形
         if (u.startsWith('/api/market/list')) {
           const kind = new URL(u, 'http://preview.local').searchParams.get('kind') === 'plugin' ? 'plugin' : 'skill';
           return Promise.resolve(jsonRes({ ok: true, kind, categories: MOCK_MARKET_CATS, items: mockMarketItems(kind) }));
@@ -884,7 +868,7 @@
         pvConfig = deepMerge2(pvConfig, body);
         return Promise.resolve(jsonRes({ config: pvConfig }));
       }
-      // 连接页「保存并重连」（2026-10-23）：写进 pvConfig.protocol，回执与后端同形。
+      // 连接页「保存并重连」：写进 pvConfig.protocol，回执与后端同形。
       if (method === 'POST' && u.startsWith('/api/protocol/apply')) {
         let body = {};
         try { body = JSON.parse((init && init.body) || '{}'); } catch { /* 脏数据当空处理 */ }
@@ -899,7 +883,7 @@
         });
         return Promise.resolve(jsonRes({ ok: true, applied: true, protocol: { wsUrl: body.wsUrl, httpUrl: body.httpUrl } }));
       }
-      // 自定义搜索服务：预览里也让它"记得住"——添加后写进 pvConfig.webSearch.providers
+      // 自定义搜索服务：预览里也让它"记得住"，添加后写进 pvConfig.webSearch.providers
       // 并自动选中，页面重渲染时下拉框能看到新选项（与真实后端 {provider:{id,…}} 同形）
       if (method === 'POST' && u.startsWith('/api/search-providers')) {
         let body = {};
@@ -927,9 +911,9 @@
           summary: { total: MOCK_SKILLS.length, active: MOCK_SKILLS.filter((s) => s.active).length }
         }));
       }
-      // 本地导入（R41：拖 zip / 文件夹进技能页或插件页）：预览里就地新增一条，
+      // 本地导入（拖 zip / 文件夹进技能页或插件页）：预览里就地新增一条，
       // 让"拖进去 → 列表多一张卡"这条链路在演示环境可走通（不碰真实磁盘）。
-      // ⚠️ 必须排在 /api/skills 其它前缀分支之前更具体的匹配。
+      // ⚠️ 必须排在更宽泛的 /api/skills 前缀分支之前。
       if (method === 'POST' && u.startsWith('/api/skills/import')) {
         let body = {};
         try { body = JSON.parse((init && init.body) || '{}'); } catch { /* 脏数据当空处理 */ }
@@ -960,7 +944,7 @@
         }));
       }
       // 单条目开关（启用 / 禁用）：预览里就地翻内存里的 enabled 并回写，
-      // 让设置页「扩展」分区 / 技能·插件页的开关在演示环境可端到端验证（r91）。
+      // 让设置页「扩展」分区 / 技能·插件页的开关在演示环境可端到端验证。
       // 匹配 /api/skills/<id>（恰好一级路径，不含 reload / import 等更具体前缀）。
       if (method === 'POST' && /^\/api\/skills\/[^/]+$/.test(u)) {
         let body = {};
@@ -974,8 +958,8 @@
         }
         return Promise.resolve(jsonRes({ ok: true, skill: entry, config: pvConfig }));
       }
-      // 拉取模型 / 勾选并入（R37）：预览里返回一批假模型、并入第一个 mock 提供商，
-      // 让"⟳ 拉取模型 → 勾选 → 加入列表 → 模型目录里能选到"整条链路在演示环境可走通
+      // 拉取模型 / 勾选并入：预览里返回一批假模型、并入第一个 mock 提供商，
+      // 让"⟳ 拉取模型 → 勾选 → 加入列表 → 模型目录里能选到"整条链路可走通。
       if (method === 'POST' && u.startsWith('/api/providers/fetch-models')) {
         return Promise.resolve(jsonRes({ models: ['deepseek-v3.2', 'deepseek-r2', 'glm-5.3-flash', 'kimi-k3', 'qwen4-max', 'doubao-seed-2'] }));
       }
@@ -989,7 +973,7 @@
         }
         return Promise.resolve(jsonRes({ ok: true, models: p.models }));
       }
-      // API 协议保存（2026-10-19）：预览里就地改 MOCK_PROVIDERS
+      // API 协议保存：预览里就地改 MOCK_PROVIDERS
       if (method === 'POST' && u.startsWith('/api/providers/protocol')) {
         let body = {};
         try { body = JSON.parse((init && init.body) || '{}'); } catch { /* 脏数据当空处理 */ }
@@ -997,7 +981,7 @@
         p.apiProtocol = String(body.apiProtocol || 'openai');
         return Promise.resolve(jsonRes({ ok: true, apiProtocol: p.apiProtocol }));
       }
-      // 添加提供商（R39：模型管理子模态「添加提供商」）—— 预览里就地并入 MOCK_PROVIDERS，
+      // 添加提供商（模型管理子模态「添加提供商」）：预览里就地并入 MOCK_PROVIDERS，
       // 让「填 URL+Key → ⟳拉取模型 → 勾选 → 添加 → 左列可见、模型可选」整条链路可演示。
       // ⚠️ 必须排在 fetch-models / models 两个前缀分支之后（它们更具体）。
       if (method === 'POST' && u.startsWith('/api/providers')) {
@@ -1044,12 +1028,12 @@
         }
         return Promise.resolve(jsonRes({ ok: true }));
       }
-      // r48：唤起 QQ 窗口的演示反馈（真机返回 {ok, shown, pid}，预览照形状给）
+      // 唤起 QQ 窗口的演示反馈（真机返回 {ok, shown, pid}，预览照形状给）
       if (method === 'POST' && u.startsWith('/api/qq-portable/show')) {
         return Promise.resolve(jsonRes({ ok: true, shown: 1, pid: 18244 }));
       }
-      // r52/r90：装独立副本的预览演示 —— 即刻「装好」（真机是分钟级复制 +
-      // status.qqPortable.setup 进度），形态翻到 portable，让预览能看到装完后的页面
+      // 装独立副本的预览演示：即刻「装好」（真机是分钟级复制 + setup 进度），
+      // 形态翻到 portable，让预览能看到装完后的页面。
       if (method === 'POST' && u.startsWith('/api/qq-portable/setup')) {
         pvQqMode = 'portable';
         return Promise.resolve(jsonRes({ ok: true, installed: true, dir: 'C:\\…\\runtime\\qq-portable' }));
@@ -1072,7 +1056,7 @@
   // 群名映射提前就位（会话/存档/用量页的标题都要用）
   try { api('/api/chats').then((d) => { state.chats = d.chats || []; }).catch(() => {}); } catch { /* 忽略 */ }
 
-  // 右下角常驻徽标：明示当前是模拟数据（静态图层，无动画，不给软件渲染添帧负担）
+  // 右下角常驻徽标：明示当前是模拟数据（静态图层，无动画，不给软件渲染添帧负担）。
   const chip = document.createElement('div');
   chip.className = 'preview-chip';
   // 小圆点靠 CSS 画（.preview-chip-dot），色彩走主题变量而不是硬编码

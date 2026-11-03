@@ -14,7 +14,7 @@ export class CapabilityRegistry {
     const cap = String(capability || '').trim();
     if (!cap) return false;
     // ⚠️ provider 通常是函数（typeof === 'function'），不是 'object'。
-    // 只判断 typeof !== 'object' 会把所有函数提供者静默丢掉 —— 表现为
+    // 只判断 typeof !== 'object' 会把所有函数提供者静默丢掉，表现为
     // "Skill 加载成功、能力却永远查不到"，非常难排查。
     const isFn = typeof provider === 'function';
     const isObj = provider !== null && typeof provider === 'object';

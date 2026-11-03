@@ -1,17 +1,14 @@
 // Electron 桌面壳：启动核心服务器（同一进程），打开会话式控制台窗口。
-// 傻瓜式：托盘常驻、关窗不退出、可选开机自启。
-// ⚠️ dialog 只用于 showOpenDialog（选背景图等文件选择框，用户主动触发、带父窗口、
-//    不涉及"点不掉就占任务栏"问题）。四个原生**消息框**站点统一走 ./dialog-safe.js
-//    的 showDialog（挂父窗口 + 超时自消，2026-10-16 外部审查 #2）。
+// 托盘常驻、关窗不退出、可选开机自启。
+// dialog 只用于 showOpenDialog（选文件等用户主动触发、带父窗口的框）。
+// 原生消息框一律走 ./dialog-safe.js 的 showDialog（挂父窗口 + 超时自消）。
 import { app, BrowserWindow, Tray, Menu, nativeImage, session, shell, dialog, ipcMain } from 'electron';
-// ⚠️⚠️ webUtils **绝不能走具名导入**：ESM 的具名导入在导出名不存在时是
-// SyntaxError —— 整个 main.js 模块加载失败 → 主进程起不来 → 双击 exe 毫无反应
-// （R41 就是这么把应用搞成"打不开"的，且开发版因为跑的是旧代码没暴露）。
-// 改成 namespace 导入：缺失时是 undefined，绝不影响模块加载，下面再运行时兜底。
+// webUtils 绝不能走具名导入：ESM 的具名导入在导出名不存在时是 SyntaxError，
+// 整个 main.js 会加载失败，主进程起不来，双击 exe 毫无反应。改成 namespace 导入，
+// 缺失时是 undefined，下面再运行时兜底。
 import * as electronApi from 'electron';
 const webUtils = electronApi.webUtils ?? electronApi.default?.webUtils ?? null;
-// R66：screen 同样走命名空间取 —— 理由与上面 webUtils 完全一样（具名导入缺失
-// 即 SyntaxError，会把整个主进程模块带走）。它用于窗口位置回填时的屏幕可见性校验。
+// screen 同样走命名空间取，理由与 webUtils 一样：具名导入缺失即 SyntaxError。
 const screenApi = electronApi.screen ?? electronApi.default?.screen ?? null;
 import path from 'node:path';
 import fs from 'node:fs';
@@ -19,18 +16,16 @@ import { fileURLToPath } from 'node:url';
 import { dataDirName, describeInstance } from '../src/profile.js';
 // 桌宠宿主：透明置顶窗口 / 截图 / 托盘外菜单都在它里面。纯 Node 环境下不会被加载。
 import { createDesktopPetHost } from './desktop-pet.js';
-// R129：外链白名单。此前 main.js 只用 `/^https?:\/\//` 判前缀就交给 shell.openExternal，
-// 于是 `https://evil.com@kondius.cn` 这种 userinfo 混淆能直接开出去（协议白名单缺失
-// 时 `file:///C:/x.exe` 更是"直接执行"而不是"打开网页"）。判据收在 external-link.js
-// 里做成纯函数，就是为了这一处能单独跑测试。
+// 外链白名单：只用 /^https?:\/\// 判前缀时，`https://evil.com@kondius.cn` 这种
+// userinfo 混淆能直接开出去，`file:///C:/x.exe` 更是"直接执行"而非"打开网页"。
+// 判据收在 external-link.js 里做成纯函数，就为了这一处能单独跑测试。
 import { checkExternalUrl, DEFAULT_ALLOW_HOSTS } from './external-link.js';
 import { showDialog, DIALOG_TIMEOUT } from './dialog-safe.js';
-// ⚠️ 导出名必须与 crash-dumps.js 里**完全一致**（`pruneCrashDumps`）。2026-10-16 踩过：
-//    这里曾写成 `pruneDumps as ...`，而 `node --check` 只查语法、查不出"具名导出不存在"
-//    这种链接期错误 —— 结果是应用启动即崩（Uncaught Exception: does not provide an
-//    export named 'pruneDumps'）。教训：改了跨文件具名导入，必须真跑一次实例。
+// 导出名必须与 crash-dumps.js 完全一致（`pruneCrashDumps`）。写成别名时
+// `node --check` 只查语法、查不出"具名导出不存在"这种链接期错误，结果是应用启动即崩。
+// 改了跨文件具名导入，必须真跑一次实例。
 import { pruneCrashDumps as pruneCrashDumpsImpl, CRASH_DUMP_KEEP } from './crash-dumps.js';
-// R66：窗口几何存档的解析与屏幕可见性校验（纯函数，见 test/window-state-test.mjs）
+// 窗口几何存档的解析与屏幕可见性校验（纯函数，见 test/window-state-test.mjs）
 import {
   parseWindowState, resolveWindowBounds,
   WINDOW_DEFAULT_W, WINDOW_DEFAULT_H, WINDOW_MIN_W, WINDOW_MIN_H
@@ -38,19 +33,16 @@ import {
 
 
 // ── GPU 硬件加速：默认启用（壁纸套件）────────────────────────────────────
-// 原版这里无条件 disableHardwareAcceleration()（"部分显卡驱动黑屏"的稳妥修复），
-// 代价是壁纸毛玻璃 / 视频背景 / 整窗合成全走 CPU —— 开壁纸必卡（切页、滚动
-// 每帧全窗软件合成；Wallpaper Engine 本身流畅正是因为走 GPU）。
-//
-// 现在改为**默认启用 + 四层安全网**（黑屏风险仍然兜得住）：
-//   1) data\render-gpu-off.flag 存在 → 本次直接软件模式。
-//      **手动回退入口**：双击安装目录的wallpaper-gpu-off.bat即可（它写这个
-//      文件），删掉文件就恢复 GPU。应用自己也会在下面第 3 条里写这个文件。
-//   2) 环境变量 QQ_AGENT_ENABLE_GPU / QQ_AGENT_DISABLE_GPU 仍可强制覆盖（排障用）。
+// 无条件 disableHardwareAcceleration() 时，壁纸毛玻璃 / 视频背景 / 整窗合成全走 CPU，
+// 开壁纸必卡（切页、滚动每帧全窗软件合成）。现在默认启用 + 四层安全网：
+//   1) data/render-gpu-off.flag 存在 → 本次直接软件模式。手动回退入口：
+//      双击安装目录的 wallpaper-gpu-off.bat（它写这个文件），删掉文件恢复 GPU。
+//      下面第 3 条也会自动写这个文件。
+//   2) 环境变量 QQ_AGENT_ENABLE_GPU / QQ_AGENT_DISABLE_GPU 可强制覆盖（排障用）。
 //   3) GPU / 渲染进程 60 秒内崩 ≥3 次 → 自动写 flag + 重启进软件模式，
-//      之后每次启动都直接软件模式 —— 好驱动不受牵连。
+//      之后每次启动都直接软件模式，好驱动不受牵连。
 //   4) 本块位于 whenReady 之前，满足 disableHardwareAcceleration() 的调用时序。
-// 注：data 目录此时还没解析（resolveDataDir 在下面），所以用与它同一套规则先算出来。
+// data 目录此时还没解析（resolveDataDir 在下面），所以用同一套规则先算出来。
 const RENDER_DATA_DIR = (() => {
   const env = String(process.env.QQ_AGENT_DATA_DIR || '').trim();
   if (env) return env;
@@ -65,7 +57,7 @@ if (gpuDisable && gpuDisable !== '0') renderGpuOff = true;          // 显式关
 else if (gpuForce === '1') renderGpuOff = false;                     // 显式开：其次
 else if (gpuForce === '0') renderGpuOff = true;                      // 兼容原开关语义（=1 开，其余关）
 else {
-  // 默认：看 flag。flags 不存在 = 开 GPU（这次的改动）。
+  // 默认看 flag：不存在 = 开 GPU
   let flagHit = false;
   try { flagHit = Boolean(RENDER_GPU_OFF_FLAG) && fs.existsSync(RENDER_GPU_OFF_FLAG); } catch { flagHit = false; }
   renderGpuOff = flagHit;
@@ -74,8 +66,8 @@ if (renderGpuOff) {
   app.disableHardwareAcceleration();
 } else {
   // 视频解码默认走 GPU（弱 CPU 软解带不动）。个别"多显卡 + 虚拟显示器"的机器
-  // 硬解会输出马赛克坏帧 —— 用安装目录的video-decode-cpu.bat切回软解
-  // （写 data\render-config.json 的 hwVideoDecode=false），修好驱动再切回来。
+  // 硬解会输出马赛克坏帧，用安装目录的 video-decode-cpu.bat 切回软解
+  // （写 data/render-config.json 的 hwVideoDecode=false），修好驱动再切回来。
   let hwVideoDecode = true;
   try {
     const rcPath = RENDER_DATA_DIR ? path.join(RENDER_DATA_DIR, 'render-config.json') : '';
@@ -88,9 +80,6 @@ if (renderGpuOff) {
     app.commandLine.appendSwitch('disable-accelerated-video-decode');
     app.commandLine.appendSwitch('disable-gpu-compositing');
   }
-  // 把软件渲染时期加的那几个开关撤掉：开着它们等于"用上 GPU 但又把它关回去"，
-  // 尤其 in-process-gpu —— GPU 线程留在主进程里，崩了会连带整个应用。
-  // 真正的独立 GPU 进程才谈得上"崩溃即重启、应用不死"。
 }
 
 // GPU 崩溃自动回退（安全网 3）。只在真的启用了 GPU 时生效。
@@ -121,22 +110,18 @@ app.on('child-process-gone', (_e, details) => {
 });
 
 // ── 渲染进程沙箱：默认开启，按需降级 ──────────────────────────────────────
+// 背景：本机安全策略会拦杀沙箱化的子进程。沙箱 GPU 进程启动即 exit_code=1，
+// 重试 6 次后 Chromium 判定 "GPU process isn't usable. Goodbye."（FATAL），
+// 整个应用自杀；沙箱化的渲染进程同样被杀（reason=killed exitCode=1），窗口定格在
+// 最后一帧，表现为"卡在启动画面"，残留"主进程活着但零子进程、零监听端口"的僵尸。
 //
-// 背景（2026-09-21）：本机安全策略会拦杀沙箱化的子进程 —— 沙箱 GPU 进程启动即 exit_code=1，
-// 重试 6 次后 Chromium 判定 "GPU process isn't usable. Goodbye."（FATAL）→ 整个应用自杀；
-// 沙箱化的渲染进程同样被杀（reason=killed exitCode=1），窗口定格在最后一帧，表现为
-// "卡在启动画面"，残留"主进程活着但零子进程、零监听端口"的僵尸。
+// 但这不能用全局 `--no-sandbox` 来解决：命令行开关优先级高于 webPreferences.sandbox，
+// 一开就是所有窗口全局关掉，将来任何 <webview> / 弹窗 / iframe 都会继承关闭状态。
+// 沙箱是渲染进程被利用后的最后一道纵深：本项目 contextIsolation/nodeIntegration
+// 都已正确，现在打不到 RCE，但一旦出现 V8/Chromium CVE 就没有第二层兜底。
 //
-// ⚠️ 但这**不能**用全局 `--no-sandbox` 来解决（2026-10-07 审查修正）：
-//   命令行开关优先级高于 `webPreferences.sandbox`，一开就是**所有窗口全局**关掉，
-//   而且将来任何 <webview> / 弹窗 / iframe 都会继承关闭状态 ——
-//   沙箱是渲染进程被利用后的最后一道纵深（本项目 contextIsolation/nodeIntegration 都已正确，
-//   所以现在打不到 RCE，但一旦出现 V8/Chromium CVE 就没有第二层兜底）。
-//
-// 现在的做法：**默认安全 + 显式逃生门**。
-//   - 默认不关沙箱，保留最后一道防线；
-//   - 真遇到上面的崩溃，用户/启动器用 QQ_AGENT_NO_SANDBOX=1 显式降级（这是知情选择，不是默认）；
-//   - webPreferences 里仍写 sandbox:false 吗？不写 —— 见下方 sandbox 字段的说明。
+// 现在的做法：默认不关沙箱；真遇到上面的崩溃，用户/启动器用 QQ_AGENT_NO_SANDBOX=1
+// 显式降级（知情选择，不是默认）。webPreferences 里见下方 sandbox 字段的说明。
 const NO_SANDBOX_ESCAPE = process.env.QQ_AGENT_NO_SANDBOX === '1';
 if (NO_SANDBOX_ESCAPE) {
   app.commandLine.appendSwitch('no-sandbox');
@@ -144,42 +129,14 @@ if (NO_SANDBOX_ESCAPE) {
   console.warn('[main] 这会降低安全纵深，仅在"沙箱导致无法启动"时临时使用。');
 }
 
-// R70：关掉硬件加速 + SwiftShader，从源头掐断 R44 那条致命链。
-//
-// R44 记下的死法是：GPU 进程被本机安全策略杀掉 → Chromium 重试 6 次 →
-// 判定 "GPU process isn't usable. Goodbye." → **整个进程自杀**（不是某个功能失效，
-// 是应用凭空消失）。上面那句 `disableHardwareAcceleration()` 只把渲染换成软件实现，
-// **GPU 进程照样会被创建**（走 SwiftShader），所以它挡不住这条链——这也是为什么
-// 2026-09-22 加上 no-sandbox 之后，安装版 0.4.1 仍然在 22:17:17 启动、22:17:20 崩
-// （0xC0000005，存活 3 秒）。
-//
-// `--disable-gpu` 的作用是**切断致命链**，不是"不建 GPU 进程"。
-// ⚠️ 2026-10-21 审查更正（原注释写的是"直接不建 GPU 进程"，与运行日志矛盾）：
-//    Chromium 仍会为合成起一个 GPU 进程 —— data/logs 里有实证：
-//    10-19 18:03:50 / 18:04:10 两次 `[child] 子进程异常退出 type=GPU reason=crashed
-//    exitCode=-1073741819`，10-20 01:06:24 一次 `reason=killed`。
-//    真正被掐断的是"GPU 不可用 → Chromium FATAL 自杀"这条**致命**路径：
-//    关掉硬件加速与 SwiftShader 之后，这个子进程崩掉不再升级成整个应用消失，
-//    由 child-process-gone 兜底（见下方 R70 崩溃证据链 + 窗口重建），
-//    用户侧的观感从"应用凭空没了"变成"窗口闪一下/重建"。
-//    所以：看到 GPU 子进程崩溃日志**不代表这个开关没生效**，别据此把它关掉。
-// 代价是所有绘制走 CPU 光栅化 —— 本应用的窗口只是个控制台页面，
-// 没有 canvas/WebGL 诉求，实测无差别。
-// `--disable-software-rasterizer` 顺手关掉用不上的 SwiftShader 后端，少一个
-// 会被误伤的子进程。
-// 一键回退：万一哪台机器上这个开关造成了渲染异常（而不是它要修的那种崩溃），
-// 设置环境变量 QQ_AGENT_ENABLE_GPU=1 即可恢复原来的行为，不必改代码重新打包。
-// ── 以下两个开关块已随「GPU 默认启用」一并改造（壁纸套件）───────────────
-// 原文这两块是**无条件**加 --disable-gpu / --in-process-gpu 的，它们与上面新加的
-// "默认启用 GPU"直接冲突：留着一个等于刚开又把 GPU 关回去。
-//
-// 现在的口径：
-//   · 走软件模式（上面判定 renderGpuOff=true）时，仍然把这两个开关加上 ——
-//     它们的价值是切断"GPU 不可用 → Chromium 重试 6 次 → FATAL 自杀"这条致命链，
-//     软件模式下照旧需要。
-//   · 走 GPU 时**一个都不加**：--in-process-gpu 会把 GPU 线程塞进主进程，
-//     崩了连带整个应用；真正的独立 GPU 进程才谈得上"崩溃即重启、应用不死"，
-//     再配合上面的 noteRenderCrash 自动回退。
+// 软件模式下的两个开关：它们的价值是切断"GPU 不可用 → Chromium 重试 6 次 →
+// FATAL 自杀"这条致命链（disableHardwareAcceleration 只把渲染换成软件实现，
+// GPU 进程照样会被创建，挡不住这条链）。
+// GPU 模式下必须一个都不加：--in-process-gpu 会把 GPU 线程塞进主进程，崩了连带
+// 整个应用；真正的独立 GPU 进程才谈得上"崩溃即重启、应用不死"。
+// 代价是所有绘制走 CPU 光栅化。本应用的窗口只是控制台页面，没有 canvas/WebGL
+// 诉求，实测无差别。
+// 一键回退：万一某台机器上这些开关造成了渲染异常，设置 QQ_AGENT_ENABLE_GPU=1 即可。
 if (renderGpuOff) {
   app.commandLine.appendSwitch('disable-gpu');
   app.commandLine.appendSwitch('disable-software-rasterizer');
@@ -188,29 +145,13 @@ if (renderGpuOff) {
 }
 
 
-// R71：R70 挡不住 GPU 进程本身被创建 —— Chromium 的显示合成器（Viz）即使全软件
-// 渲染也要一个 GPU 进程来跑，所以 type=GPU 子进程照旧出现、照旧会被安全软件拦杀
-// （2026-10-21 日志三次 type=GPU reason=crashed exitCode=0xC0000005，dump 偏移相同）。
-// 上面的 child-process-gone 兜底能把观感从"应用消失"降级为"窗口重建"，但根因还在。
+// 崩溃证据链：所有致命事件（未捕获异常 / 未处理 Promise / 渲染进程崩溃 / 无响应 /
+// 退出清理）都必须落盘。打包版没有终端接管 stdout，只走 console.error 的话
+// data/logs 里一行都不会有，闪退只能变成悬案。
 //
-// `--in-process-gpu` 把 GPU 服务挪进浏览器进程的一个线程：**没有 GPU 子进程**，
-// "子进程被杀 → 重试 6 次 → FATAL 自杀"这条链在结构上不存在，连 child-process-gone
-// 都不会触发。安全软件能拦杀的只剩主进程（非沙箱，从未被杀过）。
-// 代价：GPU 线程若真崩会带崩整个进程 —— 但 disable-gpu 下它只做软件合成，崩溃面极小。
-// ⚠️ 壁纸套件改造（见上方「GPU 硬件加速：默认启用」）：这两个开关已并入上面那个
-//    `if (renderGpuOff) { … }` 块，只在软件模式下加。GPU 模式下必须**不加**
-//    in-process-gpu，否则 GPU 线程崩了会连带整个应用，自动回退也就无从谈起。
-
-// ── R70：崩溃证据链（为什么闪退必须在这里就要留下东西）──
-// 在此之前，所有致命事件（未捕获异常 / 未处理 Promise / 渲染进程崩溃 / 无响应 /
-// 退出清理）全部只走 console.error。打包版没有终端接管 stdout，**data/logs 里
-// 一行都不会有** —— 2026-09-22 那次 3 秒闪退就是这样变成悬案的：日志停在普通
-// INFO 上，最后只能靠事件查看器 + 安装目录 debug.log 反推。
-//
-// ⚠️ 必须**动态 import**：src/config.js 在模块求值的瞬间就把 DATA_DIR 固化了
-//    （`process.env.QQ_AGENT_DATA_DIR || ...`），而那个 env 变量是本文件下面
-//    resolveDataDir() 才写进去的。静态 import 会让它抢跑，日志落去默认目录，
-//    于是"日志看着正常但永远找不到崩溃原因"。所以等 ready 之后再绑定。
+// 必须动态 import：src/config.js 在模块求值瞬间就把 DATA_DIR 固化了
+// （`process.env.QQ_AGENT_DATA_DIR || ...`），而那个 env 变量是本文件下面
+// resolveDataDir() 才写进去的。静态 import 会让它抢跑，日志落去默认目录。
 let coreLogger = null;
 let coreLoggerBound = false;
 async function bindCoreLogger() {
@@ -224,17 +165,15 @@ async function bindCoreLogger() {
   }
 }
 /**
- * r94：logger 绑定之前的兜底落盘通道。
+ * logger 绑定之前的兜底落盘通道。
  *
- * 为什么需要：bindCoreLogger() 要等 app ready 才跑，在那之前（以及它失败之后）
- * coreLogger 一直是 null —— 而打包版没有终端接管 stdout，于是"启动阶段闪退"
- * 在 data/logs 里**一行都没有**，只能靠事件查看器反推。r93 那轮定位原生硬崩溃时
- * 最费时间的一步就是这个（日志看着正常、但崩溃现场零证据）。
- * 现在 pre-ready 的关键事件同步追加到 logs/boot-fallback.log；logger 一旦绑上就
- * 自动让位给正式 logger，不会产生重复行。
+ * bindCoreLogger() 要等 app ready 才跑，在那之前（以及它失败之后）coreLogger
+ * 一直是 null，而打包版没有终端接管 stdout，"启动阶段闪退"在 data/logs 里
+ * 一行都没有。现在 pre-ready 的关键事件同步追加到 logs/boot-fallback.log；
+ * logger 一旦绑上就自动让位给正式 logger，不会产生重复行。
  *
- * ⚠️ 刻意不缓存路径、也不用 __dirname：__dirname 在本文件下方才声明，
- *   而本函数可能被更早的代码调到（resolveDataDir 的 catch），引用它就是 TDZ ReferenceError。
+ * 刻意不缓存路径、也不用 __dirname：__dirname 在本文件下方才声明，
+ * 而本函数可能被更早的代码调到（resolveDataDir 的 catch），引用它就是 TDZ ReferenceError。
  */
 function fallbackLog(level, module, text) {
   try {
@@ -271,17 +210,15 @@ function describeError(error) {
   } catch { return String(error); }
 }
 
-// ── 数据目录可写性自检（P0-2）─────────────────────────────────────────────
+// ── 数据目录可写性自检 ────────────────────────────────────────────────────
 /**
  * 试写一次数据目录：返回 null 表示可写，否则返回失败原因文本。
  *
- * 为什么值得在启动最早期单独测这一下：
- *   应用把配置、聊天记录、记忆、用量账本全写在「安装目录/data」下。这个目录不可写时，
- *   后续的写入失败**分散在十几个模块里**，表现千奇百怪 —— 有的抛异常被 catch 掉、
- *   有的静默跳过、有的在渲染进程里 reject 成一句"加载失败"。用户看到的却是同一件事：
- *   双击之后什么都没发生（进程起来又没了：无窗口、无监听端口、连日志目录都没建出来）。
- *   实测把 data 换成同名文件后正是这个现象，零提示、零日志，极难排查。
- *   所以在业务代码之前把"环境问题"和"程序 bug"分开：环境问题就直接讲清原因和解法。
+ * 值得在启动最早期单独测这一下：配置、聊天记录、记忆、用量账本全写在
+ * 「安装目录/data」下。这个目录不可写时，后续的写入失败分散在十几个模块里，
+ * 表现千奇百怪（有的抛异常被 catch 掉、有的静默跳过、有的在渲染进程里 reject），
+ * 用户看到的却是同一件事：双击之后什么都没发生，零提示、零日志。
+ * 所以在业务代码之前把"环境问题"和"程序 bug"分开。
  *
  * 已知成因（按现场出现频率排）：
  *   ① 提权装到了 Program Files / Windows 之类的受保护目录；
@@ -313,16 +250,14 @@ function probeDataDirWritable(dir) {
 /**
  * 数据目录不可写时的收尾：写诊断文件 → 弹原生错误框 → 退出。
  *
- * 这里刻意用 `dialog.showErrorBox`（同步阻塞），而不是项目统一的
- * ./dialog-safe.js 的 showDialog：
- *   · 此时**还没有任何窗口**，没有父窗口可挂，showDialog 的优势用不上；
- *   · 这是"马上要退出"的路径，必须保证用户**一定看见**再走 ——
- *     异步框一旦因为 ready 时序没弹出来，就退化成 R45 那个"双击没反应"的老毛病，
- *     而这正是本次要修的东西。同步框在用户点掉之前进程不退，语义最稳。
+ * 这里刻意用 dialog.showErrorBox（同步阻塞），而不是 ./dialog-safe.js 的 showDialog：
+ *   · 此时还没有任何窗口，没有父窗口可挂，showDialog 的优势用不上；
+ *   · 这是"马上要退出"的路径，必须保证用户一定看见再走。异步框一旦因为 ready
+ *     时序没弹出来，就退化成"双击没反应"的老毛病。同步框在用户点掉之前进程不退。
  *   · Electron 文档明确保证 showErrorBox 可以在 ready 之前调用。
  *
- * 退出码用 2：与 0（正常退出）、1（未捕获异常，见上方 fatal 处理器）区分开，
- * 方便启动器/批处理判断"是环境问题还是程序崩了"。
+ * 退出码用 2，与 0（正常退出）、1（未捕获异常）区分开，方便启动器判断
+ * "是环境问题还是程序崩了"。
  */
 function reportDataDirFailure(dir, reason) {
   const installDir = (() => {
@@ -377,13 +312,10 @@ function reportDataDirFailure(dir, reason) {
 }
 
 /**
- * 崩溃转储的保留上限（2026-10-16 外部审查 #3）。
+ * 崩溃转储的保留上限。
  *
- * 病灶：每个 minidump 约 34MB，而全库没有任何清理 —— 崩溃几次就永久占几百 MB，
- * 且"崩溃趋势"完全不可观测（不聚合、不上报、不清理）。
- * 本机 2026-10-16 一天内 GPU 子进程连崩 4 次，Crashpad/reports 下已堆 3 份共 100MB。
- *
- * 实现抽在 electron/crash-dumps.js（main.js import 了 electron，纯 node 下跑不起来，
+ * 每个 minidump 约 34MB，不做清理的话崩溃几次就永久占几百 MB。实现抽在
+ * electron/crash-dumps.js（main.js import 了 electron，纯 node 下跑不起来，
  * 逻辑塞在这里等于没有测试）；这里只负责接线 + 落日志。
  */
 function pruneCrashDumps() {
@@ -399,11 +331,9 @@ function pruneCrashDumps() {
 }
 
 /**
- * R70：崩溃转储（crashpad）。
- * 2026-09-22 那次闪退的 Report ID 只有一个 50ebb260…，WER 存档目录是空的、应用日志
- * 里也没有任何痕迹，所以只能靠旁证推凶手。打开 crashpad 之后，原生崩溃会在
- * <userData>/Crashpad/dumps 留一份 minidump，下次就能直接看到调用栈死在哪一层。
- * uploadToServer=false + 空 submitURL：只落本地，不外传任何东西。
+ * 崩溃转储（crashpad）。
+ * 打开之后原生崩溃会在 <userData>/Crashpad 下留一份 minidump，下次能直接看到
+ * 调用栈死在哪一层。uploadToServer=false + 空 submitURL：只落本地，不外传。
  */
 function startCrashReporter() {
   try {
@@ -414,11 +344,9 @@ function startCrashReporter() {
       submitURL: '',
       uploadToServer: false,
       compress: false,
-      // r93：把"到底是哪个构建 / 哪个运行环境"写进 dump 的注解。
-      // 背景：v0.4.7 有过 3 次原生硬崩溃（0xC0000005，镜像偏移 exe+0x37BF0CA），
-      // 定位时最费时间的一步是**先确认用户装的是不是同一个构建**——当时只能靠
-      // 反复比对文件时间戳和体积。注解写进 dump 后，拿到 dump 一眼就能排除
-      // "版本不一致"这条分支，剩下的再谈符号分析。
+      // 把"到底是哪个构建 / 哪个运行环境"写进 dump 的注解。定位原生硬崩溃时
+      // 最费时间的一步是先确认用户装的是不是同一个构建，注解写进 dump 后
+      // 一眼就能排除"版本不一致"这条分支。
       globalExtra: {
         version: app.getVersion?.() ?? 'unknown',
         electron: process.versions?.electron ?? 'unknown',
@@ -437,10 +365,9 @@ function startCrashReporter() {
 }
 
 /**
- * R70：子进程监护。R44 那条致命链的第一现场就是「GPU 进程启动即被杀」——
- * 以前完全看不见，只能等整个进程自杀了再从事件查看器反推。现在每个非正常退出的
- * 子进程都留一行：GPU / Utility / Zygote 谁死、是被杀还是崩了、退出码多少，
- * 一眼就能看出是不是又被系统侧拦了。
+ * 子进程监护。GPU 进程被杀、Chromium 重试到自杀这条链以前完全看不见，
+ * 现在每个非正常退出的子进程都留一行：GPU / Utility / Zygote 谁死、
+ * 是被杀还是崩了、退出码多少，一眼就能看出是不是又被系统侧拦了。
  */
 function watchChildProcesses() {
   let abnormal = 0;
@@ -455,32 +382,26 @@ function watchChildProcesses() {
   });
 }
 
-// 主进程兜底：未捕获异常不应静默吞掉。
-// headless 入口（src/server.js）exit(1) 的理由在那里不成立 —— 那个有外层
-// 守护重启。Electron 没有外层守护，进程挂掉后用户只能看到"托盘图标消失"。
-// 折衷：拉起一个可见的错误对话框把异常亮给用户（至少知道为什么挂了），
-// 确认后再退出 —— "半死不活地挂着"（定时器丢失/连接悬空但窗口还在）
-// 是最难排查的状态，宁可死得明明白白。
-// R70：两条兜底都改走 logCritical（原先是 console.error，打包版不落盘）。
-// 内容从 error.stack 取全文 —— 崩溃就有这一次机会留下证据，不要只给 message。
+// 主进程兜底：未捕获异常不应静默吞掉。headless 入口（src/server.js）exit(1)
+// 的理由在那里不成立，因为那个有外层守护重启；Electron 没有外层守护，
+// 进程挂掉后用户只能看到"托盘图标消失"。"半死不活地挂着"（定时器丢失/连接悬空
+// 但窗口还在）是最难排查的状态，宁可死得明明白白。
+// 内容从 error.stack 取全文：崩溃就有这一次机会留下证据，不要只给 message。
 process.on('unhandledRejection', (error) => {
   logCritical('fatal', `[未处理 Promise] ${describeError(error)}`);
 });
 process.on('uncaughtException', (error) => {
   logCritical('fatal', `[未捕获异常] ${describeError(error)}`);
-  // app.exit 不触发 before-quit/quit 事件：本进程不再持有任何需要善后的
-  // 子进程 —— 协议端（SnowLuma / NapCat）由用户自行安装、自行运行，退出
-  // QQ Agent 不该把它一起杀掉（它是独立进程，用户可能还要用）。这里只兑现
-  // 消息存档落盘，来不及跑的长清理无所谓。
-  // 消息存档按会话节流 300ms（store.js 的 M5），这里同步兑现待写内容 ——
-  // 异常退出前不 flush 就等于丢掉最后几百毫秒的聊天记录。同步、极快，不会拖住退出。
+  // app.exit 不触发 before-quit/quit 事件：协议端（SnowLuma / NapCat）由用户
+  // 自行安装、自行运行，退出 QQ Agent 不该把它一起杀掉。这里只兑现消息存档落盘，
+  // 来不及跑的长清理无所谓。
+  // 消息存档按会话节流 300ms（store.js 的 M5），这里同步兑现待写内容，
+  // 异常退出前不 flush 就等于丢掉最后几百毫秒的聊天记录。
   try { core?.store?.flushPendingSaves?.(); } catch { /* 退出路径上不再抛 */ }
   try {
-    // ⚠️（2026-10-16 外部审查 #2 站点④）原实现用 dialog.showErrorBox —— 它是**模态
-    //    同步**调用，用户不点掉进程就一直活着，且无父窗口、独占一个任务栏按钮。
-    //    改用 showDialog：挂父窗口（有窗口时）+ 30 秒超时自消，超时动作仍是 exit(1)。
-    //    dialog 在 app ready 前也允许调用（Electron 文档保证），此时没有父窗口可挂，
-    //    靠超时兜底。
+    // 不能用 dialog.showErrorBox：它是模态同步调用，用户不点掉进程就一直活着，
+    // 且无父窗口、独占一个任务栏按钮。showDialog 挂父窗口 + 30 秒超时自消，
+    // 超时动作仍是 exit(1)。ready 前没有父窗口可挂，靠超时兜底。
     showDialog({
       type: 'error',
       title: 'QQ Agent 发生未捕获错误',
@@ -506,7 +427,7 @@ app.setAppUserModelId('cn.awsl1414.qq-agent');
 //   安装版用户：安装目录/exe 旁边的 data/。选压缩包目录当安装目录时
 //   天然接管里面的 data/（config、记忆、聊天记录、telemetry id 全保留），零迁移零 bug。
 // NSIS 覆盖安装只替换它自己装的文件，运行时生成的 data/ 不在清单里 → 升级不丢数据。
-// 兼容兜底：外置 %APPDATA% 时期（2026-09-06 短命版本）的数据自动搬回安装目录。
+// 兼容兜底：外置 %APPDATA% 时期的数据自动搬回安装目录。
 function resolveDataDir() {
   if (process.env.QQ_AGENT_DATA_DIR) return process.env.QQ_AGENT_DATA_DIR;
   // 开发模式（.bat 直起 node_modules 里的 electron.exe + 项目目录）：项目内 data/
@@ -534,13 +455,11 @@ process.env.QQ_AGENT_DATA_DIR = resolveDataDir();
 // 没有锁的话第二个实例会双份连同一个协议端，群消息会被双重回复。
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
-  // ⚠️ 不能静默退出（R45）：已有一个实例占着锁时，新实例原来的行为是 app.quit() 后
-  //    一声不响地消失。用户看到的是"双击了没反应"，而眼前那个窗口可能是上一次
-  //    卡死留下的定格画面 —— 于是反复双击、反复无反应。这里明确告知一句。
-  // ⚠️（2026-10-16 外部审查 #2 站点①）这个框**无父窗口**（此刻主窗口归已运行的实例），
-  //    是独立顶层窗口 → 占一个任务栏按钮，且点掉之前进程不退。群友截图里
-  //    "任务栏一排 QQ Agent"就是它。加 8 秒超时自消：信息一行字读够，
-  //    没人看也自己消失，不必人工点。
+  // 不能静默退出：已有一个实例占着锁时，新实例原来的行为是 app.quit() 后
+  // 一声不响地消失。用户看到的是"双击了没反应"，而眼前那个窗口可能是上一次
+  // 卡死留下的定格画面，于是反复双击、反复无反应。这里明确告知一句。
+  // 这个框无父窗口（此刻主窗口归已运行的实例），是独立顶层窗口，会占一个任务栏
+  // 按钮且点掉之前进程不退。加 8 秒超时自消：信息一行字读够，没人看也自己消失。
   app.whenReady().then(() => {
     showDialog({
       type: 'info',
@@ -551,25 +470,25 @@ if (!gotLock) {
     }, { autoCloseMs: DIALOG_TIMEOUT.alreadyRunning })
       .catch(() => {})
       .finally(() => app.quit());
-  }).catch(() => { /* 单实例提示失败也不影响退出（2026-10-18 补链尾兜底） */ });
+  }).catch(() => { /* 单实例提示失败也不影响退出 */ });
 } else {
-  // 第二实例启动时：唤出窗口，并顺手把"卡住的自己"救回来 —— 用户再点一次
-  // 就是在告诉我们"界面没出来"，这时候重载页面正是他想要的结果。
+  // 第二实例启动时唤出窗口，并顺手把"卡住的自己"救回来：用户再点一次
+  // 就是在告诉我们"界面没出来"。
   app.on('second-instance', async () => {
     showWindow();
     // 用户再点一次 = 在告诉我们"界面没出来"。先看清楚是"没起来"还是"起来后卡住了"，
-    // 两种情况的救援手段不同（reload 只对前者有效）—— 见 healIfStuck 的注释。
+    // 两种情况的救援手段不同（reload 只对前者有效），见 healIfStuck 的注释。
     const probe = await probePage(mainWindow);
     if (probe.state === 'gone') return;                  // showWindow 已经新建过窗口了
     if (probe.state === 'ready') {
       console.log('[window] 用户再次启动：页面正常，仅唤出窗口');
       return;
     }
-    // R76：仍在启动中（boot）的页面不急着重载。首启要加载 24 个 Skill + 16 个插件
-    // 并做缓存预热，页面头几十秒停在 loading 壳是正常节奏；旧逻辑在这里无条件
-    // reload，用户着急连点两三次就把启动一次次打断重来 —— 这是群友反馈
-    // "卡在会话加载界面出不来"的重要放大器。只有窗口建起来超过 30 秒还没就绪，
-    // 才认定真卡了（页面自身还有 45 秒 showBootFailure 兜底，两道闸不重复）。
+    // 仍在启动中（boot）的页面不急着重载。首启要加载几十个技能与插件并做
+    // 缓存预热，页面头几十秒停在 loading 壳是正常节奏；无条件 reload 会让用户
+    // 着急连点两三次就把启动一次次打断重来，这是"卡在会话加载界面出不来"的
+    // 重要放大器。只有窗口建起来超过 30 秒还没就绪，才认定真卡了
+    // （页面自身还有 45 秒 showBootFailure 兜底，两道闸不重复）。
     if (probe.state === 'boot' && Date.now() - windowBornAt < 30_000) {
       console.log(`[window] 用户再次启动：页面仍在启动中（已 ${Math.round((Date.now() - windowBornAt) / 1000)}s），仅唤出窗口，不重载`);
       return;
@@ -579,39 +498,35 @@ if (!gotLock) {
 }
 
 /**
- * 页面活性探针（R69 重写）。
+ * 页面活性探针。
  *
- * 旧版只问「启动 loading 壳撤了没」（`appReady === true || !#loading-overlay`）——
- * 而这两者在启动成功后**永久为真**，于是看门狗对"跑了几小时之后界面冻住"完全无感。
+ * 只问「启动 loading 壳撤了没」是不够的：这两者在启动成功后永久为真，
+ * 看门狗对"跑了几小时之后界面冻住"完全无感。
  *
- * 新版返回四态：
- *   'ready' —— JS 有应答且启动已就绪（是否真活着还要再看心跳在不在动，见 startBootWatchdog）
- *   'boot'  —— JS 有应答，但仍停在 loading 壳上（启动没完成）
- *   'hung'  —— JS 在 4 秒内**没有应答** → 渲染主线程被占满 / 僵死
- *   'gone'  —— 窗口或页面已销毁
+ * 返回四态：
+ *   'ready'：JS 有应答且启动已就绪（是否真活着还要再看心跳，见 startBootWatchdog）
+ *   'boot' ：JS 有应答，但仍停在 loading 壳上（启动没完成）
+ *   'hung' ：JS 在 4 秒内没有应答 → 渲染主线程被占满 / 僵死
+ *   'gone' ：窗口或页面已销毁
  *
- * 为什么"超时"就是僵死的可靠信号（R69 实测，Electron 33.4.11）：
- *   渲染主线程跑同步死循环期间，executeJavaScript **连续 4 次全部超时**
- *   （1.6s / 5.6s / 9.6s / 13.6s），循环一结束立刻恢复应答；而同一时间内
- *   `render-process-gone` 触发 0 次（进程活着，只是不干活）。
- *   → "问一句有没有回音"本身就是最直接的活性探针。
+ * "超时"就是僵死的可靠信号（实测，Electron 33.4.11）：渲染主线程跑同步死循环
+ * 期间，executeJavaScript 连续 4 次全部超时，循环一结束立刻恢复应答；
+ * 而同一时间内 render-process-gone 触发 0 次（进程活着，只是不干活）。
  *
- * 心跳 `__qaBeat` 是**辅助**信号（由 ui/app/00-core.js 每秒递增）：它能抓到
+ * 心跳 __qaBeat 是辅助信号（由 ui/app/00-core.js 每秒递增），能抓到
  * "JS 还能应答、但界面已经冻住"那类僵死。窗口隐藏时 Chromium 会节流定时器，
  * 所以主进程只在窗口可见时才拿它做判定（见 startBootWatchdog）。
  *
- * r93：返回值多一个 `hidden`（页面自报 `document.visibilityState === 'hidden'`）。
- * 为什么必须要它：主进程侧的 `isVisible()/isMinimized()` 只反映"窗口有没有被
- * 最小化/隐藏"，**查不到"被别的窗口遮挡"** —— 而被遮挡正是 R76 那 14 次误判的
- * 场景。`backgroundThrottling:false` 已把节流从源头关掉，但遮挡/休眠恢复期间
- * 仍可能出现一次探针超时；`hidden` 让看门狗知道"此刻不适合下结论"，直接跳过。
+ * 返回值的 hidden 是页面自报的 document.visibilityState === 'hidden'。
+ * 主进程侧的 isVisible()/isMinimized() 查不到"被别的窗口遮挡"，而被遮挡正是
+ * 多数误判的场景。backgroundThrottling:false 已把节流从源头关掉，但遮挡/休眠
+ * 恢复期间仍可能出现一次探针超时；hidden 让看门狗知道"此刻不适合下结论"。
  */
 async function probePage(win) {
   if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return { state: 'gone', beat: -1 };
   let r;
-  // R80（R79-4）：race 的兜底定时器必须清理。旧逻辑从不 clearTimeout ——
-  // executeJavaScript 秒回时也留一个 4s 定时器挂着（看门狗 5s 一问，
-  // 常态挂 1 个）。危害小但零成本可修：提变量 + finally 清。
+  // race 的兜底定时器必须清理：executeJavaScript 秒回时也留一个 4s 定时器挂着
+  // （看门狗 5s 一问，常态挂 1 个）。
   let raceTimer = null;
   try {
     r = await Promise.race([
@@ -630,31 +545,28 @@ async function probePage(win) {
   return {
     state: readyRaw === 'true' ? 'ready' : 'boot',
     beat: Number(beatRaw) || 0,
-    // r93：页面自报的可见性。主进程侧 isVisible()/isMinimized() 查不到"被别的窗口遮挡"，
-    // 而 document.visibilityState 是 Chromium 遮挡检测的一手结论 —— 两类误判都靠它兜底。
-    // 旧页面（不认识第三段）拿不到时按 false，行为与 r92 一致。
+    // 页面自报的可见性。主进程侧 isVisible()/isMinimized() 查不到"被别的窗口遮挡"，
+    // 而 document.visibilityState 是 Chromium 遮挡检测的一手结论。
+    // 旧页面（不认识第三段）拿不到时按 false。
     hidden: hiddenRaw === '1'
   };
 }
 
 /**
- * R71：启动卡住时，把「启动画面自己想说的话」捞回主进程日志。
+ * 启动卡住时，把「启动画面自己想说的话」捞回主进程日志。
  *
  * 渲染进程的 bootLogs / #loading-status（setLoadingStatus 写的那几条，比如
- * "服务还没响应：xxx"）以前只存在于 DOM 里 —— 群友发来主进程日志时，
- * 恰恰看不到这句最关键的失败原因（2026-09-23 实测：主进程日志只有
- * 三条看门狗记录，页面那侧为什么没起来完全是黑盒）。
- * 看门狗重载前捞一次，日志就能自证卡在哪一步。
+ * "服务还没响应：xxx"）以前只存在于 DOM 里，群友发来主进程日志时恰恰看不到
+ * 这句最关键的失败原因。看门狗重载前捞一次，日志就能自证卡在哪一步。
  */
 async function harvestBootDiagnostics(reason) {
-  let diagTimer = null;   // r94：见下方 finally
+  let diagTimer = null;
   try {
     const wc = mainWindow?.webContents;
     if (!wc || wc.isDestroyed()) return;
     // state === 'boot' 意味着渲染主线程能应答，但仍然加 3 秒超时兜底，
-    // 免得取证本身把看门狗卡住（R69 的教训：任何探针都必须带超时）。
-    // r94：兜底定时器要清（与 probePage 的 raceTimer 同一笔账）——
-    // 旧写法在 executeJavaScript 秒回时也留一个 3 秒定时器挂在事件循环里。
+    // 免得取证本身把看门狗卡住（任何探针都必须带超时）。
+    // 兜底定时器要清，否则 executeJavaScript 秒回时也会留一个 3 秒定时器。
     const info = await Promise.race([
       wc.executeJavaScript(
         'JSON.stringify({status:(document.getElementById("loading-status")||{}).textContent||"",logs:(typeof bootLogs!=="undefined"?bootLogs.slice(-8):[]),overlay:!!document.getElementById("loading-overlay")})'
@@ -670,11 +582,10 @@ async function harvestBootDiagnostics(reason) {
   }
 }
 
-// 卡住自救。⚠️ 两类故障的救援手段**不能混用**：
-//   boot —— 页面没起来，`reload()` 有效（R45 起一直这么干）。
-//   hung —— 渲染主线程不回话。**`reload()` 对它完全无效**（R69 实测：9.67s 调用 reload，
-//           20.65s 阻塞自己结束、20.69s 才真正生效 —— 导航请求排在阻塞的主线程后面，
-//           只能干等），必须把窗口整个重建。
+// 卡住自救。两类故障的救援手段不能混用：
+//   boot：页面没起来，reload() 有效。
+//   hung：渲染主线程不回话。reload() 对它完全无效（实测：导航请求排在阻塞的
+//         主线程后面，只能干等），必须把窗口整个重建。
 // 服务跑在主进程里、一直活着，所以重建窗口即可恢复，不需要动后端。
 let bootMisses = 0;
 let bootReloads = 0;
@@ -683,10 +594,10 @@ let windowRebuilds = 0;
 let bootWatchdog = null;
 let lastBeat = -1;
 let rebuilding = false;
-// r93：系统休眠恢复 / 锁屏解锁后的静默期截止时刻（见 suspendWatchdogBriefly）。
+// 系统休眠恢复 / 锁屏解锁后的静默期截止时刻（见 suspendWatchdogBriefly）。
 // 这两个时刻渲染进程可能还在恢复（定时器被暂停过、合成器重建、页面重排），
-// 一次探针超时并不代表界面坏了；旧逻辑会据此拆窗重建 —— 用户看到的就是
-// "睡醒回来窗口自己消失了一下 / 任务栏莫名其妙闪一下"。
+// 一次探针超时并不代表界面坏了；据此拆窗重建会让用户看到"睡醒回来窗口自己
+// 消失了一下 / 任务栏莫名其妙闪一下"。
 let resumeGraceUntil = 0;
 
 /** 毁掉当前窗口再建一个。只在"页面彻底不回话"时走这条路（reload 已证明无效）。 */
@@ -700,9 +611,9 @@ async function rebuildWindow(reason) {
   const old = mainWindow;
   mainWindow = null;
   try {
-    // ⚠️ 必须先摘掉 closed 监听再 destroy：closed 是异步触发的，否则它会在
-    //    createWindow() 之后才到，把刚建好的新窗口置成 null —— 看门狗随后
-    //    以为"没有窗口可管"而停手，重建等于白做。
+    // 必须先摘掉 closed 监听再 destroy：closed 是异步触发的，否则它会在
+    // createWindow() 之后才到，把刚建好的新窗口置成 null，看门狗随后
+    // 以为"没有窗口可管"而停手，重建等于白做。
     old?.removeAllListeners('closed');
     old?.destroy();
   } catch { /* 已经销毁过了 */ }
@@ -718,11 +629,12 @@ async function rebuildWindow(reason) {
 }
 
 // 返回值语义：true = "不用管了"（已恢复，或已采取措施）；false = "自愈预算用尽，该告诉用户了"。
-// ⚠️ 曾经重载完也返回 false，结果看门狗第一次动手就把自己关掉并弹错误框 —— 页面还在重载中就被判死刑。
+// 重载完也返回 false 的话，看门狗第一次动手就把自己关掉并弹错误框，
+// 页面还在重载中就被判死刑。
 async function healIfStuck(reason, state) {
   if (state === 'boot') {
     if (bootReloads >= 2) return false;
-    // R71：重载之前先把启动画面上的自述捞进日志（否则重载会把现场冲掉）
+    // 重载之前先把启动画面上的自述捞进日志，否则重载会把现场冲掉
     await harvestBootDiagnostics(reason);
     bootReloads += 1;
     logCritical('window', `[看门狗：页面停在启动画面] reason=${reason}，重载第 ${bootReloads} 次`);
@@ -734,12 +646,9 @@ async function healIfStuck(reason, state) {
 
 /** 自愈预算耗尽：停手并把情况说清楚（后端一直是好的，坏的只有界面这一层）。
  *
- * ⚠️（2026-10-16 外部审查 #2 站点③）原实现 `dialog.showMessageBox` **无父窗口、
- *    无超时、且不退出** —— 这是四个站点里最糟的一个：一个没人点的框 = 一个活进程
- *    + 一个任务栏按钮，永久挂着。而这个场景**不能**套"超时退出"（后端可能正在跑
- *    会话，退出即丢工作，报告 5.2 明列为红线）。
- *    折中：挂到 mainWindow 上（模态子对话框不单独占任务栏）；窗口已经没了就退回
- *    无父形态，但日志照旧写全 —— 排查时不能没有痕迹。
+ * 不能套"超时退出"：后端可能正在跑会话，退出即丢工作。
+ * 折中：挂到 mainWindow 上（模态子对话框不单独占任务栏）；窗口已经没了就退回
+ * 无父形态，但日志照旧写全，排查时不能没有痕迹。
  */
 function giveUpWatchdog(reason) {
   clearInterval(bootWatchdog);
@@ -758,13 +667,12 @@ function giveUpWatchdog(reason) {
 }
 
 /**
- * r93：给看门狗一段静默期（系统休眠恢复 / 锁屏解锁后调用）。
+ * 给看门狗一段静默期（系统休眠恢复 / 锁屏解锁后调用）。
  *
- * 宽限期内**完全不下判断**，并把已有计数清零。理由：这两个时刻渲染进程可能
- * 正在恢复（定时器被系统暂停过、合成器要重建、页面要重排），一次探针超时
- * 并不代表界面坏了。旧逻辑会把这次超时累计进 hangMisses，两次（≈10 秒）后
- * 直接 `destroy() + createWindow()` —— 用户看到"睡醒回来窗口自己消失了一下"
- * 或"任务栏莫名其妙闪一下"，而界面其实一直是好的。
+ * 宽限期内完全不下判断，并把已有计数清零。理由：这两个时刻渲染进程可能正在
+ * 恢复（定时器被系统暂停过、合成器要重建、页面要重排），一次探针超时并不代表
+ * 界面坏了。旧逻辑会把这次超时累计进 hangMisses，两次后直接 destroy() +
+ * createWindow()，用户看到"睡醒回来窗口自己消失了一下"，而界面其实一直是好的。
  *
  * @param {number} ms     静默时长
  * @param {string} reason 记进日志的原因（排错时要能看出是哪一个电源事件）
@@ -789,17 +697,15 @@ function windowJudgeable(probe) {
 
 function startBootWatchdog() {
   // 每 5 秒自检一次。重建窗口时会再调一次，所以开头必须先把旧的清掉（幂等）。
-  // ⚠️ 常驻不解除武装：曾经"一就绪就 clearInterval"，结果页面先正常启动、
-  //    之后再卡死（例如用户中途重载/网络抖动）就再也没人管了。现在只要恢复就绪
-  //    就把连续失败计数和重载预算一起清零 —— 看门狗全程在岗，但只在真出事时才动手。
+  // 常驻不解除武装：一就绪就 clearInterval 的话，页面先正常启动、之后再卡死
+  // 就再也没人管了。现在只要恢复就绪就把连续失败计数和重载预算一起清零，
+  // 看门狗全程在岗，但只在真出事时才动手。
   if (bootWatchdog) clearInterval(bootWatchdog);
-  // ⚠️（2026-10-17 修 L6）**重入保护**：本 tick 由多段 await 组成 —— probePage
-  //   每段自带 4 秒探测超时，僵死路径上还有一次 1.2 秒复核 + 第二次 probe，
-  //   所以真僵死时单轮最坏可以超过 9 秒，而 interval 只有 5 秒。原实现没有重入标志，
-  //   于是下一轮会在上一轮还没跑完时叠进来：两个 tick 同时累加 hangMisses /
-  //   同时调 healIfStuck → 最坏是**连着重建两次窗口**（用户看到界面闪两次）。
-  //   现在跑不完就跳过这一轮；下个 5 秒自然还有机会 —— 看门狗的判据本来就是
-  //   "跨多轮累计"，跳一轮不改变判定结果，只去掉重叠。
+  // 重入保护：本 tick 由多段 await 组成（probePage 每段自带 4 秒探测超时，
+  // 僵死路径上还有一次 1.2 秒复核 + 第二次 probe），真僵死时单轮最坏可以超过
+  // 9 秒，而 interval 只有 5 秒。没有重入标志时下一轮会叠进来，两个 tick 同时
+  // 累加 hangMisses、同时调 healIfStuck，最坏是连着重建两次窗口。
+  // 跑不完就跳过这一轮；看门狗的判据本来就是"跨多轮累计"，跳一轮不改变判定结果。
   let ticking = false;
   bootWatchdog = setInterval(() => {
     if (ticking) return;
@@ -813,16 +719,16 @@ function startBootWatchdog() {
   async function watchdogTick() {
     if (!mainWindow || mainWindow.isDestroyed()) { clearInterval(bootWatchdog); bootWatchdog = null; return; }
 
-    // r93：休眠恢复/解锁后的静默期 —— 完全不下判断，也不累计任何计数。
+    // 休眠恢复/解锁后的静默期：完全不下判断，也不累计任何计数。
     if (Date.now() < resumeGraceUntil) return;
 
     const probe = await probePage(mainWindow);
     if (probe.state === 'gone') { clearInterval(bootWatchdog); bootWatchdog = null; return; }
 
     if (probe.state === 'ready') {
-      // 心跳只在窗口**可见**时参与判定：窗口隐藏时 Chromium 会节流甚至暂停定时器，
+      // 心跳只在窗口可见时参与判定：窗口隐藏时 Chromium 会节流甚至暂停定时器，
       // 心跳停摆是正常的（缩到托盘就是这种状态），不能当僵死处理。
-      // r93：可见性判据统一收进 windowJudgeable —— 除 isVisible/isMinimized 之外，
+      // 可见性判据统一收进 windowJudgeable，除 isVisible/isMinimized 之外，
       // 还看页面自报的 document.visibilityState（能抓到"被别的窗口遮挡"）。
       const visible = windowJudgeable(probe);
       // beat <= 0 表示页面里还没有心跳（旧版页面 / 刚导航完），此时不拿它下判断。
@@ -834,9 +740,9 @@ function startBootWatchdog() {
       // 可见 + JS 有应答 + 心跳不动 → 界面冻住而 JS 还活着（渲染/合成层面的僵死）
       hangMisses += 1;
       if (hangMisses < 3) return;
-      // r93：动手前先复核一次。心跳停摆可能是"渲染主线程正在跑一段长同步任务"
-      // （大表全量重绘、GC 长暂停），这类停摆会自己恢复 —— 拆窗对它属于过度处置，
-      // 而且代价是用户看到窗口凭空重建。再问一次，只要回话就放它一马。
+      // 动手前先复核一次。心跳停摆可能是"渲染主线程正在跑一段长同步任务"
+      // （大表全量重绘、GC 长暂停），这类停摆会自己恢复，拆窗属于过度处置。
+      // 再问一次，只要回话就放它一马。
       hangMisses = 0;
       await new Promise((res) => setTimeout(res, 1200));
       const confirm = await probePage(mainWindow);
@@ -850,12 +756,11 @@ function startBootWatchdog() {
     }
 
     if (probe.state === 'hung') {
-      // r93：**这是本轮最重要的守卫。**旧逻辑在这里完全不看窗口状态 ——
-      // 窗口被遮挡、缩在托盘、或系统刚休眠回来时，一次 executeJavaScript 超时
-      // 就直接累计，两次（≈10 秒）后 `destroy()+createWindow()`。重建出的新窗口
-      // 会走 ready-to-show 的 show()+focus()，于是：缩托盘的用户被凭空弹回前台，
-      // 全屏游戏里的用户被抢焦点、任务栏按钮消失又出现 —— 就是群友报的
-      // "莫名其妙闪烁"。查不到可见性时保守处理：不动手。
+      // 这是本轮最重要的守卫。不看窗口状态的话，窗口被遮挡、缩在托盘、
+      // 或系统刚休眠回来时，一次 executeJavaScript 超时就累计，两次后
+      // destroy()+createWindow()。重建出的新窗口会走 ready-to-show 的
+      // show()+focus()，于是缩托盘的用户被凭空弹回前台，全屏游戏里的用户
+      // 被抢焦点。查不到可见性时保守处理：不动手。
       if (!windowJudgeable(probe)) {
         hangMisses = 0;
         return;
@@ -864,7 +769,7 @@ function startBootWatchdog() {
       hangMisses += 1;
       if (hangMisses < 3) return;
       hangMisses = 0;
-      // r93：同样是"动手前复核"—— 长同步任务期间的超时会在任务结束后立刻恢复。
+      // 同样是"动手前复核"：长同步任务期间的超时会在任务结束后立刻恢复。
       await new Promise((res) => setTimeout(res, 1200));
       const confirm = await probePage(mainWindow);
       if (confirm.state === 'ready' || confirm.state === 'boot') {
@@ -876,12 +781,11 @@ function startBootWatchdog() {
       return;
     }
 
-    // 'boot'：启动未就绪 —— 沿用原来的重载策略（reload 对"页面没起来"是有效的）
+    // 'boot'：启动未就绪，沿用重载策略（reload 对"页面没起来"是有效的）
     bootMisses += 1;
-    // r92（R78-5）：阈值 5 → 12（25 秒 → 60 秒）。页面自己的启动预算要到 45 秒
-    // 才渲染 showBootFailure（带"重新加载界面"按钮），看门狗 25 秒就判死刑的话，
-    // 慢机器（建索引 + 24 Skill + 16 插件本来就可能 >25s）会被反复打断重来，
-    // 自愈预算（bootReloads>=2）耗尽后彻底躺平 —— 启动越慢越容易被判死刑。
+    // 阈值 12（60 秒）。页面自己的启动预算要到 45 秒才渲染 showBootFailure
+    // （带"重新加载界面"按钮），看门狗 25 秒就判死刑的话，慢机器会被反复打断重来，
+    // 自愈预算耗尽后彻底躺平，启动越慢越容易被判死刑。
     if (bootMisses < 12) return;
     bootMisses = 0;
     if (!(await healIfStuck('看门狗：启动未就绪', 'boot'))) giveUpWatchdog('启动未就绪');
@@ -889,18 +793,17 @@ function startBootWatchdog() {
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// 2026-10-18：Windows 优先用 .ico，而不是固定 .png。
-//   本机的 QQ Agent.exe 是 node stub（自身没有嵌入图标资源），任务栏/托盘图标
-//   完全依赖这里的 setIcon —— 而 .png 在部分 Windows 上会被任务栏忽略，
-//   表现为"底部任务栏显示一张空白文件图标"（群友反馈）。
-//   assets 里的 icon.ico 含 16~256 全套尺寸，是 Windows 原生格式，兼容性最好；
-//   非 Windows（开发机 / 未来的 mac 包）继续用 png。
+// Windows 优先用 .ico，而不是固定 .png。QQ Agent.exe 是 node stub（自身没有
+// 嵌入图标资源），任务栏/托盘图标完全依赖这里的 setIcon，而 .png 在部分 Windows
+// 上会被任务栏忽略，表现为"底部任务栏显示一张空白文件图标"。
+// assets 里的 icon.ico 含 16~256 全套尺寸，是 Windows 原生格式，兼容性最好；
+// 非 Windows（开发机 / mac 包）继续用 png。
 const ICON_PNG_PATH = path.resolve(__dirname, '..', 'assets', 'icon.png');
 const ICON_ICO_PATH = path.resolve(__dirname, '..', 'assets', 'icon.ico');
 const ICON_PATH = (process.platform === 'win32' && fs.existsSync(ICON_ICO_PATH))
   ? ICON_ICO_PATH
   : ICON_PNG_PATH;
-// 无边框窗口的窗口控制桥（preload.cjs 而不是 .js —— 见该文件顶部说明）
+// 无边框窗口的窗口控制桥（preload.cjs 而不是 .js，见该文件顶部说明）
 const PRELOAD_PATH = path.resolve(__dirname, 'preload.cjs');
 // 悬浮小窗自绘菜单的极窄桥（见 electron/widget-preload.cjs 顶部的安全边界）：
 // 只需要把"改设置 / 打开主界面 / 展开"递过来，别的一概不开口。
@@ -908,13 +811,10 @@ const WIDGET_PRELOAD_PATH = path.resolve(__dirname, 'widget-preload.cjs');
 
 let mainWindow = null;
 // 主窗口是否被我们调成过半透明（= 已经吃上 WS_EX_LAYERED + LWA_ALPHA）。
-// ⚠️ 这个样式一旦加上，Electron 就**不会**再摘掉（native_window_views.cc 的
-//    SetOpacity 里没有 opacity===1 的清理分支）。而 LWA_ALPHA 与"真透明窗口"
-//    用的逐像素 alpha 互斥 —— 打上去之后那个窗口只会停在第一帧不再重绘
-//    （R46 记录的 8/10 轮冻结就是这么来的：渲染进程启动时无条件 setOpacity(1)）。
-//    所以这里记住状态：从没调低过就一次都不打。
-// ⚠️（2026-10-24 修）这行曾被合并 0.4.9 的补丁整段吃掉，而 `win:set-opacity`
-//    里仍在读写它 → 每次拖「整窗不透明度」滑条都 ReferenceError（读未声明变量）。
+// 这个样式一旦加上，Electron 就不会再摘掉（native_window_views.cc 的
+// SetOpacity 里没有 opacity===1 的清理分支）。而 LWA_ALPHA 与"真透明窗口"
+// 用的逐像素 alpha 互斥，打上去之后那个窗口只会停在第一帧不再重绘。
+// 所以这里记住状态：从没调低过就一次都不打。
 let mainWinLayered = false;
 let core = null;
 // 桌宠宿主（desktop-pet 插件激活后才真正有窗口；未装插件时是空壳，方法全部 no-op）。
@@ -927,7 +827,6 @@ let quitting = false;
 // 「桌面悬浮小窗」整节的注释：默认不透明、几何落 window-state.json、
 // 配置变更走 1 秒轮询比对、页面零 IPC。
 let widgetWindow = null;
-
 /**
  * 仅给当前 Electron 控制台窗口的同源 API 请求注入进程内随机凭据。
  * 凭据不进入 DOM、preload 或 renderer JS；外部脚本仍须使用用户配置的 server.token。
@@ -942,9 +841,9 @@ function installConsoleRequestAuth(port, token) {
       try {
         const frameOrigin = new URL(details.frame?.url ?? '').origin;
         const requestOrigin = new URL(details.url).origin;
-        // 主控制台窗口**与桌面悬浮小窗**都放行（小窗页面 ui/widget.html 发的是
+        // 主控制台窗口与桌面悬浮小窗都放行（小窗页面 ui/widget.html 发的是
         // 同一个占位符，由这里换成进程私有真令牌）。少放行小窗 = 它轮询
-        // /api/status 恒 401（配置了 server.token 时）——那是"看得到窗口、
+        // /api/status 恒 401（配置了 server.token 时），那是"看得到窗口、
         // 永远连接中"的静默故障，所以两个窗口必须一并认。
         const isCurrentConsole = (mainWindow
             && !mainWindow.isDestroyed()
@@ -963,24 +862,24 @@ function installConsoleRequestAuth(port, token) {
     }
   );
 }
-// R76：用户主动缩到托盘后窗口应保持隐藏。重载/重建窗口都会触发 ready-to-show
-// 与 did-finish-load，旧代码在这两处无条件 show()+focus()，等于把缩进托盘的
-// 窗口又弹出来 —— 任务栏按钮随之消失/出现，即群友反馈的"任务栏莫名闪烁"。
+// 用户主动缩到托盘后窗口应保持隐藏。重载/重建窗口都会触发 ready-to-show
+// 与 did-finish-load，无条件 show()+focus() 等于把缩进托盘的窗口又弹出来，
+// 任务栏按钮随之消失/出现。
 let windowHidden = false;
-// R76：窗口诞生时刻。second-instance 据此区分"正常启动中"与"真卡在启动画面"。
+// 窗口诞生时刻。second-instance 据此区分"正常启动中"与"真卡在启动画面"。
 let windowBornAt = 0;
-// r93：本窗口是否**已经**显示过一次。
+// 本窗口是否已经显示过一次。
 // 用途：did-finish-load 里只在"还没显示过"时调 show()，之后的重载不再重复调。
-// 为什么重要 —— `show()` 自带"激活并抢焦点"语义，而重载是看门狗自救、did-fail-load
-// 重试的正常动作，不该有可见副作用：用户在全屏游戏里时，每次重载都抢一次焦点，
-// 在 Windows 上就表现为任务栏按钮闪一下（群友报的"莫名其妙闪烁"）。
+// show() 自带"激活并抢焦点"语义，而重载是看门狗自救、did-fail-load 重试的
+// 正常动作，不该有可见副作用：用户在全屏游戏里时，每次重载都抢一次焦点，
+// 在 Windows 上就表现为任务栏按钮闪一下。
 let windowEverShown = false;
-// r94：本进程是否已经"因首次加载而聚焦过"。
-// 为什么必须是模块级、而不是 createWindow() 里的局部量：看门狗重建窗口会再走一次
-// createWindow()，局部标志随之复活 → 重建完成后再抢一次焦点。窗口"可见"
+// 本进程是否已经"因首次加载而聚焦过"。
+// 必须是模块级、而不是 createWindow() 里的局部量：看门狗重建窗口会再走一次
+// createWindow()，局部标志随之复活，重建完成后再抢一次焦点。窗口"可见"
 // （windowJudgeable 通过）但用户其实在全屏游戏里时，这一下就是任务栏图标闪一下。
 // 现在焦点只在"本进程第一个窗口首次加载完成"时给一次；看门狗重载/重建都不再给。
-// 用户主动唤出（托盘双击 / 再次启动）不算 —— showWindow() 里会置位。
+// 用户主动唤出（托盘双击 / 再次启动）不算，showWindow() 里会置位。
 let focusedOnce = false;
 
 function applyAutoStart() {
@@ -991,15 +890,15 @@ function applyAutoStart() {
 }
 
 /**
- * 开机自启重复项自检（2026-10-16 外部审查 #12）。
+ * 开机自启重复项自检。
  *
  * 自动启动只有两个来源：① 本应用自己写的登录项（setLoginItemSettings）
  * ② 用户手动丢进 shell:startup 的快捷方式。安装器只创建桌面 + 开始菜单快捷方式，
- * **不写启动文件夹** —— 所以如果两处同时存在，开机必然启动两次，而第二次只会弹
- * "已经在运行"的提示框（用户看到的是"开机自己冒出个框"），此前代码完全不检测。
+ * 不写启动文件夹，所以如果两处同时存在，开机必然启动两次，而第二次只会弹
+ * "已经在运行"的提示框。
  *
- * 这里在每次 applyAutoStart 时核对一次，发现重复就 logCritical 点名（修不修让用户
- * 自己决定 —— 删用户的快捷方式不是应用该擅自做的事）。
+ * 每次 applyAutoStart 时核对一次，发现重复就 logCritical 点名。修不修让用户
+ * 自己决定，删用户的快捷方式不是应用该擅自做的事。
  */
 function checkDuplicateAutoStart(openAtLogin) {
   try {
@@ -1011,7 +910,7 @@ function checkDuplicateAutoStart(openAtLogin) {
     for (const name of fs.readdirSync(startupDir)) {
       if (!/\.lnk$/i.test(name)) continue;
       // 只看名字里带本程序名的（QQ Agent / qq-agent）；解析 .lnk 目标需要额外依赖，
-      // 而"名字对得上"已经足够触发告警 —— 误报的代价只是一行日志。
+      // 而"名字对得上"已经足够触发告警，误报的代价只是一行日志。
       if (name.toLowerCase().includes('qq')) hits.push(name);
     }
     if (hits.length && openAtLogin) {
@@ -1028,11 +927,11 @@ function checkDuplicateAutoStart(openAtLogin) {
 function showWindow() {
   if (mainWindow) {
     windowHidden = false;
-    windowEverShown = true;   // r93：用户主动唤出 = 已显示过（见 did-finish-load 的守卫）
-    focusedOnce = true;       // r94：用户主动唤出，"该给的那次焦点"已经给过
+    windowEverShown = true;   // 用户主动唤出 = 已显示过（见 did-finish-load 的守卫）
+    focusedOnce = true;       // 用户主动唤出，"该给的那次焦点"已经给过
     mainWindow.show();
     // 缩托盘时曾把窗口从任务栏/切换器注销（见 close 里的 setSkipTaskbar(true)），
-    // 这里要注册回来 —— show 之后立刻恢复，任务栏图标与 Alt+Tab 条目才不会缺席。
+    // 这里要注册回来：show 之后立刻恢复，任务栏图标与 Alt+Tab 条目才不会缺席。
     try { mainWindow.setSkipTaskbar(false); } catch { /* 老版本无此 API 时忽略 */ }
     mainWindow.focus();
   } else {
@@ -1041,16 +940,15 @@ function showWindow() {
 }
 
 /**
- * 托盘右键菜单（**每次弹出时现建**，2026-10-17 重构）。
+ * 托盘右键菜单（每次弹出时现建）。
  *
- * 为什么不再"建一次 setContextMenu 完事"：
- *   Electron 的静态 context menu 只在 `Menu.buildFromTemplate` 那一刻读 `checked`。
- *   之后「暂停机器人」「开机自启」的真实状态变了，菜单不会跟着变 —— 用户点了暂停，
- *   下次右键还是没勾；在设置页改了自启，菜单里的勾也不同步。
- *   右键时现建一次只是多构造一个菜单对象（微秒级），换来"看到的永远是此刻的真值"。
+ * 不能"建一次 setContextMenu 完事"：Electron 的静态 context menu 只在
+ * Menu.buildFromTemplate 那一刻读 checked。之后「暂停机器人」「开机自启」的真实
+ * 状态变了，菜单不会跟着变。右键时现建一次只是多构造一个菜单对象（微秒级），
+ * 换来"看到的永远是此刻的真值"。
  *
- * 风格约定（统一口径，后人别再各写各的）：
- *   · 一级动作只用动词短语，**不带标点、不带解释性括号**；
+ * 风格约定：
+ *   · 一级动作只用动词短语，不带标点、不带解释性括号；
  *   · 开关一律用 checkbox，label 只写"开关名"，不出现「A / B」这种一个标题两个动作；
  *   · 分隔线只用来分组，顺序固定：动作 → 开关 → 退出（退出永远最后、且单独一组）。
  */
@@ -1064,13 +962,13 @@ function buildTrayMenu() {
     },
     { type: 'separator' },
     {
-      // 勾选 = 当前已暂停。旧标签是「暂停 / 恢复」—— 一个标题同时表示两个相反动作，
+      // 勾选 = 当前已暂停。旧标签是「暂停 / 恢复」，一个标题同时表示两个相反动作，
       // 点之前根本不知道会发生什么；checkbox 让"现在到底是暂停还是运行"一眼可见。
       label: '暂停机器人',
       type: 'checkbox',
       checked: paused,
-      // r94 的教训保留：托盘回调里抛异常 = uncaughtException = 闪退，
-      // 而退出/启动竞态下 core / orchestrator 完全可能已经不可用。
+      // 托盘回调里抛异常 = uncaughtException = 闪退，而退出/启动竞态下
+      // core / orchestrator 完全可能已经不可用。
       click: (item) => { try { core?.orchestrator?.setPaused(!!item.checked); } catch { /* 竞态忽略 */ } }
     },
     {
@@ -1092,7 +990,7 @@ function buildTrayMenu() {
       }
     },
     {
-      // 桌面悬浮小窗（2026-10-20）。设置页同名控件在「界面与应用 → 桌面端」。
+      // 桌面悬浮小窗。设置页同名控件在「界面与应用 → 桌面端」。
       // 这也是"鼠标穿透开启后"的恢复路径之一（那时小窗自己的右键菜单够不着）。
       label: '桌面悬浮窗',
       type: 'checkbox',
@@ -1104,15 +1002,13 @@ function buildTrayMenu() {
     },
     { type: 'separator' },
     {
-      // ★ 2026-10-17：原「退出」与「强制退出（跳过清理）」**合并成这一项**。
-      //   旧「强制退出」走 `app.exit(0)`，绕过 before-quit —— 点了之后：
-      //     · core.stop() 整条清理链不执行（单实例锁 / 会话索引 / 消息存档 / SSE /
-      //       onebot 全跳过）；
-      //     · Electron 自己的 teardown 被打断，实测留下"1 线程、无窗口、
-      //       taskkill /F 都报没有此任务"的僵尸（外部审查报告实测过）。
-      //   现在只留一个「退出」：走 before-quit → core.stop()（8 秒超时）。
-      //   stop 若真的挂住，由 before-quit 里的 8 秒超时 + 4 秒强制兜底自动收尾，
-      //   **用户不该被要求判断"该温和还是该强杀"** —— 那是程序自己的事。
+      // 原「退出」与「强制退出（跳过清理）」合并成这一项。旧「强制退出」走
+      // app.exit(0)，绕过 before-quit：core.stop() 整条清理链不执行，
+      // Electron 自己的 teardown 被打断，实测会留下"1 线程、无窗口、
+      // taskkill /F 都报没有此任务"的僵尸。
+      // 现在只留一个「退出」：走 before-quit → core.stop()（8 秒超时）。
+      // stop 若真的挂住，由 before-quit 里的 8 秒超时 + 4 秒强制兜底自动收尾，
+      // 用户不该被要求判断"该温和还是该强杀"。
       label: '退出',
       click: () => { logKey('tray', '点击：退出'); quitting = true; app.quit(); }
     }
@@ -1126,13 +1022,12 @@ function createTray() {
   // 先设一次，保证"右键一定有菜单"（这是原来就验证过的机制，不换）。
   trayMenuRef = buildTrayMenu();
   tray.setContextMenu(trayMenuRef);
-  // 再在右键时**重建**一次：Windows 上 Electron 先发 'right-click' 事件、后弹菜单，
-  // 所以在事件里 setContextMenu 能赶在弹出之前生效 —— 勾选状态就是此刻的真值。
+  // 再在右键时重建一次：Windows 上 Electron 先发 'right-click' 事件、后弹菜单，
+  // 所以在事件里 setContextMenu 能赶在弹出之前生效，勾选状态就是此刻的真值。
   //
-  // 为什么不用 popUpContextMenu：它在 Windows 上有已知的坑（菜单不随失焦关闭 /
-  // 需要额外保持引用），而我们这里根本不需要"自己弹"—— setContextMenu 就够了。
-  // 就算某些版本上"重建赶不及"，最差也只是勾选状态落后一拍（纯观感），
-  // 绝不会变成"右键点不出菜单"。
+  // 不用 popUpContextMenu：它在 Windows 上有已知的坑（菜单不随失焦关闭 /
+  // 需要额外保持引用），而 setContextMenu 就够了。就算某些版本上"重建赶不及"，
+  // 最差也只是勾选状态落后一拍（纯观感），绝不会变成"右键点不出菜单"。
   tray.on('right-click', () => {
     try {
       trayMenuRef = buildTrayMenu();
@@ -1147,10 +1042,9 @@ function createTray() {
 // ── 无边框窗口的窗口控制（frame: false）────────────────────────────────────
 // 窗口没有系统标题栏，最小化/最大化/关闭只能由页面自绘按钮发起，经 preload 桥到这里。
 //
-// 为什么用 fromWebContents 反查窗口，而不是记住 mainWindow：
-//   1) 事件来源即窗口，天然不会操作到别的窗口，也不需要渲染进程传任何参数；
-//   2) mainWindow 在 closed 之后是 null，而事件可能仍在队列里 —— 反查不会误用悬空引用。
-// 所有 handler 都做了空值兜底：窗口已销毁时静默忽略，不抛异常。
+// 用 fromWebContents 反查窗口，而不是记住 mainWindow：事件来源即窗口，天然不会
+// 操作到别的窗口；mainWindow 在 closed 之后是 null，而事件可能仍在队列里，
+// 反查不会误用悬空引用。所有 handler 都做了空值兜底，窗口已销毁时静默忽略。
 const windowOf = (event) => BrowserWindow.fromWebContents(event.sender);
 
 ipcMain.on('win:minimize', (event) => windowOf(event)?.minimize());
@@ -1166,9 +1060,9 @@ ipcMain.on('win:toggle-maximize', (event) => {
 // 关闭语义与系统 ✕ 完全一致：走 win.close() 而不是 app.quit()，
 // 于是 mainWindow.on('close') 里"缩到托盘"的逻辑照旧生效（关窗不退出是常驻机器人的预期）。
 ipcMain.on('win:close', (event) => {
-  // R69：自绘 ✕ 是唯一"要经过渲染进程"的关闭路径 —— 渲染进程一旦僵死，
-  // 这条就是最先失灵的（Alt+F4 / 托盘退出走主进程，实测仍然有效）。
-  // 所以这一笔日志是区分"渲染僵死"与"缩到托盘"的关键：有这行 = 点击已送达主进程。
+  // 自绘 ✕ 是唯一"要经过渲染进程"的关闭路径，渲染进程一旦僵死这条就是最先
+  // 失灵的（Alt+F4 / 托盘退出走主进程）。这一笔日志是区分"渲染僵死"与
+  // "缩到托盘"的关键：有这行 = 点击已送达主进程。
   const win = windowOf(event);
   console.log(`[close] 收到渲染进程的 win:close（窗口存在=${!!win}）`);
   win?.close();
@@ -1176,13 +1070,12 @@ ipcMain.on('win:close', (event) => {
 
 ipcMain.handle('win:is-maximized', (event) => Boolean(windowOf(event)?.isMaximized()));
 
-// ── 外观个性化（R40）────────────────────────────────────────────────────────
+// ── 外观个性化 ────────────────────────────────────────────────────────────
 // 只有"渲染进程做不到"的三件事才过桥：整窗不透明度、选背景图（原生文件对话框）、
-// 清背景图。颜色/底色/底色透明度那些全是 CSS 变量，留在渲染进程里改，不开桥。
+// 清背景图。颜色/底色/透明度那些全是 CSS 变量，留在渲染进程里改，不开桥。
 //
-// 背景图为什么必须复制进 data/ui/：
-//   页面跑在 http://127.0.0.1，file:// 图片会被 Chromium 以"跨源本地文件"拦下，
-//   CSP 也不放行 file:。复制进来后由 GET /api/ui-bg 同源吐出（见 src/routes.js）。
+// 背景图必须复制进 data/ui/：页面跑在 http://127.0.0.1，file:// 图片会被 Chromium
+// 以"跨源本地文件"拦下，CSP 也不放行 file:。复制进来后由 GET /api/ui-bg 同源吐出。
 const UI_BG_DIR = () => path.join(process.env.QQ_AGENT_DATA_DIR || '.', 'ui');
 
 ipcMain.handle('win:set-opacity', (event, value) => {
@@ -1191,12 +1084,10 @@ ipcMain.handle('win:set-opacity', (event, value) => {
   const v = Number(value);
   // 夹到 0.3~1：再低窗口基本看不见（用户会以为程序崩了），高过 1 无意义。
   const op = Math.min(1, Math.max(0.3, Number.isFinite(v) ? v : 1));
-  // ⚠️ 2026-10-23（R46 真凶）：100% 且从没调低过 → **一次都不要打**。
-  //    Electron 在 Windows 上的 SetOpacity 无条件加 WS_EX_LAYERED 并调
-  //    SetLayeredWindowAttributes(LWA_ALPHA)，且没有回到 1.0 时摘掉样式的分支。
-  //    LWA_ALPHA 与真透明窗口的逐像素 alpha 互斥 —— 打上去之后窗口只画第一帧。
-  //    渲染进程原来每次启动都无条件调一次 setOpacity(1)，于是"真透明窗口"
-  //    必挂，还被误判成"系统侧坏了"。渲染进程那边也已改成值不变就不发。
+  // 100% 且从没调低过时一次都不要打。Electron 在 Windows 上的 SetOpacity 无条件
+  // 加 WS_EX_LAYERED 并调 SetLayeredWindowAttributes(LWA_ALPHA)，且没有回到 1.0
+  // 时摘掉样式的分支。LWA_ALPHA 与真透明窗口的逐像素 alpha 互斥，打上去之后
+  // 窗口只画第一帧。渲染进程那边也已改成值不变就不发。
   if (op >= 1 && !mainWinLayered) return true;
   if (op < 1) mainWinLayered = true;
   win.setOpacity(op);
@@ -1229,12 +1120,12 @@ ipcMain.handle('ui:pick-bg-image', async (event) => {
   return { ok: true, name };
 });
 
-// ── 本地导入技能/插件（R41）────────────────────────────────────────────────
+// ── 本地导入技能/插件 ─────────────────────────────────────────────────────
 // 两件渲染进程做不到的事：① 弹原生对话框选文件/文件夹；② 把拖进来的 File 反查成
 // 磁盘上的真实路径（File.path 自 Electron 32 起废弃，改用 webUtils.getPathForFile）。
 //
-// 拿到路径后**不由主进程复制** —— 转交给后端 POST /api/skills/import 统一处理，
-// 这样"拖进窗口"和"点按钮选文件"走的是同一条校验/落地链路，不会有两套安全规则。
+// 拿到路径后不由主进程复制，转交给后端 POST /api/skills/import 统一处理，
+// 这样"拖进窗口"和"点按钮选文件"走同一条校验/落地链路，不会有两套安全规则。
 ipcMain.handle('dialog:pick-modules', async (event) => {
   const win = windowOf(event);
   const { canceled, filePaths } = await dialog.showOpenDialog(win || undefined, {
@@ -1250,7 +1141,7 @@ ipcMain.handle('dialog:pick-modules', async (event) => {
 // 壁纸页的「小红车安装目录」是 D:\Steam\steamapps\common\wallpaper_engine 这种长路径，
 // 让人对着资源管理器抄一遍既费神又容易错（错一个字符只会得到"目录不存在"）。
 // 与 dialog:pick-modules 同口径：主进程只负责弹框、只返回路径字符串，
-// 是否采用、写到哪个配置键，全由渲染进程/后端各自决定 —— 这里不开"指哪读哪"的能力面。
+// 是否采用、写到哪个配置键，全由渲染进程/后端各自决定，这里不开"指哪读哪"的能力面。
 ipcMain.handle('dialog:pick-dir', async (event) => {
   const win = windowOf(event);
   const { canceled, filePaths } = await dialog.showOpenDialog(win || undefined, {
@@ -1264,7 +1155,7 @@ ipcMain.handle('dialog:pick-dir', async (event) => {
 
 // 拖放反查路径：渲染进程只有 File 对象，拿不到 path（安全沙箱 + File.path 已废弃）。
 // webUtils.getPathForFile 是官方替代，只返回路径、不给任何读写能力。
-// 老版本 Electron 没有 webUtils 时回退到废弃的 File.path —— 能用总比整个功能没有强。
+// 老版本 Electron 没有 webUtils 时回退到废弃的 File.path。
 ipcMain.handle('file:path-for', (event, file) => {
   try {
     if (webUtils?.getPathForFile) return { ok: true, path: webUtils.getPathForFile(file) };
@@ -1286,7 +1177,7 @@ ipcMain.handle('ui:clear-bg-image', () => {
   return { ok: true };
 });
 
-// ── R125-P0-2 / P2-4：启动失败兜底 ─────────────────────────────────────────────
+// ── 启动失败兜底 ─────────────────────────────────────────────────────────
 // 启动画面 45 秒仍连不上后端时，渲染进程会弹出失败卡片（见 ui/app/00-core.js 的
 // showBootFailure）。卡片上有「打开日志目录」按钮，以及自动把失败 + 尾部日志上报给
 // 主进程落盘，方便用户/开发者远程定位"到底卡在哪一步"。
@@ -1307,11 +1198,10 @@ ipcMain.on('boot-failure', (_event, payload) => {
   logCritical('boot', `[启动失败卡片] 服务是否可达=${alive}\n${logs}`);
 });
 
-/* 2026-10-24：打开协议端自带的控制台（WebUI）。
-   场景：SnowLuma / NapCat 装完都要人工去它的 WebUI 里把 QQ 接进来（注入）、
-   配 OneBot 网络，用户不该自己猜端口。外链白名单那条「本机地址不外开」
-   （external-link.js 的 INTERNAL_HOSTS）**不放松** —— 渲染进程只能传一个枚举键，
-   真正打开的地址在这里写死；除下表之外任何本机地址依然打不开。 */
+/* 打开协议端自带的控制台（WebUI）。SnowLuma / NapCat 装完都要人工去它的 WebUI
+   里把 QQ 接进来（注入）、配 OneBot 网络，用户不该自己猜端口。
+   外链白名单那条「本机地址不外开」（external-link.js 的 INTERNAL_HOSTS）不放松：
+   渲染进程只能传一个枚举键，真正打开的地址在这里写死；除下表之外任何本机地址依然打不开。 */
 const PROTOCOL_CONSOLE_URLS = Object.freeze({
   // SnowLuma：默认 WebUI，初始账号 admin，密码在启动日志里
   snowluma: 'http://localhost:5099',
@@ -1329,18 +1219,17 @@ ipcMain.handle('app:open-protocol-console', async (_event, which) => {
   }
 });
 
-// ── R66：窗口位置/尺寸持久化 ────────────────────────────────────────────────
-// 用户反馈"UI 移动后退出重进位置不能正确保存"。窗口是 frame:false + 顶栏
-// `-webkit-app-region: drag`，本来就能像普通窗口一样拖到屏幕任意位置 —— 但主进程
-// 过去只写 `new BrowserWindow({ width: 1360, height: 860 })`，既没有 getBounds
-// 记录、也没有 x/y 回填，于是**位置每次都从零开始**：怎么拖都白拖。
+// ── 窗口位置/尺寸持久化 ─────────────────────────────────────────────────────
+// 窗口是 frame:false + 顶栏 -webkit-app-region: drag，本来就能像普通窗口一样拖到
+// 屏幕任意位置。只写 new BrowserWindow({ width, height })、不记录 getBounds 也不
+// 回填 x/y 的话，位置每次都从零开始，怎么拖都白拖。
 //
 // 存档放 data/window-state.json（与 config.json 同一个数据目录，用户看得见、可删）：
 //   { x, y, width, height, maximized }
 // 解析 + 屏幕可见性校验全在 ./window-state.js（纯函数，test/window-state-test.mjs
-// 直接跑）—— 这里只负责读文件、问屏幕、写文件。
-// ⚠️ 校验不可省：换显示器 / 拔副屏后旧坐标可能指向不存在的区域，窗口会开到
-//    看不见的地方，用户会以为程序打不开。不合法就回退默认尺寸 + 系统居中。
+// 直接跑），这里只负责读文件、问屏幕、写文件。
+// 校验不可省：换显示器 / 拔副屏后旧坐标可能指向不存在的区域，窗口会开到
+// 看不见的地方，用户会以为程序打不开。不合法就回退默认尺寸 + 系统居中。
 const WINDOW_STATE_FILE = () => path.join(process.env.QQ_AGENT_DATA_DIR || '.', 'window-state.json');
 
 function readWindowState() {
@@ -1354,10 +1243,10 @@ function readWindowState() {
 }
 
 /** 把当前窗口几何写入 window-state.json（最大化时存"还原态"尺寸）。
- *  2026-10-20：同文件里追加 widget 键（桌面悬浮小窗的位置/尺寸）。
- *  ⚠️ 先读旧文件再合并写：看门狗重建主窗口的那一瞬间 mainWindow 为 null，
- *     而小窗 moved/resize 的防抖落盘随时可能到点 —— 直接整体写会把主窗口
- *     的位置抹成默认值（用户"窗口自己跳回中间"就是这么来的）。
+ *  同文件里还有 widget 键（桌面悬浮小窗的位置/尺寸）。
+ *  先读旧文件再合并写：看门狗重建主窗口的那一瞬间 mainWindow 为 null，
+ *  而小窗 moved/resize 的防抖落盘随时可能到点，直接整体写会把主窗口的
+ *  位置抹成默认值（用户"窗口自己跳回中间"就是这么来的）。
  *  @returns {{x:number,y:number,width:number,height:number,maximized:boolean,widget?:object}|null}
  *           实际写盘的内容；拿不到窗口时返回 null（调用方据此如实报"没存上"）。 */
 function saveWindowState() {
@@ -1413,8 +1302,8 @@ function flushWindowState() {
   return saveWindowState();
 }
 
-// R67：设置页「保存当前排布」把窗口几何也一并落盘 —— 与 moved/resize 的防抖
-// 写盘共用同一条路径，只是这里**不等防抖**、当场写，并把结果回给页面显示。
+// 设置页「保存当前排布」把窗口几何也一并落盘，与 moved/resize 的防抖写盘
+// 共用同一条路径，只是这里不等防抖、当场写，并把结果回给页面显示。
 // 无参数（与 preload 既有的安全边界一致：渲染进程指不了任何窗口）。
 ipcMain.handle('win:save-geometry', () => {
   const saved = flushWindowState();
@@ -1440,13 +1329,12 @@ const externalAllowHosts = () => {
 };
 
 function createWindow(port) {
-  // R76：记下窗口诞生时刻。second-instance 据此判断"还在正常启动中"与"真卡住了"。
+  // 记下窗口诞生时刻。second-instance 据此判断"还在正常启动中"与"真卡住了"。
   windowBornAt = Date.now();
   // 新窗口是干净的：没吃过 WS_EX_LAYERED，标记必须一起归位，否则"从没调低过"
   // 这个判断会被上一个窗口的状态带偏（见 mainWinLayered 的注释）。
   mainWinLayered = false;
-  // R66：位置/尺寸回填。有存档就用存档（含 x/y），首启没有则不传 x/y ——
-  // 交给系统居中，与改动前一致。
+  // 位置/尺寸回填。有存档就用存档（含 x/y），首启没有则不传 x/y，交给系统居中。
   const winOpts = { width: WINDOW_DEFAULT_W, height: WINDOW_DEFAULT_H };
   const savedWin = readWindowState();
   if (savedWin) Object.assign(winOpts, {
@@ -1457,30 +1345,24 @@ function createWindow(port) {
     minWidth: WINDOW_MIN_W,
     minHeight: WINDOW_MIN_H,
     title: describeInstance(),
-    // ⚠️⚠️ 保持不透明（R46，2026-09-21；**根因已于 2026-10-23 查清**）。
-    //    现象：透明（分层）窗口只显示第一帧，之后永不更新；页面内部一切正常
-    //    （DOM/JS/CDP 抓图都好），就是屏幕上永远定格。当时实测：
-    //      transparent: true   → 8/10 轮冻结（GPU 开关、禁 DComp、禁遮挡检测全无效）
-    //      transparent: false  → 9/9 轮正常
-    //    因此当时判断"本机分层窗口链路坏了"，归咎于系统侧变化。
+    // 保持不透明。透明（分层）窗口只显示第一帧、之后永不更新，页面内部一切正常
+    // （DOM/JS/CDP 抓图都好），就是屏幕上永远定格。实测 transparent:true 时
+    // 8/10 轮冻结（GPU 开关、禁 DComp、禁遮挡检测全无效），false 时 9/9 轮正常。
     //
-    //    **真实原因**：渲染进程每次启动都会调一次 win:set-opacity（哪怕配置是
-    //    100%），而 Electron 的 SetOpacity 在 Windows 上会无条件给窗口加
-    //    WS_EX_LAYERED 并调 SetLayeredWindowAttributes(LWA_ALPHA)，且没有
-    //    "回到 1.0 就摘掉"的分支。LWA_ALPHA（整窗统一 alpha）与真透明窗口用的
-    //    逐像素 alpha 是**互斥**的两种分层模式 —— 打上去之后，透明窗口就只剩
-    //    第一帧。8/10 与 9/9 的差异只是"首帧合成"和"setOpacity 调用"的先后竞态。
-    //    修复：渲染进程值不变就不发（ui/app/00-core.js 的 lastWinOpacity），
-    //    主进程 100% 且从未调低过时直接返回（win:set-opacity 的 mainWinLayered）。
+    // 真实原因：渲染进程每次启动都会调一次 win:set-opacity（哪怕配置是 100%），
+    // 而 Electron 的 SetOpacity 在 Windows 上会无条件给窗口加 WS_EX_LAYERED 并调
+    // SetLayeredWindowAttributes(LWA_ALPHA)，且没有"回到 1.0 就摘掉"的分支。
+    // LWA_ALPHA（整窗统一 alpha）与真透明窗口用的逐像素 alpha 互斥，打上去之后
+    // 透明窗口就只剩第一帧。8/10 与 9/9 的差异只是首帧合成与 setOpacity 的先后竞态。
+    // 修复：渲染进程值不变就不发（ui/app/00-core.js 的 lastWinOpacity），
+    // 主进程 100% 且从未调低过时直接返回（win:set-opacity 的 mainWinLayered）。
     //
-    //    但**默认仍然不透明**：主窗口是整块画布（html 铺满 --frame-bg，卡片之间
-    //    没有留白），真透明等于把整套视觉重做成"悬浮卡片"，不是加个开关的事。
-    //    圆角继续交给 Win11 DWM（下面 roundedCorners: true）：真圆角、弧外透出
-    //    桌面、不依赖透明窗口。页面自绘的圆角壳已归零（style.css --win-radius: 0）
-    //    —— 两层圆角叠加会在角落露出 --frame-bg 深色弧片（"黑色糊在角上"就是它）。
-    //    Win10（build < 22000）DWM 不给圆角，那时窗口是直角矩形，这是平台限制。
-    //    R44 同晚还发现本机安全策略会拦杀沙箱化的 Chromium 子进程（见顶部 no-sandbox），
-    //    那是另一件事，与本条无关。
+    // 但默认仍然不透明：主窗口是整块画布（html 铺满 --frame-bg，卡片之间没有留白），
+    // 真透明等于把整套视觉重做成"悬浮卡片"，不是加个开关的事。
+    // 圆角继续交给 Win11 DWM（下面 roundedCorners: true）：真圆角、弧外透出桌面、
+    // 不依赖透明窗口。页面自绘的圆角壳已归零（style.css --win-radius: 0），
+    // 两层圆角叠加会在角落露出 --frame-bg 深色弧片。
+    // Win10（build < 22000）DWM 不给圆角，那时窗口是直角矩形，这是平台限制。
     transparent: false,
     hasShadow: false,
     // 只在页面加载前的一瞬间可见；页面加载后画布被 --frame-bg 接管（跟随主题）。
@@ -1491,68 +1373,59 @@ function createWindow(port) {
     icon: ICON_PATH,
     show: false,
     // 无边框：去掉系统标题栏，把标题栏并入页面顶部的导航条（与 PCL 启动器一致）。
-    // 保留 thickFrame 默认值（true）—— 这样还能有系统 hit-test 边框与 Aero Snap。
+    // 保留 thickFrame 默认值（true），这样还能有系统 hit-test 边框与 Aero Snap。
     frame: false,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       // 沙箱：默认开启（不传 --no-sandbox 时 Chromium 的默认行为）。
-      // 这里**显式写出来**而不是留给默认值，原因有两个：
-      //   1. 意图显式化 —— 将来有人再加命令行开关时，会在这里看到"沙箱是被 conscious 决策过的"；
-      //   2. 新增窗口（webview / 弹窗）能独立决策，不会继承一个全局关闭状态。
-      // 注意：真正降级请走 QQ_AGENT_NO_SANDBOX=1（见文件上方），不要写死在这里。
+      // 显式写出来而不是留给默认值：一是意图显式化，将来有人加命令行开关时
+      // 能看到"沙箱是被有意决策过的"；二是新增窗口（webview / 弹窗）能独立决策，
+      // 不会继承一个全局关闭状态。
+      // 真正降级请走 QQ_AGENT_NO_SANDBOX=1（见文件上方），不要写死在这里。
       sandbox: true,
-      // R76：后台节流必须关。窗口被游戏/浏览器全屏遮挡时，Chromium 的
-      // 原生遮挡检测会把页面当"隐藏页"，把定时器节流到分钟级 —— 页面里
-      // 1 秒一跳的活性心跳（__qaBeat）随之停摆，看门狗据此误判"渲染僵死"
-      // → 拆窗重建。群友反馈的"自行崩溃""任务栏闪烁"都是重建的副作用
-      // （日志实证：10/10 十二次、10/11 两次"心跳停摆，重建窗口"，
-      //  且几乎全发生在晚间全屏游戏时段）。关掉节流，被遮挡时心跳照常走。
+      // 后台节流必须关。窗口被游戏/浏览器全屏遮挡时，Chromium 的原生遮挡检测
+      // 会把页面当"隐藏页"，把定时器节流到分钟级，页面里 1 秒一跳的活性心跳
+      // （__qaBeat）随之停摆，看门狗据此误判"渲染僵死"→ 拆窗重建。
+      // 群友反馈的"自行崩溃""任务栏闪烁"都是重建的副作用。
       backgroundThrottling: false,
       // 仅暴露窗口控制（最小化/最大化/关闭/查询状态），见 electron/preload.cjs
       preload: PRELOAD_PATH
     }
   });
   Menu.setApplicationMenu(null);
-  // 窗口打开先显示 loading 壳，等页面真正加载完成再亮相，避免白屏和用户反复双击
-  // r93：本窗口是新的，"显示过"标志要跟着重置（重建窗口后仍要能正常亮相）。
+  // 窗口打开先显示 loading 壳，等页面真正加载完成再亮相，避免白屏和用户反复双击。
+  // 本窗口是新的，"显示过"标志要跟着重置（重建窗口后仍要能正常亮相）。
   windowEverShown = false;
   mainWindow.once('ready-to-show', () => {
-    // R76：缩在托盘时（用户点过 ✕）不亮相 —— 重建/重载窗口也要保持隐藏
+    // 缩在托盘时（用户点过 ✕）不亮相，重建/重载窗口也要保持隐藏
     if (windowHidden) return;
-    windowEverShown = true;   // r93
+    windowEverShown = true;
     mainWindow?.show();
-    // 任务栏图标兜底（2026-09-20）：部分 Windows 上无边框透明窗口的任务栏图标
-    // 不吃 BrowserWindow 的 icon 选项（表现为空白页图标）。show 之后显式
-    // setIcon 一次，两条路都喂到。
+    // 任务栏图标兜底：部分 Windows 上无边框窗口的任务栏图标不吃 BrowserWindow
+    // 的 icon 选项（表现为空白页图标）。show 之后显式 setIcon 一次，两条路都喂到。
     try { mainWindow?.setIcon(ICON_PATH); } catch { /* 图标缺失时忽略 */ }
   });
-  // R76：只有首次加载完成才 focus。看门狗重载/失败重试也会触发本事件，
-  // 此时用户可能正在全屏游戏或别的窗口里 —— 无条件 focus 会抢焦点。
-  // r94：判据从"本窗口的 firstFinish"换成模块级 focusedOnce ——
-  // 看门狗重建窗口走的是 destroy() + createWindow()，新窗口会让局部标志复活，
-  // 于是重建完成后再抢一次焦点，那正是"任务栏图标莫名其妙亮起来"。
-  // 现在焦点整进程只给一次（用户主动唤出时由 showWindow() 另行置位）。
-  // r92：两个"失败预算"的声明挪到事件注册**之前**。原先声明在 803/804 行
-  // （did-finish-load / did-fail-load 注册之后），回调里读写它们纯靠"事件是
-  // 异步的、声明早就求值完"的时序侥幸 —— 谁把 loadURL 往前挪一步就是 TDZ
-  // ReferenceError。声明提前，消除隐患。
+  // 只有首次加载完成才 focus。看门狗重载/失败重试也会触发本事件，此时用户可能
+  // 正在全屏游戏或别的窗口里，无条件 focus 会抢焦点。判据用模块级 focusedOnce
+  // 而不是局部量：看门狗重建窗口会再走一次 createWindow()，局部标志随之复活。
+  // 两个"失败预算"的声明放在事件注册之前：回调里读写它们若靠"事件是异步的、
+  // 声明早就求值完"的时序侥幸，谁把 loadURL 往前挪一步就是 TDZ ReferenceError。
   let rendererCrashCount = 0;
-  let loadFailRetries = 0;   // R80（BUG-15）：加载失败重试计数，成功后归零
+  let loadFailRetries = 0;   // 加载失败重试计数，成功后归零
   mainWindow.webContents.on('did-finish-load', () => {
-    // R80（BUG-16）：加载成功 = 渲染进程恢复健康，两个"失败预算"一起归零。
-    // 旧逻辑 rendererCrashCount 只增不减，注释写的"连崩 5 次就放弃"实际变成
-    // "累计崩 5 次就放弃"——长跑实例历史上崩过 5 次后，第 6 次真崩溃没人救。
+    // 加载成功 = 渲染进程恢复健康，两个"失败预算"一起归零。只增不减的话，
+    // 注释写的"连崩 5 次就放弃"会变成"累计崩 5 次就放弃"，长跑实例历史上崩过
+    // 5 次后，第 6 次真崩溃没人救。
     rendererCrashCount = 0;
     loadFailRetries = 0;
-    // R76：缩在托盘时不弹回前台；非首次完成不抢焦点（理由见 firstFinish 注释）
+    // 缩在托盘时不弹回前台；非首次完成不抢焦点
     if (windowHidden) return;
-    // r93：**最小化**这条路也要一起挡。旧逻辑只挡了 windowHidden（点 ✕ 缩托盘），
-    // 漏了用户按最小化按钮的场景 —— 看门狗重载 / did-fail-load 重试成功后同样会
-    // 走到这里，而 `show()` 会把最小化的窗口**恢复并抢焦点**。用户看到的就是
-    // "我明明最小化了，它自己又跳出来" / 任务栏闪一下。
+    // 最小化这条路也要一起挡：看门狗重载 / did-fail-load 重试成功后同样会走到
+    // 这里，而 show() 会把最小化的窗口恢复并抢焦点，用户看到的是"我明明最小化了，
+    // 它自己又跳出来"。
     try { if (mainWindow?.isMinimized()) return; } catch { /* 窗口已销毁 */ }
-    // r93：已显示过的窗口不再重复 show()（show 自带激活语义 = 每次重载抢一次焦点）。
+    // 已显示过的窗口不再重复 show()（show 自带激活语义 = 每次重载抢一次焦点）。
     // 首次亮相仍在这里兜底（万一 ready-to-show 没触发）。
     if (!windowEverShown) {
       windowEverShown = true;
@@ -1565,9 +1438,8 @@ function createWindow(port) {
   });
   mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
     logCritical('window', `[页面加载失败] code=${code} desc=${desc} url=${url}`);
-    // R80（BUG-15）：固定 2 秒无限重试 → 加上限 + 退避。服务真起不来时，
-    // 旧逻辑是无限请求风暴 + 用户永远停在失败页。2s→4s→8s→16s 封顶，5 次后放弃
-    // （放弃时页面自身的 45s showBootFailure 兜底会展示"重新加载界面"按钮）。
+    // 固定 2 秒无限重试会变成请求风暴 + 用户永远停在失败页。2s→4s→8s→16s 封顶，
+    // 5 次后放弃（放弃时页面自身的 45s showBootFailure 兜底会展示"重新加载界面"按钮）。
     loadFailRetries += 1;
     if (loadFailRetries > 5) {
       logCritical('window', `[页面加载失败] 已重试 5 次仍未恢复，放弃自动重试（请查看启动日志定位服务未就绪的原因）`);
@@ -1576,13 +1448,10 @@ function createWindow(port) {
     const delay = Math.min(2000 * 2 ** (loadFailRetries - 1), 16000);
     setTimeout(() => mainWindow?.loadURL(`http://127.0.0.1:${port}/`).catch(() => {}), delay);
   });
-  // 渲染进程崩溃自动重载：renderer 一死窗口就变成"定格的最后一帧"——
-  // 用户看到的是应用卡死（R44：卡在启动画面就是这么来的），且没有任何提示。
-  // 崩溃后 1.5s 重新 loadURL（服务在主进程里、一直活着，重载即可恢复）。
-  // 连崩 5 次就放弃重载，避免真有代码级崩溃时陷入死循环。
-  // （r92：rendererCrashCount / loadFailRetries 的声明已挪到上方事件注册之前）
+  // 渲染进程崩溃自动重载：renderer 一死窗口就变成"定格的最后一帧"，用户看到的是
+  // 应用卡死且没有任何提示。崩溃后 1.5s 重新 loadURL（服务在主进程里、一直活着，
+  // 重载即可恢复）。连崩 5 次就放弃重载，避免真有代码级崩溃时陷入死循环。
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
-    // R70：改 logCritical（原先 console.error 不落盘，崩了等于没发生）。
     logCritical('window', `[渲染进程崩溃] ${JSON.stringify(details)}`);
     if (++rendererCrashCount <= 5) {
       setTimeout(() => {
@@ -1590,9 +1459,9 @@ function createWindow(port) {
       }, 1500);
     }
   });
-  // R69：Electron 自带的"无响应"事件。它只在**窗口可见且有持续输入事件**时才会触发，
-  // 而且要等约 15 秒 —— 所以它不是一个可靠的探活机制（看门狗的 probePage 才是），
-  // 但它是"用户此刻正在点、正在着急"的最强信号，收到了就立刻复核一次，不等下一轮 5 秒轮询。
+  // Electron 自带的"无响应"事件。它只在窗口可见且有持续输入事件时才触发，
+  // 而且要等约 15 秒，所以不是可靠的探活机制（看门狗的 probePage 才是），
+  // 但它是"用户此刻正在点、正在着急"的最强信号，收到了就立刻复核一次。
   mainWindow.webContents.on('unresponsive', () => {
     logCritical('window', '[渲染进程无响应] unresponsive：主线程约 15s 未处理输入');
     probePage(mainWindow).then(async (probe) => {
@@ -1604,33 +1473,31 @@ function createWindow(port) {
     console.log('[window] 渲染进程恢复响应');
   });
   mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
-    // R71：渲染进程的报错（level 3 = error）直接落盘。此前只 console.log，
-    // 打包版不落盘 → 群友发来的日志里永远看不到"页面这一侧为什么没起来"。
-    // （2026-09-23 群友卡启动画面案例：主进程日志三行看门狗，页面侧零证据。）
+    // 渲染进程的报错（level 3 = error）直接落盘。只 console.log 的话打包版不落盘，
+    // 群友发来的日志里永远看不到"页面这一侧为什么没起来"。
     if (level >= 3) logCritical('renderer', `[渲染进程报错] ${message} (${sourceId}:${line})`);
     else if (level >= 2) console.log(`[renderer] ${message} (${sourceId}:${line})`);
   });
-  // R71：preload 挂掉时 window.qa 桥整个缺失，页面会永远停在启动画面，
-  // 而主进程这侧唯一的痕迹就是看门狗报"启动未就绪" —— 必须把 preload 的报错接住。
+  // preload 挂掉时 window.qa 桥整个缺失，页面会永远停在启动画面，
+  // 而主进程这侧唯一的痕迹就是看门狗报"启动未就绪"，必须把 preload 的报错接住。
   mainWindow.webContents.on('preload-error', (_e, path, error) => {
     logCritical('renderer', `[preload 失败] ${path} :: ${describeError(error)}`);
   });
   mainWindow.loadURL(`http://127.0.0.1:${port}/`).catch((error) => logCritical('window', `[loadURL 失败] ${describeError(error)}`));
-  // 启动看门狗（R45，R69 重写探针）：R44 那次"卡在启动画面"的本质是 —— 后端一直在跑、
-  // 窗口也活着，只有页面永远停在 loading 壳上，用户没有任何反馈也没有任何出路。
-  // 现在主进程每 5 秒问一句"你还活着吗"（probePage），据此分别采取重载 / 重建窗口。
+  // 启动看门狗：后端一直在跑、窗口也活着，但页面可能永远停在 loading 壳上，
+  // 用户没有任何反馈也没有任何出路。主进程每 5 秒问一句"你还活着吗"（probePage），
+  // 据此分别采取重载 / 重建窗口。
   startBootWatchdog();
-  // 外部链接（金句墙/意见墙/上传成功提示里的网址等）一律交给系统默认浏览器，不在应用内弹新窗口。
+  // 外部链接（金句墙/意见墙/上传成功提示里的网址等）一律交给系统默认浏览器。
   //
-  // ⚠️ R129：这里**不能**只看 `/^https?:\/\//` 前缀。会被外开的目标有两个来源，都不完全受控：
+  // 不能只看 /^https?:\/\// 前缀。会被外开的目标有两个来源，都不完全受控：
   //   ① 远端 JSON（金句墙/意见墙/更新提示）里的 <a href>（ui/app/09-community.js 直接渲染）；
   //   ② 模型输出里的网址。
-  //   而 `shell.openExternal` 对非 http 协议是"让系统执行它"，不是"打开一个网页" ——
-  //   `file:///C:/x.exe`、`ms-msdt:` 之类等于一键执行。加上 `https://trusted@evil.com` 这种
-  //   userinfo 混淆，前缀判断完全挡不住。判据统一走 external-link.js（协议白名单 + 拒绝
-  //   userinfo + 拒绝本机地址 + 主机白名单），四条全过才放行。
-  // externalAllowHosts 已提升到模块级（悬浮小窗的导航守卫也用它）。
-  // 被拦时**一定要留日志**：否则用户看到的是"点了链接没反应"，无从判断是白名单拦的。
+  // 而 shell.openExternal 对非 http 协议是"让系统执行它"，不是"打开一个网页"，
+  // file:///C:/x.exe、ms-msdt: 之类等于一键执行。加上 https://trusted@evil.com 这种
+  // userinfo 混淆，前缀判断完全挡不住。判据统一走 external-link.js（协议白名单 +
+  // 拒绝 userinfo + 拒绝本机地址 + 主机白名单），四条全过才放行。
+  // 被拦时一定要留日志：否则用户看到的是"点了链接没反应"，无从判断是白名单拦的。
   const openExternalChecked = (raw, where) => {
     const r = checkExternalUrl(raw, externalAllowHosts());
     if (!r.ok) {
@@ -1654,24 +1521,21 @@ function createWindow(port) {
   };
   mainWindow.webContents.on('will-navigate', guardNavigation);
   mainWindow.webContents.on('will-redirect', guardNavigation);
-  // 关窗默认缩到托盘（真正退出走托盘菜单），符合"常驻机器人"的使用习惯
-  // R69：这条链上原本一行日志都没有 —— "点了 ✕ 到底走了哪个分支"事后完全无从查证，
-  // 偶发无响应也因此永远定位不到。现在每一步都记一笔。
+  // 关窗默认缩到托盘（真正退出走托盘菜单），符合"常驻机器人"的使用习惯。
+  // 每一步都记一笔：这条链上原本一行日志都没有，"点了 ✕ 到底走了哪个分支"
+  // 事后完全无从查证。
   mainWindow.on('close', (event) => {
     const toTray = !quitting && core?.getConfig().server?.closeToTray !== false;
     console.log(`[close] 收到 close 事件：quitting=${quitting} closeToTray=${core?.getConfig().server?.closeToTray} → ${toTray ? '缩到托盘（阻止关闭）' : '真正关闭'}`);
-    flushWindowState();              // R66：先把几何落盘，再决定是缩托盘还是真退出
+    flushWindowState();              // 先把几何落盘，再决定是缩托盘还是真退出
     if (toTray) {
       event.preventDefault();
       windowHidden = true;
-      // ⚠️ 缩托盘前先把窗口从任务栏/切换器注销（setSkipTaskbar(true)）。
-      //    群友反馈的"切屏越切越多、Alt+Tab 里堆出一排 QQ Agent"就是这么来的：
-      //    窗口处于"已隐藏但仍注册在切换器"的状态时，Win11 的 DWM 在全屏切换/
-      //    桌面切换时有概率把旧条目复制一份成幽灵条目 ——
-      //    窗口本身只有一个（全项目只 new 过一次 BrowserWindow，进程枚举可证）。
-      //    hide 前注销、show 时（showWindow）再注册回来，让 Explorer 干净地销毁旧条目。
-      //    ⚠️ 这段注释曾写成"因为是透明分层窗口"，但 R46 起 transparent 已改成 false；
-      //    而幽灵条目与窗口是否透明无关（只与"隐藏但仍注册"有关），所以代码保留。
+      // 缩托盘前先把窗口从任务栏/切换器注销（setSkipTaskbar(true)）。
+      // 窗口处于"已隐藏但仍注册在切换器"的状态时，Win11 的 DWM 在全屏切换/
+      // 桌面切换时有概率把旧条目复制一份成幽灵条目，Alt+Tab 里就会堆出一排
+      // QQ Agent。hide 前注销、show 时（showWindow）再注册回来。
+      // 这与窗口是否透明无关，只与"隐藏但仍注册"有关。
       try { mainWindow.setSkipTaskbar(true); } catch { /* 老版本无此 API 时忽略 */ }
       mainWindow.hide();
       console.log('[close] 已隐藏到托盘（进程继续运行）');
@@ -1679,45 +1543,43 @@ function createWindow(port) {
   });
   mainWindow.on('closed', () => {
     console.log('[close] 窗口已销毁（closed）');
-    if (!rebuilding) mainWindow = null;   // R69：重建窗口期间由 rebuildWindow 自己接管
+    if (!rebuilding) mainWindow = null;   // 重建窗口期间由 rebuildWindow 自己接管
   });
   // 最大化状态回推：渲染进程据此把右上角按钮的图标切成"还原"。
-  // 不只我们点的按钮会改状态 —— Win+↑、双击拖拽区、Aero Snap 拖到屏幕边缘都会，
+  // 不只我们点的按钮会改状态，Win+↑、双击拖拽区、Aero Snap 拖到屏幕边缘都会，
   // 所以必须以主进程事件为准，而不是在页面里自己翻转一个布尔值。
   const pushMaximized = (value) => mainWindow?.webContents.send('win:maximized-changed', value);
   mainWindow.on('maximize', () => pushMaximized(true));
   mainWindow.on('unmaximize', () => pushMaximized(false));
-  // R66：窗口几何/最大化状态变化时记一笔（防抖），供下次启动回填。
+  // 窗口几何/最大化状态变化时记一笔（防抖），供下次启动回填。
   mainWindow.on('moved', scheduleSaveWindowState);
   mainWindow.on('resize', scheduleSaveWindowState);
   mainWindow.on('maximize', scheduleSaveWindowState);
   mainWindow.on('unmaximize', scheduleSaveWindowState);
   // 上次退出时是最大化 → 现在也还原成最大化（先按存档尺寸建好再最大化，
-  // 这样"还原"按钮能回到存档的那个大小，而不是默认 1360×860）。
+  // 这样"还原"按钮能回到存档的那个大小，而不是默认尺寸）。
   if (savedWin && savedWin.maximized) {
     try { mainWindow.maximize(); } catch { /* 个别平台/时机不支持时忽略 */ }
   }
 }
 
-// ── 桌面悬浮小窗（2026-10-20）────────────────────────────────────────────
+// ── 桌面悬浮小窗 ─────────────────────────────────────────────────────────
 // 设置 → 界面与应用 → 桌面端打开后，桌面右下角（默认）出现一张无边框小卡片：
 // 今日用量 / 缓存命中率 / 机器人连接状态。设计约束（每条都是踩过的坑）：
-//   ① 默认档（2026-10-24）：真透明（widget.transparent）+ 不透明度 50% ——
-//      卡片浮在桌面上、能看见桌面。透明分层窗口的呈现链路在本机坏过（R46：
-//      8/10 轮只显示第一帧后冻结，实测记录在 createWindow 的 BrowserWindow
-//      选项注释里），所以设置里仍标「实验」；出问题的用户关掉该项、把不透明度
-//      调回 100 即可回到不透明深色卡（两条都在同一屏）。
+//   ① 默认档：真透明（widget.transparent）+ 不透明度 50%，卡片浮在桌面上、能看见
+//      桌面。透明分层窗口的呈现链路在本机坏过（只显示第一帧后冻结，见 createWindow
+//      的 BrowserWindow 选项注释），所以设置里标「实验」；出问题的用户关掉该项、
+//      把不透明度调回 100 即可回到不透明深色卡。
 //   ② 几何不写 config.json：与主窗口一起落 window-state.json 的 widget 键。
 //      配置里可有密钥，不该每次拖动都整份重写它。
-//   ③ 配置变更没有钩子（updateConfig 不通知任何人），主进程 1 秒轮询比对
-//      "设置签名"。签名只含 enabled/置顶/穿透/透明/尺寸/刷新间隔，**不含
-//      位置** —— 否则"拖一下 → 存几何 → 配置变更 → 又建窗"会自环。
-//   ④ 页面零 IPC：整卡 -webkit-app-region:drag 自己拖；右键菜单由主进程
-//      context-menu 事件现建（与托盘同一套路）；置顶/穿透/尺寸/关闭/打开
-//      主界面全在主进程完成。不挂 preload —— 少一个桥就少一类漏洞面。
-//   ⑤ 贴边收起（QQ 式，widget.edgeHide）：只在**松开鼠标后**判定（'moved'
-//      —— 拖动过程中判定会让窗口跟着光标反复收起/展开抖成钟摆）；展开探测
-//      用主进程 180ms 轮询光标位置（不依赖页面定时器，收起态也测得准）。
+//   ③ 配置变更没有钩子（updateConfig 不通知任何人），主进程轮询比对"设置签名"。
+//      签名只含 enabled/置顶/穿透/透明/尺寸/刷新间隔，不含位置，
+//      否则"拖一下 → 存几何 → 配置变更 → 又建窗"会自环。
+//   ④ 页面零 IPC：整卡 -webkit-app-region:drag 自己拖；右键菜单由页面自绘，
+//      动作经极窄 preload 桥回主进程；置顶/穿透/尺寸/关闭/打开主界面全在主进程完成。
+//   ⑤ 贴边收起（QQ 式，widget.edgeHide）：只在松开鼠标后判定（'moved'，
+//      拖动过程中判定会让窗口跟着光标反复收起/展开）；展开探测用主进程轮询
+//      光标位置（不依赖页面定时器，收起态也测得准）。
 const WIDGET_SIZES = {
   s: { width: 216, height: 104 },
   m: { width: 264, height: 132 },
@@ -1732,14 +1594,14 @@ function widgetCfg() {
   try { return core?.getConfig()?.widget || {}; } catch { return {}; }
 }
 
-/** 背景不透明度（百分数，夹到 30~100）。默认 50 = 半透明卡片（与新默认档一致）。 */
+/** 背景不透明度（百分数，夹到 30~100）。默认 50 = 半透明卡片。 */
 function widgetOpacityPct(w) {
   const n = Number(w?.opacity);
   if (!Number.isFinite(n) || n <= 0) return 50;
   return Math.min(100, Math.max(30, Math.round(n)));
 }
 
-/** 设置签名（位置/尺寸刻意不在内，见 ③）。 */
+/** 设置签名（位置刻意不在内，见上方 ③）。 */
 function widgetSettingsSig(w) {
   const size = WIDGET_SIZE_ORDER.includes(w?.size) ? w.size : 'm';
   const ms = Math.min(60000, Math.max(1000, Number(w?.refreshMs) || 2500));
@@ -1749,12 +1611,10 @@ function widgetSettingsSig(w) {
 }
 
 /**
- * 哪些设置变化**必须重建窗口**（另一类改置顶/穿透/尺寸都能运行时热改）：
+ * 哪些设置变化必须重建窗口（另一类改置顶/穿透/尺寸都能运行时热改）：
  *   ① transparent：透明度建窗时决定，运行期改不了；
  *   ② 不透明度跨 100 这条线：<100 要挂 mica 毛玻璃背板，同样建窗时决定。
- *      100 以下内部调整（55→60）不重建 —— 页面读 /api/config 改 CSS 即可。
- * @param {string} prevSig 上一次的设置签名（空串 = 首轮）
- * @param {object} w widget 配置
+ *      100 以下内部调整（55→60）不重建，页面读 /api/config 改 CSS 即可。
  */
 function widgetNeedsRebuild(prevSig, w) {
   const prev = prevSig ? String(prevSig).split('|') : [];
@@ -1769,7 +1629,7 @@ function widgetNeedsRebuild(prevSig, w) {
 
 /** 存档里的小窗几何；没有/不可见（换显示器、拔副屏）时返回 null → 用默认位置。
  *  贴边收起态存档带 edgeHidden:1 + nx/ny（展开态坐标）：调用方拿到后先按
- *  正常位置建窗、再立刻收起 —— 详见 saveWindowState 里的对应注释。 */
+ *  正常位置建窗、再立刻收起，详见 saveWindowState 里的对应注释。 */
 function readWidgetBounds(size) {
   let raw = null;
   try { raw = JSON.parse(fs.readFileSync(WINDOW_STATE_FILE(), 'utf8')); } catch { return null; }
@@ -1790,7 +1650,7 @@ function readWidgetBounds(size) {
       && px < a.x + a.width && px + width > a.x && py < a.y + a.height && py + height > a.y;
   });
   // 收起态存档：展开位还看得见就回展开位（建窗后再收起）；展开位丢了（拔副屏、
-  // 换分辨率）就当没这档、回默认位置 —— 绝不能拿收起坐标开窗：那样小窗会以
+  // 换分辨率）就当没这档、回默认位置。绝不能拿收起坐标开窗：那样小窗会以
   // "一条缝"的形态开机，widgetEdge 又是 null、没人给它开展开轮询 = 永远消失。
   if (w?.edgeHidden) {
     if (Number.isFinite(w.nx) && Number.isFinite(w.ny)) {
@@ -1817,12 +1677,11 @@ function widgetDefaultBounds(size) {
   };
 }
 
-// ── 贴边收起（QQ 式，2026-10-20 追加）────────────────────────────────────
+// ── 贴边收起（QQ 式）──────────────────────────────────────────────────────
 // 拖到屏幕工作区边缘 → 当场收起，屏幕内只留一条 6px 细缝；鼠标移到缝附近 →
 // 整卡弹回收起前的位置；直接把细缝拖走也会弹回。三条恢复路径与"穿透"对齐：
 // 悬停展开、右键菜单「展开悬浮窗」、关掉设置/右键里的同名开关。
-// 悬停展开的那一张，鼠标移开卡片就滑回细缝（R139：用户要的这个手感）；
-// 手动从细缝拖出来 / 菜单展开的保持不动。
+// 悬停展开的那一张，鼠标移开卡片就滑回细缝；手动从细缝拖出来 / 菜单展开的保持不动。
 const WIDGET_EDGE_THRESHOLD = 6;   // 离工作区边缘多近算"贴边"
 const WIDGET_EDGE_SLIVER = 6;      // 收起后留在屏幕内的像素（一条细缝）
 const WIDGET_EDGE_REVEAL_PX = 30;  // 鼠标距细缝多近算"要展开"
@@ -1830,14 +1689,12 @@ const WIDGET_EDGE_REVEAL_PY = 64;  // 纵向放宽：不用精确对准细缝的
 // 贴边判定要等拖动"落定"再做：部分机器上 moved 在拖动过程中连续触发，
 // 立刻收起会和光标打架（收了 → 光标还在边上 → 又被判成"拖细缝"弹回来）。
 const WIDGET_EDGE_SETTLE_MS = 260;
-// 展开后的静默期：只盖住 140ms 滑出动画自身（动画每帧都在 setBounds。
-// 这不是主要防线 —— 真正的防线是下面 400ms 的 programmatic 窗口：动画帧的
-// 'moved' 全被它吃掉，根本进不到贴边判定。R137 曾是 1200ms，结果用户刚展开
-// 就拖不回边缘（"鼠标移走后并不能正确收起"），压到 150ms。
+// 展开后的静默期：只盖住 140ms 滑出动画自身。这不是主要防线，真正的防线是
+// 下面 400ms 的 programmatic 窗口：动画帧的 'moved' 全被它吃掉，进不到贴边判定。
+// 曾设成 1200ms，结果用户刚展开就拖不回边缘，压到 150ms。
 const WIDGET_REVEAL_QUIET_MS = 150;
-// 收起后必须先"见过鼠标离开一次"才允许悬停展开。否则：用户把卡片拖到边上松手，
-// 光标正停在边上的判定区里 → 收起后 0.1 秒就被自己弹回来（日志里
-// 14:09:57 收起 / 14:09:57 展开 同一秒，就是这个）。
+// 收起后必须先"见过鼠标离开一次"才允许悬停展开。否则用户把卡片拖到边上松手，
+// 光标正停在边上的判定区里，收起后 0.1 秒就被自己弹回来。
 let widgetEdgeArmed = true;
 let widgetEdgeSettleTimer = null;
 // 作废挂起的"贴边判定"：展开时若还有一条 260ms 定时器在排队，它会拿展开前的
@@ -1847,18 +1704,18 @@ const widgetCancelEdgeSettle = () => {
   if (widgetEdgeSettleTimer) { clearTimeout(widgetEdgeSettleTimer); widgetEdgeSettleTimer = null; }
 };
 // 收起态状态机：null = 正常展开；{ side, normal, hidden } = 已贴边收起。
-// normal/hidden 各存一份完整 bounds —— 展开要回得去，收起坐标要比得对。
+// normal/hidden 各存一份完整 bounds：展开要回得去，收起坐标要比得对。
 let widgetEdge = null;
 let widgetEdgeTimer = null;        // 光标轮询：收起态探测"移近"，悬停展开后盯着"移开"
 let widgetEdgeQuietUntil = 0;      // 展开后的静默期：只盖住滑出动画自身
-// 本次展开是不是"鼠标靠近"造成的。只有它才需要"鼠标移开就收回"——
-// 用户从细缝里拖出来的、菜单点展开的，都得安安稳稳待着。
+// 本次展开是不是"鼠标靠近"造成的。只有它才需要"鼠标移开就收回"，
+// 用户从细缝里拖出来的、菜单点展开的都保持不动。
 let widgetEdgeHoverReveal = false;
 // 程序性 setBounds 标记：置位后 400ms 内的 'moved' 是我们自己动的窗，不参与
-// "贴边收起"判定 —— 否则改尺寸/透明重建都会让卡片在用户没拖的情况下自己收起。
-// （setBounds 触发的 moved 与用户拖动的 moved 在事件流上无法区分，只能这样标记。
-//   用时间戳而非布尔：位置没变时 setBounds 不发 moved，布尔标志会残留到下一次
-//   用户拖动、把那次判定吞掉；时间戳最迟 400ms 后自动失效，拖不动那么快。）
+// "贴边收起"判定，否则改尺寸/透明重建都会让卡片在用户没拖的情况下自己收起。
+// setBounds 触发的 moved 与用户拖动的 moved 在事件流上无法区分，只能这样标记。
+// 用时间戳而非布尔：位置没变时 setBounds 不发 moved，布尔标志会残留到下一次
+// 用户拖动、把那次判定吞掉；时间戳最迟 400ms 后自动失效。
 const WIDGET_EDGE_PROG_MS = 400;
 let widgetProgrammaticAt = 0;
 const widgetProgrammaticMove = (win, b) => {
@@ -1866,8 +1723,8 @@ const widgetProgrammaticMove = (win, b) => {
   try { win.setBounds(b); } catch { /* 忽略 */ }
 };
 
-// 收起/展开的滑动动画：直接 setBounds 一步跳过去太生硬（用户原话"不丝滑"）。
-//   · 每帧都走 widgetProgrammaticMove —— 动画自己的 moved 回响不能参与贴边判定；
+// 收起/展开的滑动动画：直接 setBounds 一步跳过去太生硬。
+//   · 每帧都走 widgetProgrammaticMove，动画自己的 moved 回响不能参与贴边判定；
 //   · 新动画开始先掐掉上一条（否则两条动画抢同一个窗口，卡片会左右抽搐）；
 //   · 只动位置不动尺寸（收起/展开本来就是同一个窗口整体平移）。
 const WIDGET_ANIM_MS = 140;
@@ -1941,9 +1798,9 @@ const widgetBoundsEq = (a, b) => !!a && !!b
 /**
  * 展开：回收起前的位置（悬停 / 右键菜单 / 关掉开关 / 拖走细缝都会走到这）。
  * @param {string} reason 日志用
- * @param {boolean} [instant] 直接归位、不做动画 —— 用户正在拖窗口时必须这样：
- *   动画每 16ms 一次 setBounds 会和用户的拖动抢同一个窗口（卡片抽搐），
- *   而且动画期间我们的 programmatic 标记会把用户的 moved 全部吞掉。
+ * @param {boolean} [instant] 直接归位、不做动画。用户正在拖窗口时必须这样：
+ *   动画每 16ms 一次 setBounds 会和用户的拖动抢同一个窗口，
+ *   而且动画期间的 programmatic 标记会把用户的 moved 全部吞掉。
  */
 function widgetRevealEdge(reason, instant) {
   if (!widgetEdge) return;
@@ -1953,7 +1810,7 @@ function widgetRevealEdge(reason, instant) {
   widgetCancelEdgeSettle();                   // 挂起的"贴边判定"作废，别刚展开又收
   widgetStopEdgePoll();
   // 只有"鼠标靠近"展开的才需要继续盯光标：移开就滑回细缝。
-  // 拖细缝 / 页面菜单 / 关开关展开的都安安稳稳待着，轮询可以下班。
+  // 拖细缝 / 页面菜单 / 关开关展开的都保持不动，轮询可以停。
   widgetEdgeHoverReveal = reason === '鼠标靠近';
   if (widgetEdgeHoverReveal) widgetStartEdgePoll();
   const win = widgetWindow;
@@ -2023,9 +1880,9 @@ function widgetOnMoved() {
     if (!widgetBoundsEq(b, widgetEdge.hidden)) widgetRevealEdge('拖动细缝', true);
     return;
   }
-  // 拖动中 moved 会连着来：等它停稳 260ms 再判定，避免与光标互相打架
-  // 用户真的在拖窗了 —— "鼠标移开就收回"那套追踪到此为止（否则拖到一半被收走）。
-  // 注意这一行只在程序性窗口过期后才走得到：收回动画自身的 moved 不会误伤。
+  // 拖动中 moved 会连着来：等它停稳 260ms 再判定，避免与光标互相打架。
+  // 用户真的在拖窗了，"鼠标移开就收回"那套追踪到此为止（否则拖到一半被收走）。
+  // 这一行只在程序性窗口过期后才走得到：收回动画自身的 moved 不会误伤。
   if (widgetEdgeHoverReveal) { widgetEdgeHoverReveal = false; widgetStopEdgePoll(); }
   widgetCancelEdgeSettle();
   widgetEdgeSettleTimer = setTimeout(() => {
@@ -2038,7 +1895,7 @@ function widgetStopEdgePoll() {
   if (widgetEdgeTimer) { clearInterval(widgetEdgeTimer); widgetEdgeTimer = null; }
 }
 
-/** 光标是否落在矩形附近（外扩 margin px）—— "鼠标移开就收回"的离卡判定用。 */
+/** 光标是否落在矩形附近（外扩 margin px），"鼠标移开就收回"的离卡判定用。 */
 function widgetCursorNearRect(p, b, margin) {
   if (!p || !b) return false;
   return p.x >= b.x - margin && p.x <= b.x + b.width + margin
@@ -2047,10 +1904,10 @@ function widgetCursorNearRect(p, b, margin) {
 
 /**
  * 光标轮询：120ms 一次读光标（主进程 API，不依赖页面定时器），一个轮询两种状态：
- *   ① 收起态        → 探测"移近"，上膛后展开（基准是细缝露在屏幕里的那条边）；
- *   ② 悬停展开态    → 探测"移开"，光标离开卡片（含 30px 余量）就滑回细缝。
- *     余量是必需的：触发展开的那个光标通常就停在细缝边，而细缝边往往落在卡片
- *     矩形之外（卡片是整只滑出来的），不给余量会刚展开就立刻收回去。
+ *   ① 收起态     → 探测"移近"，上膛后展开（基准是细缝露在屏幕里的那条边）；
+ *   ② 悬停展开态 → 探测"移开"，光标离开卡片（含 30px 余量）就滑回细缝。
+ * 余量是必需的：触发展开的那个光标通常就停在细缝边，而细缝边往往落在卡片
+ * 矩形之外（卡片是整只滑出来的），不给余量会刚展开就立刻收回去。
  */
 function widgetStartEdgePoll() {
   if (widgetEdgeTimer) return;
@@ -2079,7 +1936,7 @@ function widgetStartEdgePoll() {
           near = p.x >= h.x - WIDGET_EDGE_REVEAL_PY && p.x <= h.x + h.width + WIDGET_EDGE_REVEAL_PY;
         }
         // 上膛逻辑：收起那一刻光标往往就停在判定区里（刚拖过去的），
-        // 必须先见过它离开一次，才认"鼠标靠近"是要展开 —— 否则收了立刻弹回。
+        // 必须先见过它离开一次，才认"鼠标靠近"是要展开，否则收了立刻弹回。
         if (!near) { widgetEdgeArmed = true; return; }
         if (!widgetEdgeArmed) return;
         widgetRevealEdge('鼠标靠近');
@@ -2089,7 +1946,7 @@ function widgetStartEdgePoll() {
         const b = win.getBounds();
         if (widgetCursorNearRect(p, b, WIDGET_EDGE_REVEAL_PX)) return;
         widgetEdgeHoverReveal = false;
-        // 开关可能在悬停展开之后又被关掉（设置页 / 右键菜单）→ 那就不能再自动收
+        // 开关可能在悬停展开之后又被关掉（设置页 / 右键菜单），那就不能再自动收
         let w = {};
         try { w = widgetCfg(); } catch { /* 忽略：当没配处理 */ }
         if (!w.edgeHide) { widgetStopEdgePoll(); return; }
@@ -2100,7 +1957,7 @@ function widgetStartEdgePoll() {
           widgetStopEdgePoll();
         }
       } else {
-        widgetStopEdgePoll();   // 收起态没了、悬停追踪也没了 —— 轮询没有存在意义
+        widgetStopEdgePoll();   // 收起态没了、悬停追踪也没了，轮询没有存在意义
       }
     } catch { /* 轮询回调里不抛 */ }
   }, 120);   // 120ms：加上 140ms 的滑出动画，从"鼠标靠近"到卡片归位约 1/4 秒
@@ -2109,7 +1966,7 @@ function widgetStartEdgePoll() {
 
 /**
  * 自绘菜单（页面画）唯一的参数入口：只认白名单里的键，逐键校验 + 夹取。
- * 渲染进程传什么都改不了白名单之外的东西 —— 这是"页面能改设置"能接受的前提。
+ * 渲染进程传什么都改不了白名单之外的东西，这是"页面能改设置"能接受的前提。
  * @returns {object|null} 过滤后的 patch；一个有效键都没有时返回 null（调用方据此不动配置）。
  */
 function sanitizeWidgetPatch(raw) {
@@ -2160,7 +2017,7 @@ function applyWidgetOption(patch) {
 /**
  * 创建悬浮小窗。
  * @param {{x:number,y:number,width:number,height:number}} [keepBounds]
- *        重建窗口（改了"真透明"）时传入旧位置 —— 透明度只能建窗时决定，
+ *        重建窗口（改了"真透明"）时传入旧位置：透明度只能建窗时决定，
  *        改了必须重建，但用户拖好的位置不能丢。
  */
 function createWidgetWindow(keepBounds) {
@@ -2176,21 +2033,21 @@ function createWidgetWindow(keepBounds) {
   const transparent = !!w.transparent;
   // 半透明磨砂：opacity<100 且没开实验档 transparent 时，窗口挂 Windows 11
   // 的 mica 系统背板（DWM 合成，页面用半透明卡片色叠上去得到毛玻璃效果）。
-  // ⚠️ 刻意绕开 transparent:true —— 那是 R46 冻结事故的链路（见 createWindow 注释），
-  //    mica 是另一条路，窗口仍按不透明窗口建，不碰分层透明。
-  // ⚠️ backgroundMaterial 建窗时决定：跨 100 的调整由 syncWidget 重建窗口。
+  // 刻意绕开 transparent:true：那是"只显示第一帧后冻结"的链路（见 createWindow 注释），
+  // mica 是另一条路，窗口仍按不透明窗口建，不碰分层透明。
+  // backgroundMaterial 建窗时决定，跨 100 的调整由 syncWidget 重建窗口。
   const frosted = widgetOpacityPct(w) < 100 && !transparent;
   try {
     widgetWindow = new BrowserWindow({
       ...bounds,
       minWidth: 160,
       minHeight: 88,
-      // ⚠️ 同主窗口（R46）：transparent=true 是本机已知"只显示第一帧后冻结"的档位。
-      //    默认档里它是开着的（2026-10-24 起），所以它不是"永不开启"的守卫，
-      //    而是出事时的索引：卡片冻结不刷新 → 关掉设置里的「真·透明背景」。
+      // 同主窗口：transparent=true 是本机已知"只显示第一帧后冻结"的档位。
+      // 默认档里它是开着的，所以这里不是"永不开启"的守卫，而是出事时的索引：
+      // 卡片冻结不刷新 → 关掉设置里的「真·透明背景」。
       transparent,
       // 半透明磨砂档（opacity<100）：Win11 mica 背板。老版本 Electron/老系统
-      // 不认识这个选项时会静默忽略 —— 退化为"不透明卡"，不会白屏。
+      // 不认识这个选项时会静默忽略，退化为"不透明卡"，不会白屏。
       ...(frosted ? { backgroundMaterial: 'mica' } : {}),
       hasShadow: true,
       backgroundColor: transparent ? '#00000000' : '#141821',
@@ -2208,7 +2065,7 @@ function createWidgetWindow(keepBounds) {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
-        // 被游戏/全屏浏览器遮挡时定时器不能节流 —— 状态卡要持续刷新
+        // 被游戏/全屏浏览器遮挡时定时器不能节流，状态卡要持续刷新
         // （与主窗口同一个坑：节流会让轮询停摆，卡片变成"假死"）
         backgroundThrottling: false,
         // 极窄桥：只给自绘菜单递动作（apply / command 两个方法，见 widget-preload.cjs）。
@@ -2225,7 +2082,7 @@ function createWidgetWindow(keepBounds) {
   const win = widgetWindow;
   widgetLoadRetries = 0;               // 新窗口的加载重试预算重新计
   // 鼠标穿透（可随时切）：forward:true 让 mousemove 仍然送达页面（卡片照常
-  // 刷新显示），点击则穿透到桌面 —— 挂着偷看群状态时不抢焦点。
+  // 刷新显示），点击则穿透到桌面，挂着偷看群状态时不抢焦点。
   try { win.setIgnoreMouseEvents(!!w.clickThrough, { forward: true }); } catch { /* 老版本无此 API */ }
   win.once('ready-to-show', () => {
     try {
@@ -2242,14 +2099,13 @@ function createWidgetWindow(keepBounds) {
   // 位置/尺寸防抖落盘（与主窗口共用 400ms 防抖 + saveWindowState）
   win.on('move', scheduleSaveWindowState);
   win.on('moved', scheduleSaveWindowState);
-  // 贴边收起（QQ 式）：只在**松手后**判定 —— 拖动中判定会和光标打架（见 ⑤）
+  // 贴边收起（QQ 式）：只在松手后判定，拖动中判定会和光标打架（见 ⑤）
   win.on('moved', widgetOnMoved);
   win.on('resize', scheduleSaveWindowState);
   win.on('resized', scheduleSaveWindowState);
-  // 右键菜单**由页面自绘**（卡片内的深色小菜单，与小窗同一套视觉 —— 原生菜单
-  // 在 Windows 上改不了样式）。动作经 widget-preload.cjs 那两个方法回到这里。
-  // 这里刻意不弹原生菜单：样式统一了就只有一条路径，不会出现"两套菜单打架"。
-  // 桥加载失败时页面会自行降级（菜单项置灰 + 提示重启）。
+  // 右键菜单由页面自绘（卡片内的深色小菜单，与小窗同一套视觉，原生菜单在
+  // Windows 上改不了样式）。动作经 widget-preload.cjs 那两个方法回到这里。
+  // 刻意不弹原生菜单：样式统一了就只有一条路径。桥加载失败时页面会自行降级。
   win.webContents.on('preload-error', (_e, p, error) => {
     logKey('widget', `[preload 失败] ${p} :: ${describeError(error)}`);
   });
@@ -2273,8 +2129,8 @@ function createWidgetWindow(keepBounds) {
   });
   win.webContents.on('did-fail-load', (_e, code, desc, url) => {
     logKey('widget', `[页面加载失败] code=${code} desc=${desc} url=${url}`);
-    // 有界重试（2s → 4s，最多 2 次）：服务就在本进程里，正常必然起得来；
-    // 这里只兜"端口刚好被别的东西占了"这类瞬时情况。不学主窗口那样无限重试 ——
+    // 有界重试（2s → 4s，最多 2 次）：服务就在本进程里，正常必然起得来，
+    // 这里只兜"端口刚好被别的东西占了"这类瞬时情况。不学主窗口那样多次重试，
     // 小窗没有"用户盯着看"的负担，两次不成就是环境问题，靠日志定位。
     widgetLoadRetries = (widgetLoadRetries || 0) + 1;
     if (widgetLoadRetries <= 2) {
@@ -2284,8 +2140,8 @@ function createWidgetWindow(keepBounds) {
       }, delay);
     }
   });
-  // 上次退出时就是收起态：启动即以正常位置建窗（上面 bounds），此刻立刻收起
-  // —— 存档里存的是展开态坐标，直接按收起坐标建窗过不了可见性校验。
+  // 上次退出时就是收起态：启动即以正常位置建窗（上面 bounds），此刻立刻收起。
+  // 存档里存的是展开态坐标，直接按收起坐标建窗过不了可见性校验。
   if (saved?.edgeHidden && w.edgeHide && widgetEnterEdgeState(bounds)) {
     scheduleSaveWindowState();
     logKey('widget', '启动即为收起态（上次贴边收起，鼠标移近即展开）');
@@ -2313,7 +2169,7 @@ function destroyWidgetWindow() {
  * 把配置同步到活窗口。三种动作：
  *   关 → 销毁；开（没有窗）→ 建；开着 + 签名变 → 改置顶/穿透/尺寸；
  *   transparent 变 / 不透明度跨 100 → 保留位置重建（两项都建窗时决定：
- *   前者是本机坏掉的透明链路，后者要挂卸 mica 毛玻璃背板）。
+ *   前者是"只显示第一帧"的透明链路，后者要挂卸 mica 毛玻璃背板）。
  * 贴边收起（edgeHide）变关 → 收起态当场展开（否则只剩一条缝，用户找不到窗）。
  * 不透明度在 100 以下内部调整不重建：页面轮询 /api/config 改 CSS 透明度即可。
  */
@@ -2361,17 +2217,16 @@ function syncWidget(force = false) {
     widgetProgrammaticMove(widgetWindow, { x: b.x, y: b.y, width: dim.width, height: dim.height });
   } catch { /* 忽略 */ }
   widgetSettingsSigCache = sig;
-  // R140：签名变了说明用户改了偏好（最常见是拖设置页的不透明度滑条）。
-  // 主动推给活页一次 —— 不推的话页面要等 2.5 秒状态轮询，而 loadPrefs 的去重
-  // 会把推送晚到的那一次补拉吃掉（旧值 3 秒去重时，推送到了也不肯重拉）。
-  // 实测改前最坏约 4.6 秒小窗才变色，滑条的体感就是"拖了半天没反应"。
+  // 签名变了说明用户改了偏好（最常见是拖设置页的不透明度滑条）。主动推给活页
+  // 一次：不推的话页面要等 2.5 秒状态轮询，而 loadPrefs 的去重会把推送晚到的
+  // 那一次补拉吃掉，实测最坏约 4.6 秒小窗才变色，滑条的体感就是"拖了半天没反应"。
   widgetPushPrefs();
 }
 
 /**
- * 通知活的小窗"配置变了，去重拉一次"（R140）。
+ * 通知活的小窗"配置变了，去重拉一次"。
  * 只对不需要重建窗口的那类变化有意义：不透明度 100 以下调卡片 alpha、
- * 刷新间隔、置顶/穿透开关…… 需要重建的两类（transparent / 不透明度跨 100）
+ * 刷新间隔、置顶/穿透开关。需要重建的两类（transparent / 不透明度跨 100）
  * 走 createWidgetWindow，新页面启动时自己会 loadPrefs，不用推。
  */
 function widgetPushPrefs() {
@@ -2385,8 +2240,8 @@ function widgetPushPrefs() {
 }
 
 /** 300 毫秒扫一次配置（updateConfig 没有变更通知，见 ③）。
- *  1000ms → 300ms（R140）：这一轮是"设置页改动"到"小窗变色"的唯一链路。
- *  每轮只读内存（core.getConfig）拼一个签名串，成本可忽略。 */
+ *  这是"设置页改动"到"小窗变色"的唯一链路。每轮只读内存（core.getConfig）
+ *  拼一个签名串，成本可忽略。 */
 function startWidgetSync() {
   setInterval(() => {
     try { syncWidget(); } catch (error) { logKey('widget', `同步失败：${error?.message ?? error}`); }
@@ -2395,10 +2250,10 @@ function startWidgetSync() {
 
 app.whenReady().then(async () => {
   try {
-    // ── 数据目录可写性自检（P0-2）─────────────────────────────────────
+    // ── 数据目录可写性自检 ───────────────────────────────────────────
     // 必须排在一切业务之前：安装目录不可写时，失败会散落在十几个模块里，
     // 最终表现成"双击没反应"。在这里一次性判掉，用户能看到原因和解法。
-    // 只在拿到单实例锁时检查 —— 第二实例本来就要退出，让它先报"已在运行"更有用。
+    // 只在拿到单实例锁时检查，第二实例本来就要退出，让它先报"已在运行"更有用。
     if (gotLock) {
       const dataDir = process.env.QQ_AGENT_DATA_DIR;
       const unwritable = probeDataDirWritable(dataDir);
@@ -2407,17 +2262,17 @@ app.whenReady().then(async () => {
         return;
       }
     }
-    // R70：崩溃证据链越早挂上越好 —— logger 要等 ready（DATA_DIR 此时才定型），
+    // 崩溃证据链越早挂上越好：logger 要等 ready（DATA_DIR 此时才定型），
     // crashpad 和子进程监护同理（GUI 子系统就绪后 crashpad handler 才拉得起来）。
     await bindCoreLogger();
     pruneCrashDumps();          // 先清旧的再开转储：本轮崩溃的证据一定留得下
     startCrashReporter();
     watchChildProcesses();
-    // r93：电源事件 → 看门狗静默期。休眠/锁屏期间系统会暂停渲染进程的定时器，
-    // 恢复瞬间的那一次探针超时会被旧逻辑当成"页面僵死"，两次后拆窗重建 ——
-    // 用户看到"睡醒回来窗口自己消失了一下 / 任务栏莫名其妙闪一下"。
-    // ⚠️ powerMonitor 必须走命名空间取：ESM 具名导入在导出名不存在时是 SyntaxError，
-    //    会把整个 main.js 带走（R41 的教训，同 webUtils / screen）。
+    // 电源事件 → 看门狗静默期。休眠/锁屏期间系统会暂停渲染进程的定时器，
+    // 恢复瞬间的那一次探针超时会被当成"页面僵死"，两次后拆窗重建，
+    // 用户看到"睡醒回来窗口自己消失了一下"。
+    // powerMonitor 必须走命名空间取：ESM 具名导入在导出名不存在时是 SyntaxError，
+    // 会把整个 main.js 带走（同 webUtils / screen）。
     try {
       const powerMonitor = electronApi.powerMonitor ?? electronApi.default?.powerMonitor ?? null;
       if (powerMonitor) {
@@ -2434,32 +2289,29 @@ app.whenReady().then(async () => {
     console.log('[window] 代理模式：direct（绕过系统代理）');
     const { createApp } = await import('../src/app.js');
     // 桌宠宿主先建、再注入 core：core 通过它挂 /api/desktop-pet/*，
-    // 它通过 getService 反向取插件能力。此刻 core 还是 null —— getService 是闭包，
+    // 它通过 getService 反向取插件能力。此刻 core 还是 null，getService 是闭包，
     // 真正取值发生在窗口起来之后，所以顺序安全。
     desktopPetHost = createDesktopPetHost({
       getMainWindow: () => mainWindow,
       showMainWindow: () => showWindow(),
       getService: () => core?.getDesktopPetService?.() || null,
       // 单击桌宠 → 今日用量卡片；双击 → 开发工单对话窗。两者都走进程内能力，
-      // 不开新 HTTP 口子（core 此刻还是 null，闭包延迟取值即可）。
+      // 不开新 HTTP 口子。
       getUsageToday: () => core?.getUsageToday?.() ?? null,
       devApi: () => core?.devApi?.() ?? null,
-      // 桌宠跑在**独立渲染进程**里，它的 console、preload 失败、页面加载失败
-      // 全都经由这个 log 回调出来。原来只写 stdout —— 而打包版没有终端接管，
-      // 等于这个功能出问题时在 data/logs 里一条线索都没有（2026-10-23 桌宠窗口
-      // 不显示，查到最后只能靠猜）。改成同时落主日志，事后才查得动。
+      // 桌宠跑在独立渲染进程里，它的 console、preload 失败、页面加载失败都经由
+      // 这个 log 回调出来。只写 stdout 的话打包版没有终端接管，这个功能出问题时
+      // 在 data/logs 里一条线索都没有。改成同时落主日志，事后才查得动。
       log: (...args) => logKey('desktop-pet', args.map((value) => (typeof value === 'string' ? value : String(value))).join(' '))
     });
     core = createApp({ log: (...args) => console.log(...args), desktopPetHost });
-    // 先启动服务拿到真实端口，再开窗口。
-    // 原先是 createWindow(core.lastPort ?? 3210) 在前、core.start() 在后 ——
-    // 此时 lastPort 尚未赋值，窗口恒按 3210 加载；若端口被占用顺延到 3211+，
-    // 首屏必然加载失败，只能靠 did-fail-load 2 秒重试兜底。
+    // 先启动服务拿到真实端口，再开窗口。反过来的话 lastPort 尚未赋值，窗口恒按
+    // 3210 加载；若端口被占用顺延到 3211+，首屏必然加载失败。
     const port = await core.start();
     core.lastPort = port;
     installConsoleRequestAuth(port, core.getRendererAuthToken?.());
-    // M1：second-instance 处理器可能在上面 core.start() 的 await 期间就调了 showWindow()
-    // —— 那时 lastPort 尚未赋值，会按回退端口 3210 建出一个「幽灵窗口」。真实端口
+    // second-instance 处理器可能在上面 core.start() 的 await 期间就调了 showWindow()，
+    // 那时 lastPort 尚未赋值，会按回退端口 3210 建出一个「幽灵窗口」。真实端口
     // 拿到后不再重复建窗：已有窗口就改址复用并聚焦，否则才创建。
     if (mainWindow && !mainWindow.isDestroyed()) {
       windowHidden = false;
@@ -2471,32 +2323,30 @@ app.whenReady().then(async () => {
     } else {
       await createWindow(port);
     }
-    // 桌宠窗口：必须等 core.start() 拿到**真实端口**后再起（pet.html 走同源 HTTP，
-    // 端口错了就是白屏/404）。放在 if/else 之后而不是 createWindow 内部 ——
+    // 桌宠窗口必须等 core.start() 拿到真实端口后再起（pet.html 走同源 HTTP，
+    // 端口错了就是白屏/404）。放在 if/else 之后而不是 createWindow 内部：
     // 第二实例复用已有窗口那条分支同样要拉起桌宠。
     // 失败只记日志：桌宠起不来不能拖垮主界面（与托盘/悬浮窗同一个兜底口径）。
     try {
       await desktopPetHost.start({ port, consoleToken: core.getConfig().server?.token || '' });
     } catch (error) {
-      // 原来只 console.error —— 打包版没有终端接管 stdout，桌宠起不来这件事
-      // 在 data/logs 里一行都没有，只能靠"桌宠不见了"反推。必须落盘。
+      // 必须落盘：打包版没有终端接管 stdout，只 console.error 的话桌宠起不来
+      // 这件事在 data/logs 里一行都没有。
       logCritical('desktop-pet', `桌宠窗口初始化失败：${describeError(error)}`);
     }
     applyAutoStart();
-    // ⚠️ 托盘单独兜底（2026-10-13 加，为 Linux）：
-    //   Electron 的 Tray 在 Linux 上依赖 AppIndicator / libappindicator，
-    //   不少极简发行版默认没装 —— new Tray() 会抛异常。而它原来就在下面这个
-    //   大 try 里，一抛就会被判成「启动失败」并弹原生错误框，软件等于打不开。
-    //   托盘只是「隐藏到后台 + 右键菜单」的便利设施，没资格让主程序起不来：
-    //   这里单独兜住，失败只降级成「无托盘图标」，主界面照常出来。
+    // 托盘单独兜底：Electron 的 Tray 在 Linux 上依赖 AppIndicator / libappindicator，
+    // 不少极简发行版默认没装，new Tray() 会抛异常。它若落在下面的大 try 里，
+    // 一抛就会被判成「启动失败」并弹原生错误框，软件等于打不开。
+    // 托盘只是「隐藏到后台 + 右键菜单」的便利设施，没资格让主程序起不来：
+    // 失败只降级成「无托盘图标」，主界面照常出来。
     try {
       createTray();
     } catch (trayError) {
       logCritical('tray', `[托盘创建失败，已降级为无托盘模式] ${describeError(trayError)}`);
     }
-    // 桌面悬浮小窗：先按当前配置同步一次（可能配置里就是开着的），再挂 1 秒轮询。
-    // 放在最后：依赖 core.lastPort / 托盘都已就绪；启动链里任何异常都不该
-    // 阻止它（它自己兜底，失败只影响小窗，不影响主程序）。
+    // 桌面悬浮小窗：先按当前配置同步一次（可能配置里就是开着的），再挂轮询。
+    // 放在最后：依赖 core.lastPort / 托盘都已就绪；它自己兜底，失败只影响小窗。
     try {
       syncWidget(true);
       startWidgetSync();
@@ -2505,16 +2355,14 @@ app.whenReady().then(async () => {
     }
   } catch (error) {
     logCritical('electron', `[启动失败] ${describeError(error)}`);
-    // R80（BUG-11）：启动失败不能静默退出。旧逻辑只写日志就 app.quit()，
-    // 用户双击没反应、无窗口、无任何提示，完全无法自救（群友反馈"打不开"）。
+    // 启动失败不能静默退出：只写日志就 app.quit() 的话，用户双击没反应、
+    // 无窗口、无任何提示，完全无法自救。
     // 弹原生错误框：原因直接可见 + 一键打开日志目录（完整堆栈在里面）。
     const logsDir = path.join(process.env.QQ_AGENT_DATA_DIR || '.', 'logs');
 
-    // ⚠️（2026-10-16 外部审查 #4 + #2 站点②）
-    // #4：文件锁冲突（app.js 抛 `[单实例] …`）落到这里会被报成**红色「启动失败」**，
-    //     用户以为程序坏了，实际只是"已经开着了"—— 按消息前缀分流到友好信息框。
-    // #2：原框**无父窗口、无超时**，点掉之前进程不退 → 占任务栏。真失败给 180s
-    //     （要留「打开日志目录」的点击时间），锁冲突给 8s（一行话读够）。
+    // 文件锁冲突（app.js 抛 `[单实例] …`）落到这里会被报成红色「启动失败」，
+    // 用户以为程序坏了，实际只是"已经开着了"，按消息前缀分流到友好信息框。
+    // 真失败给 180s（要留「打开日志目录」的点击时间），锁冲突给 8s（一行话读够）。
     if (/\[单实例\]/.test(String(error?.message ?? describeError(error)))) {
       showDialog({
         type: 'info',
@@ -2544,41 +2392,35 @@ app.whenReady().then(async () => {
     }).catch(() => app.quit());
   }
 }).catch((error) => {
-  // 启动链最外层兜底（2026-10-18）：正常路径已由内部 try/catch 接住，
-  // 这里只防"catch 自身抛错 / 回调尾部异常"漏网 —— 主进程的 unhandledRejection
-  // 没有别的出口，一旦漏就是静默停在半启动状态。
+  // 启动链最外层兜底：正常路径已由内部 try/catch 接住，这里只防"catch 自身抛错 /
+  // 回调尾部异常"漏网。主进程的 unhandledRejection 没有别的出口，
+  // 一旦漏就是静默停在半启动状态。
   logCritical('boot', `[启动链未捕获异常] ${describeError(error)}`);
 });
 
 // 退出清理：core.stop() 是 async（要 abortAll / 关 SSE / 关 server / 释放单实例锁），
-// 而 before-quit 是同步事件 —— 直接调它会让进程在 await 让出后就被销毁，
-// 清理链跑一半：锁文件可能残留、会话最后一次进度可能丢、消息存档可能没落盘。
+// 而 before-quit 是同步事件，直接调它会让进程在 await 让出后就被销毁，清理链跑一半：
+// 锁文件可能残留、会话最后一次进度可能丢、消息存档可能没落盘。
 // 正确做法：拦下这次退出，等 stop() 真正跑完再 app.quit()。
 //
-// ⚠️（2026-10-16 外部审查 #1）"等 stop() 跑完"必须**有超时兜底**。
-//    原实现是 `.then(() => core.stop())…finally(() => app.quit())` —— 一旦 stop() 里
-//    某个 await 不返回，app.quit() 就永不执行：进程既不退出也不干活，托盘图标点不了、
-//    窗口可能已经没了，用户唯一出路是任务管理器。报告实测过这种僵尸：1 线程、CPU 零
-//    增长、110–156MB、taskkill /F 都报"没有此任务"。
-//    现在用 Promise.race 给它 8 秒：超时就记 `[退出清理超时]` 并继续退出。
-//    （报告同时诚实指出：僵尸的根因可能在内核/驱动层，应用层只能治"挂住不退"这一半。）
+// "等 stop() 跑完"必须有超时兜底：一旦 stop() 里某个 await 不返回，app.quit()
+// 就永不执行，进程既不退出也不干活，窗口可能已经没了，用户唯一出路是任务管理器
+// （实测过这种僵尸：1 线程、CPU 零增长、taskkill /F 都报"没有此任务"）。
+// 现在用 Promise.race 给它 8 秒：超时就记 `[退出清理超时]` 并继续退出。
 const STOP_TIMEOUT_MS = 8000;
 // 退出收尾的最后一道保险：app.quit() 之后如果 4 秒还没退，直接结束进程。
-// 为什么需要（2026-10-17）：托盘里的「强制退出」已经合并进「退出」，用户不再有
-// "自己强杀"的入口 —— 那么"温和路径万一卡住"必须由程序自己接管，否则用户唯一的
-// 出路就只剩任务管理器。
+// 托盘里已经没有「强制退出」入口，所以"温和路径万一卡住"必须由程序自己接管，
+// 否则用户唯一的出路就只剩任务管理器。
 const QUIT_HARD_LIMIT_MS = 4000;
 let shuttingDown = false;
 
-// 注：原 killKnownChildren()（同步结束内置 SnowLuma 子进程）已删除 ——
-// 2026-10-23 协议端解耦后 QQ Agent 不再拉起任何子进程，协议端（SnowLuma /
-// NapCat）由用户自行安装运行，退出时不该由我们 kill。
+// 协议端（SnowLuma / NapCat）由用户自行安装运行，QQ Agent 不拉起任何子进程，
+// 退出时也不该由我们 kill。
 
 app.on('before-quit', (event) => {
   quitting = true;
-  flushWindowState();                    // R66：真退出前把窗口几何落盘
-  // R69：这里原本一行日志都没有，退出到底卡在哪一步全靠猜。现在进出都记，
-  // 并给 core.stop() 计时 —— 万一真的挂住，日志里能直接看出是挂在 stop 上。
+  flushWindowState();                    // 真退出前把窗口几何落盘
+  // 进出都记，并给 core.stop() 计时：万一真的挂住，日志里能直接看出是挂在 stop 上。
   if (shuttingDown || !core) {
     logKey('quit', `before-quit：放行（shuttingDown=${shuttingDown} core=${!!core}）`);
     return;                               // 第二次进入（自己触发的 quit）直接放行
@@ -2597,9 +2439,8 @@ app.on('before-quit', (event) => {
     })
     .then(() => core.stop())
     .then(() => 'ok')
-    // 静态检查要求每条 .then 链自带 .catch；这里的 rejection 仍会传给下面的
-    // Promise.race(...).catch 统一处理——
-    // 所以只做"标记"、不吞错误：原样抛出，保持既有语义（2026-10-18）。
+    // 静态检查要求每条 .then 链自带 .catch。这里的 rejection 仍会传给下面的
+    // Promise.race(...).catch 统一处理，所以只原样抛出、不吞错误。
     .catch((error) => { throw error; });
   const stopTimedOut = new Promise((resolve) => {
     stopTimer = setTimeout(() => resolve('timeout'), STOP_TIMEOUT_MS);
@@ -2617,12 +2458,11 @@ app.on('before-quit', (event) => {
       logCritical('quit', `[退出清理失败] ${describeError(error)}`);
     })
     .finally(() => {
-      // 无论哪条路先到，都要把超时定时器清掉 —— 否则进程退出被这个未决 timer 拖着
+      // 无论哪条路先到，都要把超时定时器清掉，否则进程退出被这个未决 timer 拖着
       try { clearTimeout(stopTimer); } catch { /* 已触发就无需清 */ }
       app.quit();
-      // ★ 最后一道（2026-10-17）：已经从托盘拿掉了"强制退出"，所以这里必须兜住
-      //   "app.quit() 卡在 will-quit / 某个窗口不配合"的情况。正常退出时进程已经没了，
-      //   这个 unref 定时器永远不会触发；真卡住时它保证 4 秒后进程一定结束。
+      // 兜住"app.quit() 卡在 will-quit / 某个窗口不配合"的情况。正常退出时进程
+      // 已经没了，这个 unref 定时器永远不会触发；真卡住时它保证 4 秒后进程一定结束。
       const hardTimer = setTimeout(() => {
         logCritical('quit', `[退出兜底] app.quit() ${QUIT_HARD_LIMIT_MS}ms 仍未完成，强制结束进程`);
         app.exit(0);
@@ -2631,13 +2471,11 @@ app.on('before-quit', (event) => {
     });
 });
 
-// R69：显式注册而不是交给 Electron 默认行为 —— 默认行为一样是退出（非 macOS），
-// 但那样就没有任何记录。这里保持同样的行为，只补一行日志。
-// R70：这条日志现在是判断"闪退 vs 正常关闭"的分水岭 —— 它出现在日志里，
-// 说明进程走完了完整的退出流程；没出现，说明是被杀或原生崩溃。
-// R72：rebuildWindow() 会先把旧窗口 destroy —— 窗口数瞬间归零，本事件照样触发，
-// 紧接着 app.quit() 把"重建自救"整个带走：日志实证（2026-09-23 群友 0.4.2，
-// 11:42:06 看门狗判 hung → 重建 → 本事件 → exitCode=0）。两种时机都要防：
+// 显式注册而不是交给 Electron 默认行为：默认行为一样是退出（非 macOS），
+// 但那样就没有任何记录。这条日志是判断"闪退 vs 正常关闭"的分水岭：
+// 它出现在日志里，说明进程走完了完整的退出流程；没出现，说明是被杀或原生崩溃。
+// rebuildWindow() 会先把旧窗口 destroy，窗口数瞬间归零，本事件照样触发，
+// 紧接着 app.quit() 把"重建自救"整个带走。两种时机都要防：
 //   ① 同步触发（destroy 时窗口数归零立刻发）：此时 rebuilding=true、新窗口还没建；
 //   ② 异步触发（重建完成之后才派发）：此时 rebuilding=false 但 mainWindow 已是新窗口。
 // 只要命中其一就说明"关窗"是重建动作的副作用，不是用户真要退出。
@@ -2650,9 +2488,9 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// R70：进程退出前最后一笔。放盘是同步 appendFileSync，所以这条一定写得进去 ——
-// 日志里有 `[quit] 进程退出` ⇒ 完整走完了退出流程（用户关的/托盘退的）；
-// 没有这一行 ⇒ 进程是被杀掉的或原生崩溃的，直接去看事件查看器和 Crashpad。
+// 进程退出前最后一笔。落盘是同步 appendFileSync，所以这条一定写得进去：
+// 日志里有 `[quit] 进程退出` 说明完整走完了退出流程；没有这一行说明进程是被杀掉
+// 或原生崩溃的，直接去看事件查看器和 Crashpad。
 app.on('quit', (_event, exitCode) => {
   logKey('quit', `进程退出 exitCode=${Number(exitCode) || 0}`);
 });

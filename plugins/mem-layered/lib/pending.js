@@ -1,16 +1,15 @@
 // 待办：模型说「记着明天问一下」时写进来；到点自动消失，不靠模型每次维护。
 //
-// ── ⚠️ 为什么本文件必须自带一个工具入口 ─────────────────────────────────
-// 内置 plugins/conversation-memory/lib/pending.js 有完整的 saveTodo / completeTodo，
-// 但**全应用零调用** —— 没有任何技能注册「记待办」的工具，也没有任何地方 import 它们。
-// 结果就是：设置页的「待办提醒」开关是开着的、注入代码也一直在跑，但
-// <DATA_DIR>/pending-todos.json 从来不存在 —— 一个彻底空转的功能。
-// 所以本插件把「状态机」和「入口」放在一起：index.js 会 registerTool('memory_todo')。
+// 本文件必须自带一个工具入口。内置 plugins/conversation-memory/lib/pending.js 有完整的
+// saveTodo / completeTodo，但全应用零调用：没有任何技能注册「记待办」的工具，
+// 也没有任何地方 import 它们。结果设置页的「待办提醒」开关是开着的、注入代码也一直在跑，
+// 但 <DATA_DIR>/pending-todos.json 从来不存在，一个彻底空转的功能。
+// 所以本插件把状态机和入口放在一起：index.js 会 registerTool('memory_todo')。
 // 没有入口的记忆功能不该发布。
 //
-// ── 相对内置版的两处改动 ────────────────────────────────────────────────
+// 相对内置版的两处改动：
 //   1. 补上入口（上面那条）。
-//   2. completeTodo 的匹配从"必须完全相等"放宽成"包含即算完成"——
+//   2. completeTodo 的匹配从"必须完全相等"放宽成"包含即算完成"，
 //      模型复述待办时几乎不会一字不差（内置版那版基本删不掉东西）。
 import path from 'node:path';
 import { ensureDir, readJson, writeJson, num } from './util.js';
@@ -59,7 +58,7 @@ export class Pending {
     if (!key) return { ok: false, error: '缺少 chatKey' };
 
     // num 而不是 clamp + ||：clamp(null,1,N) 会返回 1，再被 `|| 120` 当成
-    // "用户要 1 分钟" —— 模型传个 null 就变成"记下来一分钟就忘"。
+    // "用户要 1 分钟"，模型传个 null 就变成"记下来一分钟就忘"。
     const mins = num(expireInMinutes, DEFAULT_EXPIRE_MIN, 1, MAX_EXPIRE_MIN);
     const now = Date.now();
     // QQ 号可能是负数（私聊会话号），统一取绝对值
@@ -97,8 +96,8 @@ export class Pending {
 
   /**
    * 办完了：删掉。
-   * ⚠️ 匹配放宽到"包含"——模型复述待办很少一字不差，内置版的严格相等基本删不掉。
-   *    优先精确匹配；没有精确的再退到子串匹配（取第一条）。
+   * 匹配放宽到"包含"：模型复述待办很少一字不差，内置版的严格相等基本删不掉。
+   * 优先精确匹配；没有精确的再退到子串匹配（取第一条）。
    */
   done({ chatKey, text } = {}) {
     const needle = String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();

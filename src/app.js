@@ -8,18 +8,16 @@ import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getConfig, updateConfig, ROOT, DATA_DIR, isChatAllowed } from './config.js';
-// 版本迁移：处理跨版本升级后残留的旧插件目录/配置引用（详见该文件头部注释）。
-// 必须在 reloadSkills 之前跑 —— 插件扫描读的就是 config.trustedPlugins。
+// 版本迁移：清理跨版本升级后残留的旧插件目录/配置引用。必须在 reloadSkills 之前跑，
+// 插件扫描读的就是 config.trustedPlugins。
 import { runUpgrades } from './upgrade.js';
-// QQ 版本 vs 协议端声明的只读核对（r132）：面向大众分发后用户 QQ 版本各异，
-// 版本错开时登录被拒/接口异常且排查方向极易跑偏 —— 状态接口和启动日志里必须能看见。
 import { OneBotClient, segmentsToText, extractMediaFromSegments, expandForwardNodes, fetchForwardNodes } from './onebot.js';
-// 协议端配置探测（2026-10-24）：令牌是 SnowLuma 按账号随机生成的，让新用户
-// 从 WebUI 手抄两串 43 位字符串是首次配置最容易失败的一步 —— 这里直接读它的
-// 配置文件把端点与令牌填好。只读，且令牌不出进程（对外的 publicView 会删掉）。
+// 协议端配置探测：令牌是 SnowLuma 按账号随机生成的，让新用户从 WebUI 手抄两串 43 位
+// 字符串是首次配置最容易失败的一步，这里直接读它的配置文件填好端点与令牌。
+// 只读，令牌不出进程（publicView 会删掉）。
 import { detectProtocol, publicView as protocolDetectView } from './protocol-detect.js';
-// isAtMe 是「是否被艾特」的唯一权威实现（含 QQ 号判定，见 prompt.js 注释）。
-// 这里曾经就地抄过一份只认名字的判定，结果群昵称改了就漏判 —— 统一走权威实现。
+// isAtMe 是「是否被艾特」的唯一权威实现（含 QQ 号判定，见 prompt.js）。曾就地抄过
+// 一份只认名字的版本，群昵称一改就漏判。
 import { isAtMe } from './prompt.js';
 import { ChatStore } from './store.js';
 import { MemoryStore } from './memory.js';
@@ -42,9 +40,8 @@ import { loadPlugins, watchPlugins, setOnebotClient, PLUGINS_DIR, SKILLS_DIR } f
 import { beginToolsetBatch, endToolsetBatch } from './tool-registry.js';
 import { registerHarness } from './harness/index.js';
 import { skillManager } from './skills/manager.js';
-// 插件界面契约：常量 / 路径规则 / URL 拼装 / CSP 全部来自这一份，
-// 前端（06-settings-render.js）与插件侧（api.panel）也 import 同一份 ——
-// 三处各写一遍的时候，任何一处改动漏掉另一处都表现为"按钮点了白屏"且不报错。
+// 插件界面契约（常量 / 路径规则 / URL 拼装 / CSP）只此一份，前端与插件侧 import 同一份。
+// 三处各写一遍时，漏改一处表现为"按钮点了白屏"且不报错。
 import { PANEL_ROUTE_PREFIX, PANEL_DATA_SEGMENT, PANEL_FILE_TYPES, panelCsp } from './skills/panel.js';
 import { extractCandidateUrls, dispatchMediaLinks } from './media-links.js';
 import { createRoutes } from './routes.js';
@@ -55,10 +52,9 @@ import { logger } from './logger.js';
 import { startCommunitySync, isGloballyBlocked, FIXED_PRICE_FEED_URL } from './community.js';
 import { noteMuted, noteUnmuted } from './ban-state-client.js';
 
-// 全局 fetch（undici）默认连接建立超时只有 10 秒，openrouter.ai 这类海外端点
-// 握手慢时会直接报 "Connect Timeout Error ... timeout: 10000ms"（注意这不是
-// 请求超时——那是 llm.js 里 180 秒的 AbortSignal）。这里放宽到 30 秒。
-// 动态导入 + 容错：undici 与 Electron 内置 Node 不兼容时只退回默认超时，绝不崩主进程。
+// undici 默认连接建立超时 10 秒，openrouter.ai 这类海外端点握手慢时会直接报
+// "Connect Timeout Error"（不是请求超时，那是 llm.js 的 180 秒 AbortSignal）。
+// 动态导入 + 容错：undici 与 Electron 内置 Node 不兼容时退回默认超时，不崩主进程。
 try {
   const { Agent, setGlobalDispatcher } = await import('undici');
   setGlobalDispatcher(new Agent({ connect: { timeout: 30_000 } }));
@@ -69,24 +65,17 @@ try {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.resolve(__dirname, '..', 'ui');
 
-// ── 插件界面（`/plugin-panel/<id>/…`）──────────────────────────────────────
-// 契约（常量、路径规则、URL 拼装、CSP）全在 src/skills/panel.js —— 这里只负责
-// "把磁盘上的文件按那套规则吐出去"。以前这份扩展名表在这里另写了一份，与前端
-// 各自演进，所以现在统一 import。
-
 // ── 白名单判断：委托给 config.js 的 isChatAllowed（全库唯一实现） ──────────
-// 之前 allowed() 与发送侧闸各写一套，移除白名单后"发言"侧没同步 —— 现在统一走一份。
-// 保留本函数名/签名，调用方无需改动。
+// 之前 allowed() 与发送侧闸各写一套，移除白名单后"发言"侧没同步。保留本函数名/签名，
+// 调用方无需改动。
 function allowed(kind, id, cfg) {
   return isChatAllowed(kind, id, cfg);
 }
 
 // ── 版本更新检查 ─────────────────────────────────────────────────────
-// 更新源地址走配置 `config.update.feedUrl`（默认空 = 功能关闭），不再硬编码。
-// 由后端代取而不是前端直连：绕过 CORS，且失败信息能统一回给 UI。
-// 历史：此处曾固定指向上游项目的 version.json。本仓库是从上游 fork 出来独立
-// 维护的，上游的更新源推的是上游的安装包，与本仓库的构建不对应 —— 见
-// src/config.js 的 update 段注释。
+// 更新源走配置 `config.update.feedUrl`（默认空 = 功能关闭）。由后端代取而不是前端直连：
+// 绕过 CORS，失败信息也能统一回给 UI。不指向上游项目的 version.json，本仓库从上游
+// fork 后独立维护，上游推的是上游的安装包，见 src/config.js 的 update 段注释。
 
 function localVersion() {
   try {
@@ -98,11 +87,9 @@ function localVersion() {
 /**
  * 逐段数字比较；返回 1 / 0 / -1。非数字段按 0 处理。
  *
- * ⚠️ 段数必须取两侧的**最大值**：本项目的版本号是四段（如 `0.5.0.0`），
- *    而线上 version.json 曾只有三段（0.4.0）。原实现写死 `i < 3`，只比前三段 ——
- *    一旦线上改用四段、且变化只发生在第四段，比较结果恒为 0，`hasUpdate` 永远是 false，
- *    用户收不到任何更新提示。按 max(len) 走：两侧都是三段时行为与原来完全一致，
- *    四段版本也不会再漏判。
+ * 段数取两侧的最大值：本项目版本号是四段（如 `0.5.0.0`），而线上 version.json 曾
+ * 只有三段。原实现写死 `i < 3`，一旦变化只发生在第四段就比较不出差异，`hasUpdate`
+ * 永远 false，用户收不到更新提示。
  */
 function compareSemver(a, b) {
   const pa = String(a).split('.').map((x) => parseInt(x, 10) || 0);
@@ -122,7 +109,7 @@ const appLogFns = new WeakSet();
 export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   const cfg = getConfig();
 
-  // 桌面伙伴：能力按"已激活的插件"取用 —— 插件没装/被禁用时返回 null，
+  // 桌面伙伴：能力按"已激活的插件"取用，插件没装/被禁用时返回 null，
   // 整个桌宠链路（API、事件转发、窗口）降级为无操作，不影响群聊。
   function getDesktopPetService() {
     try {
@@ -138,7 +125,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   }
 
   // 桌宠「开发工单」对话框：包装 dev-orders 的只读/发送能力。
-  // ⚠️ 只在插件激活时拿得到提供者；未启用时返回 available:false，由界面提示去插件页开启。
+  // 只在插件激活时拿得到提供者；未启用时返回 available:false，由界面提示去插件页开启。
   function devApi() {
     const call = (cap, args) => {
       let fn = null;
@@ -160,34 +147,26 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   const rendererAuthToken = randomBytes(32).toString('hex');
 
   // 详尽日志：把 createApp 的 log 接到分级日志系统（落盘 + 内存缓冲 + SSE）。
-  // 关键：logger 的 mirrorConsole 已经会走 console，所以这里**只写 logger、不再调原 log**，
-  // 否则 appLog → logger.info → console(log) → 若 log 又被指回 appLog 就会无限递归（selftest 就是这么挂的）。
-  // logger.mirrorConsole = true 时 console 输出不丢；调用方传入的自定义 log（如测试的静默 log）
-  // 通过 logger 的 onLog 监听器另行转发，不经过 console。
+  // 只写 logger、不再调原 log，logger 的 mirrorConsole 已经会走 console，再调一次
+  // 就会在 log 被指回 appLog 时无限递归（selftest 就是这么挂的）。
   const appLog = (...args) => {
     logger.info('app', ...args);
   };
-  // ⚠️ 监听器必须持有"调用方原本传入的 log"的独立引用。
-  // 下面会把形参 `log` 改指 appLog，而监听器闭包与形参共享同一个绑定 ——
-  // 改指后监听器调到的是 appLog 自己，日志经 logger 的重入防护被静默丢弃，
-  // 落盘/SSE 之外的所有出口（终端、Electron 主进程 console）全部收不到。
-  // headless 下表现为 `pnpm run server` 启动后终端一片空白，连端口都看不到。
+  // 监听器必须持有"调用方原本传入的 log"的独立引用：下面会把形参 `log` 改指
+  // appLog，而监听器闭包与形参共享同一个绑定，改指后监听器调到的是 appLog 自己，
+  // 日志经 logger 的重入防护被静默丢弃，终端与 Electron 主进程 console 全部收不到
+  // （headless 下表现为启动后终端一片空白，连端口都看不到）。
   const forwardLog = log;
-  // 把调用方传入的 log（如 Electron 的 console.log 或测试的静默 log）挂到 logger 的监听器上，
-  // 与 mirrorConsole 解耦：mirrorConsole 管 console，监听器管调用方的 log。
+  // 把调用方传入的 log 挂到 logger 的监听器上，与 mirrorConsole 解耦：mirrorConsole
+  // 管 console，监听器管调用方的 log。
   //
-  // ⚠️ 递归护栏（15GB 日志事故根因）：
-  //   若调用方传入的 log 本身就是上一次 createApp 留下的 appLog
-  //   （同进程内二次 createApp：Electron 重启核心 / 测试串行多轮），
-  //   监听器链会形成 appLog→logger→监听器→appLog 的无限递归，
-  //   每轮递归给文本再包一层 [app] 前缀 —— 一条日志膨胀成几千条、
-  //   每条带几千个 [app] 前缀，几个小时内日志文件就能写到 15GB。
-  //   这里用 WeakSet 识别"这个 log 是不是 appLog"，是则跳过挂载。
-  //   （同时这也是为什么监听器必须用 forwardLog：形参 `log` 马上会被改指 appLog，
-  //   用它就等于把护栏自己绕过去了。）
-  // r92：持有退订函数。原实现把 logger.onLog 的返回值直接丢掉 —— 同进程二次
-  // createApp（Electron 重启核心 / 测试串行多轮）时旧监听器仍在：每条日志
-  // 广播 N 份、持有上一个 app 的 log 闭包（可能指向已销毁的窗口）。
+  // 递归护栏（15GB 日志事故根因）：调用方传入的 log 可能本身就是上一次 createApp
+  //   留下的 appLog（同进程内二次 createApp：Electron 重启核心 / 测试串行多轮），
+  //   监听器链会形成 appLog→logger→监听器→appLog 的无限递归，每轮再包一层 [app]
+  //   前缀，几个小时内日志文件就能写到 15GB。这里用 WeakSet 识别并跳过挂载。
+  //   （这也是为什么监听器必须用 forwardLog：形参 `log` 马上会被改指 appLog。）
+  // 同时持有退订函数：原实现把 logger.onLog 的返回值直接丢掉，同进程二次 createApp
+  // 时旧监听器仍在，每条日志广播 N 份，并持有上一个 app 的 log 闭包。
   let unsubscribeAppLog = null;
   if (!appLogFns.has(forwardLog)) {
     unsubscribeAppLog = logger.onLog((entry) => {
@@ -208,24 +187,22 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   const { acquireInstanceLock, releaseInstanceLock } = instanceLockModule;
   const lockResult = acquireInstanceLock();
   if (!lockResult.ok) {
-    // 不抛异常上抛让进程退出 —— 创建期的失败应当让整个启动失败。
+    // 不抛异常上抛让进程退出，创建期的失败应当让整个启动失败。
     throw new Error(`[单实例] ${lockResult.reason}。如需多开测试，请用不同的 QQ_AGENT_DATA_DIR。`);
   }
   /* 抢到锁后立刻注册退出清理：正常 exit / SIGINT / SIGTERM 都会释放锁文件。
-     曾经只在 stop() 里释放 —— 进程被直接杀掉（任务管理器结束、控制台叉掉）
-     时锁文件残留，下次启动要靠"PID 已死"探测才能清掉，多一层失败面。 */
+     曾经只在 stop() 里释放，进程被直接杀掉时锁文件残留，下次启动要靠"PID 已死"
+     探测才能清掉，多一层失败面。 */
   instanceLockModule.registerLockCleanup();
   const sseClients = new Set();
 
   /**
-   * 端口探测（**永不 reject**，失败一律 resolve(false)）。
+   * 端口探测（永不 reject，失败一律 resolve(false)）。
    *
-   * 为什么强调这一点（2026-10-17 加固）：这是 OneBot WS 端口就绪轮询的公共前置探测。
-   * 端口值来自 `config.protocol.wsUrl`（用户/协议端自己可能写坏）。实测
-   * `net.Socket.connect(99999 / -1 / NaN)` 会**同步抛** RangeError → Promise executor
-   * 抛 = 这个 Promise **reject** → 顺着 await 往外冒，轮询回调的 try/catch 会表现为
-   * 每 2 秒一行异常日志（快速恢复等于没了）。
-   * "端口写坏了"只应该等于"没开"，绝不该等于"功能全废"。
+   * 这是 OneBot WS 端口就绪轮询的前置探测，端口值来自用户可改的 `config.protocol.wsUrl`。
+   * `net.Socket.connect(99999 / -1 / NaN)` 会同步抛 RangeError → Promise reject →
+   * 顺着 await 往外冒，轮询回调每 2 秒刷一行异常日志。"端口写坏了"只应等于"没开"，
+   * 不该等于"功能全废"。
    */
   function isPortOpen(host, port, timeoutMs = 800) {
     return new Promise((resolve) => {
@@ -249,7 +226,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         socket.once('error', () => done(false));
         socket.once('close', () => { if (guard) clearTimeout(guard); });
         // 双保险：个别异常 socket 状态可能既不 error 也不 timeout（半开连接）。
-        // 到点直接判"没开" —— 探测本身绝不能成为卡住调用方的那一环。
+        // 到点直接判"没开"，探测本身绝不能成为卡住调用方的那一环。
         guard = setTimeout(() => done(false), timeoutMs + 500);
         guard.unref?.();
         socket.connect(p, h);
@@ -265,7 +242,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
 
   // ── 便携 QQ 进程管理 ──
   // 便携 QQ 与用户日常 QQ 完全隔离：独立安装目录 + 独立 user-data-dir。
-  // 绝不 taskkill QQ.exe 全名——只杀路径匹配 runtime/qq-portable 的进程。
+  // 绝不 taskkill QQ.exe 全名，只杀路径匹配 runtime/qq-portable 的进程。
   const qqPortableLogs = [];
   let qqPortableProc = null;
   let qqPortableLaunching = false;   // 便携 QQ 启动互斥标记（防连点「启动 QQ」并发拉起）
@@ -295,39 +272,22 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     return fs.existsSync(qqPortableExe());
   }
 
-  /** 列出所有 QQ.exe 进程，返回 [{ pid, path }]（Windows only） */
   /**
    * 列出所有 QQ.exe 进程，返回 [{ pid, path }]（Windows only）。
    *
-   * ── 这里踩过一个很隐蔽的坑，务必别再改回去 ──────────────────────────
-   * 原来首选 `wmic process ... /format:csv`。它有两个问题：
-   *
-   * 1. **编码**：wmic 按**系统 ANSI 代码页（中文系统是 GBK）**输出，
-   *    而 Node 按 UTF-8 读 —— 路径里的中文会变成乱码。
-   *    实测：`qq-agent - 副本` → `qq-agent - ????`。
-   *    于是拿乱码路径去和真实路径比，**永远比不上**，
-   *    表现就是"QQ 明明在跑，界面却说未启动"。
-   *    ⚠️ 纯英文路径下这个 bug 完全不暴露，所以特别难查。
-   * 2. **CSV**：路径里有逗号就会错位。
-   * 3. 而且 wmic 在 Win11 24H2+ 已被移除，本来也不能当主路径。
-   *
-   * 现在改用 PowerShell + **显式强制 UTF-8 输出** + JSON。
-   * ⚠️ 只写 PowerShell 是不够的：PS 5.1 默认同样按 ANSI 输出，
-   *    必须带上 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`
-   *    （这行是实测对比出来的，去掉就又是乱码）。
-   * 用 JSON 而不是 CSV，顺带解决逗号错位。
+   * 不能退回 `wmic process ... /format:csv`：它按系统 ANSI 代码页（中文系统是 GBK）
+   * 输出而 Node 按 UTF-8 读，路径里的中文会变乱码，拿去比对永远比不上（纯英文路径下
+   * 完全不暴露），表现为"QQ 明明在跑，界面却说未启动"；CSV 还会被路径里的逗号错位。
+   * 而且 wmic 在 Win11 24H2+ 已被移除。
+   * 现在用 PowerShell + 显式强制 UTF-8 输出 + JSON。PS 5.1 默认同样按 ANSI 输出，
+   * `[Console]::OutputEncoding=[Text.Encoding]::UTF8` 不能去掉。
    */
-  // R113：listQqProcesses 的短 TTL 缓存 + 在途共享。
+  // listQqProcesses 的短 TTL 缓存 + 在途共享。
   //
-  // 背景（用户 2026-10-14 实测复现）：用量页报「用量加载失败：请求超时（15 秒无响应）」。
-  // 逐接口计时发现根因不在统计接口（/api/usage/stats 实测 2ms，force 重算也只要 0.26s），
-  // 而在 /api/status —— 它每轮要 spawn 一次 PowerShell 查 QQ 进程列表（本机单次
-  // CIM 查询 ~1.5s：PS 5.1 启动 + CIM 冷缓存）。而 /api/status 是秒级轮询（渲染端
-  // 15s 轮询 + 每次 SSE 事件都 refreshStatus + 用量页的 Promise.all 也带它），
-  // 机器再忙一点（图片缓存/模型调用/全量重扫同时跑）就顶穿前端 15s 超时，
-  // 整个 Promise.all 连带统计接口一起挂 → 用户看到"用量页一直加载失败"。
-  //
-  // 3 秒 TTL：UI 状态显示允许 3 秒陈旧；在途共享避免并发调用叠出多个 PowerShell
+  // /api/status 是秒级轮询，而它每轮要 spawn 一次 PowerShell 查 QQ 进程列表
+  // （本机单次 CIM 查询 ~1.5s）。机器一忙就顶穿前端 15 秒超时，连带用量页的
+  // Promise.all 一起挂，用户看到"用量页一直加载失败"。
+  // 3 秒 TTL：UI 状态允许 3 秒陈旧；在途共享避免并发调用叠出多个 PowerShell
   // （force=true 只给"刚装完 QQ 要立刻看到结果"这类显式场景用）。
   let qqProcListCache = { at: 0, rows: null };
   let qqProcListInFlight = null;
@@ -348,7 +308,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     try { return await p; } finally { qqProcListInFlight = null; }
   }
 
-  /** 真正干活的单次查询（无缓存）。空结果也缓存 3s —— 失败的 spawn 同样是慢操作。 */
+  /** 真正干活的单次查询（无缓存）。空结果也缓存 3s，失败的 spawn 同样是慢操作。 */
   async function __listQqProcessesOnce() {
     if (process.platform !== 'win32') return [];
     const { execFile } = await import('node:child_process');
@@ -359,8 +319,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         '-NoProfile', '-NonInteractive', '-Command',
         '[Console]::OutputEncoding=[Text.Encoding]::UTF8; '
           + 'Get-CimInstance Win32_Process -Filter "name=\'QQ.exe\'" | '
-          // r105 搬运（自 v0.4.5）：连 CommandLine 一起取 —— 本机 QQ 模式下机器人的
-          //   QQ 和用户自己的 QQ 是同一个 exe 路径，靠命令行里的 --user-data-dir 区分。
+          // 连 CommandLine 一起取：本机 QQ 模式下机器人的 QQ 和用户自己的 QQ 是同一个
+          // exe 路径，靠命令行里的 --user-data-dir 区分。
           + 'Select-Object ProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress'
       ], { timeout: 20000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
       const txt = String(stdout).trim();
@@ -371,11 +331,11 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         .map((p) => ({
           pid: Number(p.ProcessId),
           path: String(p.ExecutablePath ?? ''),
-          cmd: String(p.CommandLine ?? '')   // r105 搬运：命令行，用于识别「机器人那份 QQ」
+          cmd: String(p.CommandLine ?? '')   // 命令行，用于识别「机器人那份 QQ」
         }))
         .filter((p) => p.pid > 0);
     } catch {
-      // 查不到就当没有。**不要**在这里退回 wmic —— 它给的乱码路径会导致
+      // 查不到就当没有。不要退回 wmic：它给的乱码路径会导致
       // "误判为别的 QQ"或"漏判本机的便携 QQ"，比返回空更糟。
       return [];
     }
@@ -383,7 +343,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
 
   /** 检查便携 QQ 是否在运行（按路径匹配，不碰用户 QQ） */
   async function qqPortableRunningPid() {
-    // 1) 本进程拉起过的那个：spawn 时就拿到 pid 了，不用查系统 ——
+    // 1) 本进程拉起过的那个：spawn 时就拿到 pid 了，不用查系统，
     //    最快，也不受任何编码/权限问题影响。
     if (qqPortableProc && !qqPortableProc.killed) {
       try {
@@ -391,11 +351,10 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         return qqPortableProc.pid;
       } catch { /* 已退出，往下走 */ }
     }
-    // 2) 查系统：覆盖"上次启动的 QQ 还在跑，但应用重启过"的情况
-    //    r105 搬运（自 v0.4.5 r90 判据）：我们启动 QQ 时一定带
-    //    --user-data-dir=<runtime/qq-portable-data>，命令行里含这个数据目录的
-    //    就是机器人那份 —— 与 exe 在哪儿无关（本机 QQ 模式下机器人和用户的
-    //    QQ 是同一个 exe 路径，只按路径匹配会永远显示"未运行"）。
+    // 2) 查系统：覆盖"上次启动的 QQ 还在跑，但应用重启过"的情况。
+    //    我们启动 QQ 时一定带 --user-data-dir=<runtime/qq-portable-data>，命令行里含
+    //    这个数据目录的就是机器人那份，与 exe 在哪儿无关（本机 QQ 模式下机器人和
+    //    用户的 QQ 是同一个 exe 路径，只按路径匹配会永远显示"未运行"）。
     //    便携模式旧行为（按安装目录前缀匹配）保留为兜底。
     const procs = await listQqProcesses();
     const dataDir = qqPortableDataDir().toLowerCase();
@@ -407,11 +366,10 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   }
 
   /**
-   * 启动机器人的 QQ（r105 搬运，自 v0.4.5 r90/r100 版本）。
+   * 启动机器人的 QQ。
    *
-   * ── r90 语义 ────────────────────────────────────────────────────────
-   * 便携副本优先；没有便携副本时**直接用本机已装的 QQ**（不再强制复制
-   * 1~2GB）。隔离靠 --user-data-dir：不管 exe 在哪儿，登录数据都写进
+   * 便携副本优先；没有便携副本时直接用本机已装的 QQ（不强制复制 1~2GB）。
+   * 隔离靠 --user-data-dir：不管 exe 在哪儿，登录数据都写进
    * runtime/qq-portable-data，与用户日常 QQ 互不干扰。
    */
   async function launchPortableQQ() {
@@ -536,8 +494,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   }
 
   /**
-   * QQ 内核状态摘要（r105 搬运，自 v0.4.5 r90 版本）。
-   * `ready` = **有能启动的 QQ**：便携副本装了 ✔ 或本机检测到 QQ ✔。
+   * QQ 内核状态摘要。
+   * `ready` = 有能启动的 QQ：便携副本装了，或本机检测到 QQ。
    * `source` 告诉前端当前走的是哪一种（'portable' | 'local' | 'none'）。
    * @param {{force?: boolean}} opts ?force=1 跳过本机 QQ 探测的 30s 缓存
    */
@@ -550,22 +508,21 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       pid,
       dir: target.dir || qqPortableDir(),
       dataDir: qqPortableDataDir(),
-      // r52：一键安装的实时进度（前端轮询 /api/status 读这里显示「复制中 n/m」）
+      // 一键安装的实时进度（前端轮询 /api/status 读这里显示「复制中 n/m」）
       setup: { ...qqSetupState },
-      // r89/r90：探测到本机 QQ（= 用户日常用的那个 QQ）时的路径
+      // 探测到本机 QQ（= 用户日常用的那个 QQ）时的路径
       localQqDir: target.source === 'local' ? target.dir : null,
-      // r90：'portable' 用独立副本 / 'local' 用本机 QQ / 'none' 都没有
+      // 'portable' 用独立副本 / 'local' 用本机 QQ / 'none' 都没有
       source: target.source,
-      // 独立副本装没装 —— 决定 UI 要不要显示「装一份独立副本（可选）」
+      // 独立副本装没装，决定 UI 要不要显示「装一份独立副本（可选）」
       portableInstalled: qqPortableReady(),
-      // r132：版本核对（status: 'ok' | 'mismatch' | 'unknown'，detail 带下一步话术）
     };
   }
 
-  /* ── r105 搬运（自 v0.4.5）：本机 QQ 探测 + 一键安装便携 QQ ─────────── */
+  /* ── 本机 QQ 探测 + 一键安装便携 QQ ─────────────────────────────── */
 
   /**
-   * 解析「机器人实际要启动的那份 QQ」（r90 核心）。
+   * 解析「机器人实际要启动的那份 QQ」。
    * 便携副本优先，本机已装的 QQ 直接算通过。
    * @returns {{dir:string|null, exe:string|null, source:'portable'|'local'|'none'}}
    */
@@ -610,8 +567,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   const QQ_REG_VALUES = ['InstallLocation', 'DisplayIcon', 'InstallDir', 'InstallPath', 'Path'];
 
   /** 由环境变量推出的 QQNT 常见目录。
-   *  ⚠️ 一律不写死盘符：ProgramFiles / LOCALAPPDATA / SystemDrive 都是运行时取的，
-   *     所以系统装在哪个盘、QQ 装的是"全机器"还是"仅当前用户"都能覆盖到。 */
+   *  不写死盘符：ProgramFiles / LOCALAPPDATA / SystemDrive 都是运行时取的，
+   *  所以系统装在哪个盘、QQ 装的是"全机器"还是"仅当前用户"都能覆盖到。 */
   function envBasedQqDirs() {
     const out = [];
     for (const root of [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.ProgramW6432]) {
@@ -623,7 +580,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     return out;
   }
 
-  /** 枚举本机硬盘盘符（如 ['C:\\','D:\\']）。失败返回空数组 —— 探测整体不该因此失败。 */
+  /** 枚举本机硬盘盘符（如 ['C:\\','D:\\']）。失败返回空数组，探测整体不该因此失败。 */
   async function listFixedDrives() {
     try {
       const { execFile } = await import('node:child_process');
@@ -633,8 +590,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         '[Console]::OutputEncoding=[Text.Encoding]::UTF8; '
           + 'Get-PSDrive -PSProvider FileSystem | Select-Object -ExpandProperty Root'
       ], { timeout: 6000, windowsHide: true });
-      // 只保留盘符形式（如 C:\ 或 D:\）。映射的网络驱动器路径会被这里滤掉 ——
-      // 对断开的网络盘做 existsSync 可能长时间阻塞，不值得为它冒险。
+      // 只保留盘符形式（如 C:\ 或 D:\）。映射的网络驱动器会被这里滤掉，
+      // 对断开的网络盘做 existsSync 可能长时间阻塞。
       return String(stdout).split(/\r?\n/)
         .map((x) => x.trim())
         .filter((x) => /^[A-Za-z]:[\\/]?$/.test(x));
@@ -654,16 +611,15 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
 
   /** 探测一次本机 QQNT 安装目录（无缓存）。
    *
-   *  ⚠️ 这里**不允许**再出现写死盘符的路径（原实现硬编码了 C:\\ / D:\\ 五条，
-   *     换台机器、或把 QQ 装到别的盘/用户目录就整个失效）。
-   *     现在按「注册表 → 环境变量 → 枚举盘符」三级兜底，只拼相对片段 Tencent\\QQNT。 */
+   *  不允许出现写死盘符的路径（原实现硬编码了 C:\\ / D:\\ 五条，换台机器或把 QQ
+   *  装到别的盘就整个失效）。现在按「注册表 → 环境变量 → 枚举盘符」三级兜底，
+   *  只拼相对片段 Tencent\\QQNT。 */
   async function detectLocalQqDirOnce() {
-    // QQNT 只有 Windows 版：注册表（HKLM/HKCU）、Get-PSDrive、%ProgramFiles% 全是
-    // Windows 语义，非 Windows 上直接短路，别白跑三次 reg query 再返回 null。
+    // QQNT 只有 Windows 版：注册表、Get-PSDrive、%ProgramFiles% 全是 Windows 语义，
+    // 非 Windows 上直接短路，别白跑三次 reg query 再返回 null。
     if (process.platform !== 'win32') return null;
     const candidates = [];
-    // ── ① 注册表：三种视图都查（原实现只查 WOW6432Node，64 位安装与"仅当前用户"
-    //       两种安装方式都查不到）──
+    // ── ① 注册表：三种视图都查（只查 WOW6432Node 会漏掉 64 位安装与"仅当前用户"）──
     try {
       const { execFile } = await import('node:child_process');
       const { promisify } = await import('node:util');
@@ -716,7 +672,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   }
 
   /** 唤起便携 QQ 主窗口（NTQQ 启动后不自动弹窗，新手找不到登录入口）。
-   *  按 pid 枚举它名下**有标题的顶层窗口**（隐藏的也要枚举 —— NTQQ「关闭窗口」
+   *  按 pid 枚举它名下有标题的顶层窗口（隐藏的也要枚举，NTQQ「关闭窗口」
    *  是 SW_HIDE），最小化的 SW_RESTORE、隐藏的 SW_SHOW，再 SetForegroundWindow 置前。 */
   async function showPortableQQ() {
     if (process.platform !== 'win32') {
@@ -780,8 +736,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   }
 
   /**
-   * 一键安装便携 QQ（r52/r105）：从本机已安装的 QQNT 复制一份。
-   * 复制本机安装目录即完成安装。**源目录只读**，绝不写用户 QQ 一个字节。
+   * 一键安装便携 QQ：从本机已安装的 QQNT 复制一份。
+   * 源目录只读，绝不写用户 QQ 一个字节。
    * @param {{sourceDir?: string}} opts
    */
   async function setupPortableQQFromLocal(opts = {}) {
@@ -835,12 +791,11 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
 
   const emit = (type, payload) => {
     // 桌宠只关心"连接状态 / 会话状态"这几类事件（用于状态气泡与成就统计）。
-    // 这是直接调用，不是插件 hook —— 桌宠抛错绝不能影响群聊主链路。
+    // 这是直接调用，不是插件 hook，桌宠抛错绝不能影响群聊主链路。
     if (type === 'onebot-status' || type === 'status' || String(type).startsWith('session-')) {
       try { getDesktopPetService()?.onCoreEvent?.(type, payload); } catch { /* 桌宠异常不影响群聊 */ }
     }
-    // 说明：这里曾经先走一个进程内事件总线（createEventBus），但全项目**没有任何订阅者**，
-    // 属于纯空转；更糟的是它给人"存在进程内订阅者"的错觉。真正的消费者只有 SSE。
+    // 这里不设进程内事件总线：全项目没有任何订阅者，真正的消费者只有 SSE。
     let line = null;
     if (type === 'session-update' && payload?.sessionId) {
       try {
@@ -861,10 +816,9 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
             trigger: s.triggerSummary ?? '',
             triggerSummary: s.triggerSummary ?? '',
             messages: s.messages ?? [],
-            // sent/finishReason/error/endedAt 必须随 SSE 推下去：
-            // 曾经载荷里没有它们，"已发送到 QQ"徽标只能等 HTTP 轮询带回来；
-            // 而会话一结束轮询就不再拉详情（只刷 running/waiting），
-            // 用户只能手动刷新才看得到最终发言 —— 这就是"详情更新不及时"。
+            // sent/finishReason/error/endedAt 必须随 SSE 推下去：会话一结束轮询就
+            // 不再拉详情（只刷 running/waiting），载荷里没有它们的话，"已发送到 QQ"
+            // 徽标要等用户手动刷新才看得到。
             sent: s.sent ?? [],
             finishReason: s.finishReason ?? null,
             error: s.error ?? null,
@@ -918,15 +872,14 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   /**
    * 把协议端（SnowLuma）配置文件里的端点/令牌填进 config，并立即重连。
    *
-   * 什么时候用（2026-10-24）：
-   *   · 首次启动、两个令牌都为空 → 启动后自动跑一次（见 start() 里的首次探测）；
-   *   · 连接页「自动读取协议端配置」/「装好并登录了，重新检测」→ 手动触发。
+   * 调用时机：首次启动两个令牌都为空时自动跑一次；连接页「自动读取协议端配置」/
+   * 「装好并登录了，重新检测」手动触发。
    *
    * 三条硬约束：
-   *   ① **只补空字段**（force 除外）：用户手填过令牌就以用户为准，绝不被探测结果覆盖；
-   *   ② 地址只在"当前端口没开、探测到的端口在开"时才改 —— 避免把特意指向
-   *      另一个实例（NapCat / 双开 / 改过端口）的地址改回默认；
-   *   ③ 返回值不含令牌（它要经 /api 回到渲染层），失败只给原因不抛。
+   *   ① 只补空字段（force 除外）：用户手填过令牌就以用户为准，不被探测结果覆盖；
+   *   ② 地址只在"当前端口没开、探测到的端口在开"时才改，避免把特意指向另一个实例
+   *      （NapCat / 双开 / 改过端口）的地址改回默认；
+   *   ③ 返回值不含令牌（要经 /api 回到渲染层），失败只给原因不抛。
    *
    * @param {{force?: boolean, dir?: string}} opts
    */
@@ -945,9 +898,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     const curWs = String(cur.accessToken || '').trim();
     const curHttp = String(cur.httpAccessToken || '').trim();
     if (hit.accessToken && (force || !curWs)) next.accessToken = hit.accessToken;
-    // ⚠️ HTTP 令牌必须单独填：OneBotClient 的兜底是 `httpAccessToken || accessToken`，
-    //    只在那两枚恰好相同时才成立。SnowLuma 默认两枚**不同**，拿 WS 那枚顶上照样 401
-    //    （本次排障就是这么来的）。
+    // HTTP 令牌必须单独填：OneBotClient 的兜底 `httpAccessToken || accessToken`
+    // 只在两枚恰好相同时成立。SnowLuma 默认两枚不同，拿 WS 那枚顶上照样 401。
     if (hit.httpAccessToken && (force || !curHttp)) next.httpAccessToken = hit.httpAccessToken;
 
     const view = protocolDetectView(hit);
@@ -965,7 +917,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         httpToken: saved.protocol?.httpAccessToken
       });
     } catch (error) {
-      // 配置已落盘，只是本次重连没跑起来 —— 如实说，别假装成功
+      // 配置已落盘，只是本次重连没跑起来，如实说，别假装成功
       return { ok: true, ...view, applied: false, reason: `已保存，但重连没跑起来：${error?.message ?? error}` };
     }
     return { ok: true, ...view, applied: true, changed: Object.keys(next) };
@@ -978,36 +930,31 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   const communitySyncTimer = startCommunitySync(log);
   communitySyncTimer.unref?.();
 
-  // 前缀缓存保活：默认开启（2026-10-15 用户要求；会主动联网，开关改动无需重启）。
-  // 放在这里是为了让它在 orchestrator / 插件加载之前就位 —— 保活构造前缀要用到
-  // skillManager 的当前状态，而它晚于本行加载；所以首次 tick 延迟 20 秒兜住。
+  // 前缀缓存保活：默认开启（会主动联网，开关改动无需重启）。
+  // 保活构造前缀要用到 skillManager 的当前状态，而它晚于本行加载，所以首次 tick
+  // 延迟 20 秒兜住。
   const cacheWarm = startCacheWarm(log);
 
-  // 启动即预热（2026-09-20）：保活原先只能等"本次运行"构造出前缀才知道要预热什么，
-  // 于是**每个会话的第一次调用永远赶不上预热**（实测 11:12:17 首次调用命中 32%，
-  // 而预热 11:12:34 才发出）。这里在启动时载入上次运行落盘的前缀，直接暖一次 ——
-  // 第一条群消息的调用就能命中。插件还没加载完，所以延迟 15 秒等 skillManager 就位。
+  // 启动即预热：保活只能等"本次运行"构造出前缀才知道要预热什么，于是每个会话的
+  // 第一次调用永远赶不上预热。这里在启动时载入上次运行落盘的前缀，直接暖一次。
+  // 插件还没加载完，所以延迟 15 秒等 skillManager 就位。
   //
-  // ⚠️ R1（2026-10-12）：重启后第一条**仍然会掉**（实测 cached=3200 = 20%）。
-  //    原因不是"没预热"，而是**预热的前缀形状与真实调用不同**：
-  //    loadPersistedPrefix 载入的是「上次运行」的 system+tools，而本次运行的
-  //    代码/工具集可能已经变了（如刚改过 prompt.js / 装了新扩展）→ 预热写的是
-  //    旧形状的缓存，真实调用用的是新形状 → 必然错位一次。
-  //    修法：预热完成后把**预热用的形状**登记为「已预热形状」，并让真实运行的
-  //    noteRealPrompt 在形状变化时自动补一次预热（见 cache-warm.js 的
-  //    noteShapeChange）。这样重启后的第一枪落在「上一次真实形状」上，
-  //    第二枪时形状已对齐。
+  // 重启后第一条仍然会掉：原因不是没预热，而是预热的前缀形状与真实调用不同。
+  // loadPersistedPrefix 载入的是「上次运行」的 system+tools，本次运行的代码/工具集
+  // 可能已经变了，于是预热写的是旧形状的缓存、真实调用用的是新形状，必然错位一次。
+  // 修法：预热完成后把预热用的形状登记为「已预热形状」，并让 noteRealPrompt 在形状
+  // 变化时自动补一次预热（见 cache-warm.js 的 noteShapeChange）。这样重启后的第一枪
+  // 落在「上一次真实形状」上，第二枪时形状已对齐。
   {
     const bootWarm = setTimeout(async () => {
       try {
         // 优先用落盘的前缀；没有（首次安装/刚清过数据）就从会话存档里借一份。
-        // 少了这条兜底，"启动预热"在第一次重启后永远没有样本 —— 而第一次调用
-        // 恰恰是最需要它的那一次。
+        // 少了这条兜底，启动预热在第一次重启后永远没有样本，而第一次调用恰恰最需要它。
         const ok = loadPersistedPrefix() || seedPrefixFromSessions();
         if (!ok) return;
         const r = await warmOnce({ log });
         if (r.ok) {
-          markCurrentShapeWarmed();   // R1：登记"这份形状已预热"，避免重复预热
+          markCurrentShapeWarmed();   // 登记"这份形状已预热"，避免重复预热
           if (r.dedup) log(`[cache-warm] 启动预热跳过（${r.reason}）`);
           else log(`[cache-warm] 启动预热完成（${r.prompt} tok，命中 ${r.cached}）`);
         }
@@ -1044,31 +991,30 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       let quoteCap = 120;
       let fwdMid = null;
       if (Array.isArray(msg?.message)) {
-        // 2026-10-21：以前这里只有 text 段原样透传，其余一律 `[类型名]` —— 于是引用
-        // 一条合并转发时，引用块里出现的是字面量 `[forward]`。模型看不懂这个英文占位，
-        // 只看见"forward"就以为手上有条没展开的转发，转头拿**外层消息**的 mid 去调
-        // read_forward（引用块里并没有给被引用消息的 mid），协议端当然拉不到 →
-        // 用户看到的是「展开失败：OneBot get_forward_msg 失败：retcode=100」。
+        // 以前这里只有 text 段原样透传，其余一律 `[类型名]`，于是引用一条合并转发时
+        // 引用块里出现字面量 `[forward]`。模型看不懂这个英文占位，转头拿外层消息的 mid
+        // 去调 read_forward（引用块里没有被引用消息的 mid），协议端拉不到 →
+        // 「展开失败：OneBot get_forward_msg 失败：retcode=100」。
         // 现在统一走 segmentsToText，占位符与正文同口径：[图片]/[表情]/[合并转发聊天记录]。
         // includeReply:false 是为了不递归（被引用的消息里可能还有引用）。
         text = await segmentsToText(msg.message, { includeReply: false });
-        // 07:57 再补一层：被引用的那条本身是合并转发时，只给占位符仍然没用 ——
-        // 模型知道"这儿有条转发"，却拿不到它的 mid（引用块只带正文），只能拿外层消息
-        // 去试 read_forward，试一次失败一次。就地展开塞进引用块，模型直接读到内容，
-        // 根本不用调工具。展开不了（转发被服务端丢了）就保留占位符，退路仍是 read_forward。
+        // 被引用的那条本身是合并转发时，只给占位符仍然没用：模型知道这儿有条转发，
+        // 却拿不到它的 mid（引用块只带正文），只能拿外层消息去试 read_forward，
+        // 试一次失败一次。就地展开塞进引用块，模型直接读到内容，根本不用调工具。
+        // 展开不了（转发被服务端丢了）就保留占位符，退路仍是 read_forward。
         if (msg.message.some((s) => String(s?.type ?? '') === 'forward')) {
           try {
             // 4s 上限：这是 ingest 热路径，协议端要是卡住，不能连带把整条入库队列拖死。
             const nodes = await fetchForwardNodes(onebot, messageId, msg.message, 4000);
             const ex = await expandForwardNodes(nodes);
-            // 引用块是拼在一行里的（`[引用 名字(QQ:x)：正文]`），换行会把整条消息的行结构拆散，
-            // 所以展开出来的多条节点压成一行，用「 / 」隔开。
+            // 引用块是拼在一行里的（`[引用 名字(QQ:x)：正文]`），换行会把整条消息的行结构
+            // 拆散，所以展开出来的多条节点压成一行，用「 / 」隔开。
             if (ex?.text) {
               text = ex.text.replace(/\s*\n\s*/g, ' / ');
               quoteCap = 300;
-              // 08:05 又踩一次：内容截到 300 字以后，模型看到「共 6 条」还想看全，
-              // 但它手上只有**引用者**那条的 #数字，拿去展开必然"不是合并转发"。
-              // 把**被引用消息自己**的 mid 带回引用块，模型要展开时填这个才对得上。
+              // 内容截到 300 字以后，模型看到「共 6 条」还想看全，但它手上只有引用者
+              // 那条的 #数字，拿去展开必然"不是合并转发"。把被引用消息自己的 mid 带回
+              // 引用块，模型要展开时填这个才对得上。
               fwdMid = String(messageId);
             }
           } catch { /* 保留占位符 */ }
@@ -1076,8 +1022,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       } else if (typeof msg?.message === 'string') {
         text = msg.message;
       }
-      // senderId 一并带回：引用块显示为 名字(QQ:xxx)，与发言人标签同口径 ——
-      // 没有它，模型分不清引用的是"哪个张三"
+      // senderId 一并带回：引用块显示为 名字(QQ:xxx)，与发言人标签同口径，
+      // 没有它模型分不清引用的是哪个张三
       return { sender: String(senderName), senderId: String(msg?.sender?.user_id ?? ''), mid: fwdMid, text: String(text).slice(0, quoteCap) };
     } catch {
       return null;
@@ -1092,7 +1038,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     const senderId = String(event.sender?.user_id ?? event.user_id ?? '');
     const senderName = String(event.sender?.card || event.sender?.nickname || senderId || '');
 
-    // 屏蔽名单：被屏蔽群员的消息直接丢弃 —— 不存档、不触发会话、不进提示词背景。
+    // 屏蔽名单：被屏蔽群员的消息直接丢弃，不存档、不触发会话、不进提示词背景。
     // 放在最前面：连合并转发展开这种网络请求都不值得为它做。
     // 两道屏蔽：全局（所有群+私聊）优先，其次按群。
     if (senderId) {
@@ -1115,18 +1061,16 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     }
 
     // 合并转发：占位符 → 展开真实内容（模型要读懂、看懂转发的聊天记录）
-    // ⚠️ 别退回"只传 message_id"（2026-10-21 又踩了一次）：本机协议端（SnowLuma/NapCat）的
-    // get_forward_msg 只在 message_id > 0 时才替我们解析 forward 段 id，负数 id
-    // （QQ NT 里很常见）会被原样当 res_id 去拉 → "payload is empty"，转发全挂。
-    // fetchForwardNodes 会优先用 forward 段自带的 id（等价于协议端内部解析，
-    // 不受正负限制），拿不到才退回 message_id。详见 onebot.js 该函数注释。
-    // 媒体里的 url 此时是新鲜的，一并收进 media（取图/金句都能用）。
+    // 别退回"只传 message_id"：本机协议端（SnowLuma/NapCat）的 get_forward_msg 只在
+    // message_id > 0 时才替我们解析 forward 段 id，负数 id（QQ NT 里很常见）会被原样
+    // 当 res_id 去拉 → "payload is empty"，转发全挂。fetchForwardNodes 优先用 forward
+    // 段自带的 id（等价于协议端内部解析，不受正负限制），拿不到才退回 message_id。
+    // 详见 onebot.js 该函数注释。媒体里的 url 此时是新鲜的，一并收进 media。
     // 展开失败时占位符留在存档里，模型可用 read_forward 工具稍后重试。
-    // ⚠️ 2026-10-21：判据**必须**看"这条消息自己的段里有没有 forward"，不能用
-    //    `text.includes('[合并转发')`。引用块现在会把被引用转发的正文就地内联，
-    //    于是"引用了一条转发"的普通消息，text 里同样含 `[合并转发 共N条]` ——
-    //    用文本判据会让它每次白跑一趟 fetchForwardNodes，再被 NOT_FORWARD 守卫拒掉，
-    //    日志里留一句误导性的"展开合并转发失败"（21 日 07:57:08 / 07:59:38 实证）。
+    // 判据必须看"这条消息自己的段里有没有 forward"，不能用 `text.includes('[合并转发')`：
+    // 引用块会把被引用转发的正文就地内联，于是"引用了一条转发"的普通消息 text 里同样含
+    // `[合并转发 共N条]`，用文本判据会让它每次白跑一趟 fetchForwardNodes，再被
+    // NOT_FORWARD 守卫拒掉，日志里留一句误导性的"展开合并转发失败"。
     const hasOwnForward = Array.isArray(segments)
       && segments.some((s) => String(s?.type ?? '') === 'forward');
     if (hasOwnForward && event.message_id != null) {
@@ -1138,14 +1082,13 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
           if (ex.media?.length) media.push(...ex.media);
         }
       } catch (e) {
-        // ⚠️ 2026-10-21：这里原先只有一句笼统的"展开合并转发失败"，把两类完全不同的
-        //    故障混成了一条日志，排查时指不到真原因。实测两类：
-        //    ① NOT_FORWARD —— 我们自己的判据问题（已在上面用 hasOwnForward 修掉，
-        //       现在走到这里基本不可能；留着分支是为了万一复发能一眼认出来）；
-        //    ② retcode=100 / "payload is empty" —— **上游协议端拿不到长消息内容**。
-        //       合并转发的长消息在服务器侧有保留期，过期或无权读取就返回空载荷
-        //       （协议端侧 SsoRecvLongMsg 的 result.payload 为空，我们改不动）。
-        //       这类失败重试也没用，话术要让用户知道"是这条转发读不了"，而不是"程序坏了"。
+        // 两类完全不同的故障不能混成一条日志，否则排查时指不到真原因：
+        // ① NOT_FORWARD，我们自己的判据问题（已用 hasOwnForward 修掉，留着分支
+        //    是为了万一复发能一眼认出来）；
+        // ② retcode=100 / "payload is empty"，上游协议端拿不到长消息内容。合并转发
+        //    的长消息在服务器侧有保留期，过期或无权读取就返回空载荷（协议端侧
+        //    SsoRecvLongMsg 的 result.payload 为空，我们改不动）。这类失败重试没用，
+        //    话术要让用户知道"是这条转发读不了"，而不是"程序坏了"。
         const errMsg = String(e?.message ?? e);
         if (e?.code === 'NOT_FORWARD') {
           log(`[ingest] 展开合并转发被跳过（判据判定为非转发，属预期）: ${errMsg}`);
@@ -1160,8 +1103,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     if (!text && !media.length) return;
 
     // ── 图片入库缓存 ──
-    // QQ(NTQQ) 的图片下载链接带 rkey 签名，**几分钟内就失效**（实测入库 48 秒后
-    // get_message_images 去下载就 400，官方错误体 "download url has expired"）——
+    // QQ(NTQQ) 的图片下载链接带 rkey 签名，几分钟内就失效（实测入库 48 秒后
+    // get_message_images 去下载就 400，官方错误体 "download url has expired"），
     // 模型只能回"这张读不出来"。入库这一刻 url 是新鲜的，所以在这里就地排队下载
     // （image-cache.js 后台串行，不阻塞 ingest），看图工具优先读本地缓存。
     if (media.length) {
@@ -1182,10 +1125,9 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       text: text || '[图片]' ,
       media
     });
-    // 「收到消息」事件点（onMessage 钩子）：**每条**消息都经过这里 ——
-    // 确定性扩展（反撤回缓存、开发工单的「开发 xxx」识别）不能依赖"参与度判定放行"
-    // 这个不确定条件（2026-10-08：这条调用原先缺失 —— 反撤回的 onMessage 一直在空转，
-    // 开发工单的指令也只有在"恰好被唤醒"时才可能被看见）。
+    // 「收到消息」事件点（onMessage 钩子）：每条消息都经过这里。确定性扩展（反撤回缓存、
+    // 开发工单的「开发 xxx」识别）不能依赖"参与度判定放行"这个不确定条件，否则反撤回的
+    // onMessage 会一直空转，开发工单的指令也只有在"恰好被唤醒"时才可能被看见。
     // send：把"话筒"递给插件（开发模式的回信直接走统一发送队列：限频/去重/切分/留档）。
     try {
       await skillManager.runHook('onMessage', {
@@ -1194,20 +1136,20 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         senderId,
         senderName,
         text: text || '',
-        // 契约字段（CORE-PATCH.md）：onebot/sender/store/log/sendSegments —— 与 onRecall 同款。
+        // 契约字段（CORE-PATCH.md）：onebot/sender/store/log/sendSegments，与 onRecall 同款。
         onebot,
         sender,
         store,
         log,
         sendSegments: (k, id2, segs) => onebot.sendSegments(k, id2, segs),
-        // opts 可选透传（如 { dedupe: false }）—— 给"进度提示"这类本就该重复的内容用。
-        // 不传时行为与以前完全一致（走默认去重）。
+        // opts 可选透传（如 { dedupe: false }），给"进度提示"这类本就该重复的内容用。
+        // 不传时走默认去重。
         send: (messages, opts) => sender.sendTextBatch(`${kind}:${id}`, Array.isArray(messages) ? messages : [String(messages)], opts || {})
       });
     } catch { /* 单个钩子出错由管理器隔离并记日志，这里不阻断 ingest */ }
     // ── 开发模式让路：由 dev-orders 提供 dev.route 能力表态 ──
     // 这条消息若已被开发会话接走（白名单 + 开发模式中），普通人格不再插嘴：
-    // 标记已读（与"不响应"路径同款）、只广播 chat-update（消息照常留档、UI 可见）。
+    // 标记已读、只广播 chat-update（消息照常留档、UI 可见）。
     let handledByDev = false;
     try {
       const ck = `${kind}:${id}`;
@@ -1229,7 +1171,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     emit('chat-update', `${kind}:${id}`);
     orchestrator.onIncoming(`${kind}:${id}`);
 
-    // 链接媒体转发（确定性）：刻意不 await —— 百兆级下载/上传不能卡住 ingest 热路径。
+    // 链接媒体转发（确定性）：刻意不 await，百兆级下载/上传不能卡住 ingest 热路径。
     // 内部已把错误全部收口（含 provider 抛错），这里再挂一次 catch 只为防漏网。
     forwardLinkedMedia(kind, id, text).catch((e) => log(`[media] 链接转发失败：${e?.message ?? e}`));
   }
@@ -1243,9 +1185,9 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     if (!cm || cm.enabled !== true) return;
     const command = String(cm.command || '').trim();
     if (!command) return;
-    // 必须同条消息里既 @机器人 又含指令
-    // ⚠️ 走统一的 isAtMe（QQ 号优先）：此前这里只比对名字，而群昵称（群名片）
-    //    与配置里的 botName/selfNickname 不一致时会漏判，导致禁言指令失效。
+    // 必须同条消息里既 @机器人 又含指令。
+    // 走统一的 isAtMe（QQ 号优先）：只比对名字的话，群名片与配置里的 botName /
+    // selfNickname 不一致时会漏判，禁言指令失效。
     const atMe = isAtMe(text, {
       selfId: onebot.selfId,
       botName: getConfig().persona?.botName || '',
@@ -1256,10 +1198,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     // 设置禁言：durationMin>0 则到期时间戳，否则 0（直到手动解除）
     const durationMs = Math.max(0, Number(cm.durationMin) || 0) * 60000;
     const until = durationMs > 0 ? Date.now() + durationMs : 0;
-    // 2026-10-17（报告3 M4）：改走 updateConfig 的**函数式入口** —— 读当前 active
-    // 与写回同一个同步块，结构上不可能被并发的另一次禁言/解禁覆盖。
-    // （原写法读 getConfig() 与 updateConfig() 之间也没有 await，本就不竞态；
-    //   换成函数式入口是为了让"原子"由接口保证，而不是靠调用点的写法。）
+    // 走 updateConfig 的函数式入口：读当前 active 与写回同一个同步块，结构上不可能被
+    // 并发的另一次禁言/解禁覆盖。
     updateConfig((cfg) => ({
       commandMute: { active: { __replace__: { ...(cfg.commandMute?.active || {}), [String(groupId)]: until } } }
     }));
@@ -1274,9 +1214,9 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
    * 确定性触发：消息里出现 B站/抖音链接 → 下载并转发。
    *
    * 与 LLM 型（注册工具）的区别正在这里：插件开着，条件满足就一定会跑，
-   * 模型想忽略也忽略不掉 —— 整条链路上没有任何"让模型决定"的环节。
+   * 模型想忽略也忽略不掉，整条链路上没有任何"让模型决定"的环节。
    *
-   * 一个提供者都不在（插件未装/未启用）时立刻返回 —— 零网络请求、零副作用。
+   * 一个提供者都不在（插件未装/未启用）时立刻返回，零网络请求、零副作用。
    * 调度细节（候选链接提取、多提供者协商、失败文案）在 src/media-links.js，
    * 那部分是纯逻辑、可被测试直接驱动；这里只负责从 skillManager 取提供者。
    */
@@ -1298,15 +1238,12 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     if (!allowed(isGroup ? 'group' : 'private', id, cfgNow)) return;
 
     const operatorId = String(event.user_id ?? '');
-    // 自己拍的拍（send_poke 的 OneBot 回显）不触发处理——与 message_sent 同理，发送时已留档
-    // ⚠️ 2026-10-16：判定用**事件自带的 self_id**（优先），回落到 onebot.selfId。
-    // 存档实证（2026-10-15）：onebot.selfId 曾不等于机器人真实 QQ（get_login_info
-    // 在协议端慢启动/切号期间拿到的是别的账号或空值）—— 后果是双向的：
+    // 自己拍自己（send_poke 的 OneBot 回显）不触发处理，与 message_sent 同理（发送时已留档）。
+    // 判定用事件自带的 self_id（优先），回落到 onebot.selfId：后者来自连接时的
+    // get_login_info，在协议端慢启动/切号期间可能为空或指向别的账号，用错的后果是双向的：
     //   ① 真被拍时文案写成"X 拍了拍 机器人名"而不是"我"，拍一拍召唤识别不到；
-    //   ② 若 selfId 恰好是群里某个普通成员的 QQ，**群友拍那个人时文案变成
-    //      "X 拍了拍 我"**，机器人误以为在拍自己、按 1 档响应 —— 用户反馈的
-    //     "拍别人时机器人总会认为在拍自己"。self_id 是每条事件自带的真值，
-    //     不依赖连接期的全局查询，才是"这次是谁的视角"的权威来源。
+    //   ② 若 selfId 恰好是群里某个普通成员的 QQ，群友拍那个人时文案变成"X 拍了拍 我"，
+    //     机器人误以为在拍自己、按 1 档响应。
     const evSelfId = String(event.self_id ?? '') || onebot.selfId;
     if (operatorId && operatorId === evSelfId) return;
     // 屏蔽名单对拍一拍同样生效（操作者是被屏蔽群员则丢弃）：全局优先，其次按群
@@ -1316,9 +1253,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     }
     const targetId = String(event.target_id ?? event.user_id ?? '');
     const selfId = evSelfId;
-    // 拍一拍也要记下真实群名片：原先这里硬编码"（拍一拍事件）"，
-    // 会覆盖同一 QQ 在普通消息里的真实昵称 —— 记忆整理时取名字会拿到这个占位符，
-    // 导致"某群友的名字叫（拍一拍事件）"这种脏数据。
+    // 拍一拍也要记下真实群名片：硬编码"（拍一拍事件）"会覆盖同一 QQ 在普通消息里的
+    // 真实昵称，记忆整理时取名字会拿到这个占位符，变成"某群友的名字叫（拍一拍事件）"。
     const chatKeyNow = `${isGroup ? 'group' : 'private'}:${id}`;
     let operatorName = isGroup ? ((await resolveAtName(id, operatorId)) || '') : '';
     if (!operatorName) {
@@ -1335,27 +1271,27 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     const notes = cfgNow.memberNotes || {};
     const opLabel = notes[operatorId] || operatorName || operatorId;
     // 私聊里"用户拍机器人"没有 target_id 时回落 user_id（= 操作者），文案会变成
-    // "拍了拍自己" —— 1v1 场景下能收到的拍一拍只可能是拍机器人，直接按"拍我"处理。
+    // "拍了拍自己"，1v1 场景下能收到的拍一拍只可能是拍机器人，直接按"拍我"处理。
     const pokeSelf = isGroup ? String(targetId) === String(selfId) : true;
     const tgtLabel = pokeSelf
       ? '我'
       : (notes[targetId] || targetName || targetId);
-    // 文案统一为「X 拍了拍 Y」视角（机器人被拍时 Y=我）。
-    // 旧文案"你拍了拍（来自 张三）"视角混乱（读起来像"我拍了别人"），
-    // 是机器人被拍时识别错乱的主因。名字带 QQ 号，与发言人标签同口径。
+    // 文案统一为「X 拍了拍 Y」视角（机器人被拍时 Y=我）。旧文案"你拍了拍（来自 张三）"
+    // 视角混乱（读起来像"我拍了别人"），是机器人被拍时识别错乱的主因。名字带 QQ 号，
+    // 与发言人标签同口径。
     const opWithId = String(operatorId) ? `${opLabel}(QQ:${operatorId})` : opLabel;
     const tgtWithId = (pokeSelf || !String(targetId)) ? tgtLabel : `${tgtLabel}(QQ:${targetId})`;
     // 群内"自己拍自己"（target_id 缺失回落成操作者，或真的自拍）→ "拍了拍自己"；
-    // 私聊没有群自拍语义 —— 缺 target_id 时回落值就是操作者，但 1v1 里能收到的
+    // 私聊没有群自拍语义，缺 target_id 时回落值就是操作者，但 1v1 里能收到的
     // 拍一拍只可能是拍机器人，走"拍了拍 我"分支（pokeSelf 已置 true）。
     const text = (operatorId === targetId && isGroup)
       ? `[拍一拍] ${opWithId} 拍了拍自己`
       : `[拍一拍] ${opWithId} 拍了拍 ${tgtWithId}`;
-    // 拍一拍是"轻量召唤"信号：作为触发批发给模型（isPoke 标记让档位判定
-    // 按 1 档响应），但**不进【过去状态】历史**——buildPastState 会跳过 isPoke，
-    // 存档里只留一条轻量记录（聊天记录页仍可见，模型历史里不出现）。
-    // ⚠️ 2026-10-16：同时落 pokeSelf 真值标记 —— 档位判定（"是不是拍我"）从此
-    // 不靠正则猜文本（被拍者名字以"我"开头时会误判），以入库时的身份判定为准。
+    // 拍一拍是"轻量召唤"信号：作为触发批发给模型（isPoke 标记让档位判定按 1 档响应），
+    // 但不进【过去状态】历史，buildPastState 会跳过 isPoke，存档里只留一条轻量记录
+    // （聊天记录页仍可见，模型历史里不出现）。
+    // 同时落 pokeSelf 真值标记：档位判定（"是不是拍我"）不靠正则猜文本
+    // （被拍者名字以"我"开头时会误判），以入库时的身份判定为准。
     store.appendIncoming(chatKeyNow, {
       mid: null,
       ts: event.time ? Math.round(Number(event.time) * 1000) : Date.now(),
@@ -1373,11 +1309,10 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   async function handleOneBotEvent(event) {
     if (!event || typeof event !== 'object') return;
     if (event.post_type === 'message' || event.post_type === 'message_sent') {
-      // 自己发的消息（message_sent / self_id 相同）不触发处理（发送时已自行记录）
-      // ⚠️ 2026-10-16：判定优先用事件自带的 self_id（每条事件的权威"这是谁的
-      // 视角"），回落到 onebot.selfId —— 后者来自连接时的 get_login_info，
-      // 在协议端慢启动/切号期间可能为空或指向别的账号，用错时机器人的
-      // 发言会被当群友消息入库、真群友的消息反被丢弃（与拍一拍同一根因）。
+      // 自己发的消息（message_sent / self_id 相同）不触发处理（发送时已自行记录）。
+      // 判定优先用事件自带的 self_id（每条事件的权威"这是谁的视角"），回落到
+      // onebot.selfId，后者在协议端慢启动/切号期间可能为空或指向别的账号，
+      // 用错时机器人的发言会被当群友消息入库、真群友的消息反被丢弃。
       const evSelfId = String(event.self_id ?? '') || onebot.selfId;
       if (String(event.user_id ?? event.sender?.user_id ?? '') === evSelfId) return;
       if (event.message_type === 'group' && event.group_id != null) return ingestMessage('group', String(event.group_id), event);
@@ -1392,17 +1327,17 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     if (event.post_type === 'notice' && (event.notice_type === 'group_recall' || event.notice_type === 'friend_recall')) {
       return handleRecall(event);
     }
-    // 群禁言通知（2026-10-22 F2）：OneBot group_ban —— 机器人自己被禁言/解禁的
-    // **权威事件源**。此前这条通知到达 app 后被当"不关心的事件"直接丢弃，
-    // ban-state 插件的两条写入来源（协议层通知 / 发送被拒兜底）双双落空，
-    // 唯一的查询兜底又被缓存架空 —— 2026-10-22 实测禁言 10 分钟烧 19.5 万 token。
+    // 群禁言通知（OneBot group_ban）：机器人自己被禁言/解禁的权威事件源。
+    // 这条通知曾被当"不关心的事件"直接丢弃，ban-state 插件的两条写入来源（协议层
+    // 通知 / 发送被拒兜底）双双落空，唯一的查询兜底又被缓存架空，实测禁言 10 分钟
+    // 烧 19.5 万 token。
     if (event.post_type === 'notice' && event.notice_type === 'group_ban' && event.group_id != null) {
       return handleGroupBan(event);
     }
     // 未识别的 notice / request：记一条 debug 落盘（默认级别 info 过滤掉，零噪音；
-    // 排障时把日志级别调到 debug 就能看见）。**静默丢弃是这次排查最大的障碍** ——
-    // group_ban 被丢了一年都没人发现，同类 bug（通知到了、没人处理、无痕迹）
-    // 从此在日志里可见。meta_event（心跳）除外，那条没有排查价值。
+    // 排障时把日志级别调到 debug 就能看见）。静默丢弃曾是排查最大的障碍，
+    // group_ban 被丢了一年都没人发现，同类 bug（通知到了、没人处理、无痕迹）从此
+    // 在日志里可见。meta_event（心跳）除外，那条没有排查价值。
     if ((event.post_type === 'notice' || event.post_type === 'request') && event.post_type !== 'meta_event') {
       logger.debug('app',
         `未处理的事件：post_type=${event.post_type}`
@@ -1417,12 +1352,11 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
    *
    * 协议端（SnowLuma）的转换口径（to-notice.ts convertGroupMute）：
    *   sub_type = duration > 0 ? 'ban' : 'lift_ban'，duration 为禁言秒数。
-   *   注意 OneBot v11 原语义里「ban 且 duration=0」也是解禁，一并按解禁处理。
+   *   OneBot v11 原语义里「ban 且 duration=0」也是解禁，一并按解禁处理。
    *
-   * 只认 **user_id === self_id** 的通知 —— 群友被禁言与机器人无关，
-   * 误把自己标成禁言会让整个群停止回复（2026-10-22 报告 P0 级风险）。
-   * self_id 用事件自带值优先，回落 onebot.selfId（与 message / poke 同口径，
-   * 慢启动/切号期间 get_login_info 可能为空或指向别的账号）。
+   * 只认 user_id === self_id 的通知：群友被禁言与机器人无关，误把自己标成禁言会让
+   * 整个群停止回复。self_id 用事件自带值优先，回落 onebot.selfId（与 message / poke
+   * 同口径，慢启动/切号期间 get_login_info 可能为空或指向别的账号）。
    */
   function handleGroupBan(event) {
     const evSelfId = String(event.self_id ?? '') || onebot.selfId;
@@ -1459,14 +1393,13 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       log(`[撤回] ${chatKey} 消息 #${mid} 已被撤回，后续不再发给模型`);
       emit('chat-update', chatKey);
     }
-    // onRecall 钩子：反撤回插件在这里把撤回的消息原文重发回群（2026-10-08 补的触发点）。
-    // 无论 store 里有没有标记成功都要发 —— 插件的缓存与 store 是两套记录。
-    // ⚠️ ctx 必须带齐 onebot/sender/store/log/sendSegments（2026-10-08 修）：
-    //   之前只传了 { chatKey, mid, event }，而 runHook 原样透传 ctx，于是
-    //   anti-recall 的 sendSegmentsSafe 三级回退全落空（ctx.onebot.call 抛
-    //   TypeError 被 catch 吞掉）→ 撤回时机器人毫无反应。见 CORE-PATCH.md 的契约。
-    //   段发送用 onebot.sendSegments —— SendQueue **没有**同名方法（只有
-    //   sendMedia/sendTextBatch），按 CORE-PATCH 原文写 sender.sendSegments 会 undefined。
+    // onRecall 钩子：反撤回插件在这里把撤回的消息原文重发回群。
+    // 无论 store 里有没有标记成功都要发，插件的缓存与 store 是两套记录。
+    // ctx 必须带齐 onebot/sender/store/log/sendSegments：runHook 原样透传 ctx，
+    // 缺任何一项都会让 anti-recall 的 sendSegmentsSafe 三级回退落空（ctx.onebot.call
+    // 抛 TypeError 被 catch 吞掉），撤回时机器人毫无反应。见 CORE-PATCH.md 的契约。
+    // 段发送用 onebot.sendSegments，SendQueue 没有同名方法（只有 sendMedia /
+    // sendTextBatch）。
     try {
       skillManager.runHook('onRecall', {
         event, chatKey, mid, onebot, sender, store, log,
@@ -1492,9 +1425,9 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   }
 
   // ── 请求体读取 ──────────────────────────────────────────────────────────
-  // 抛出的错误必须是**可暴露的 HTTP 错误**（带 .expose 标记），由 /api 分发层
-  // 统一转成 4xx。否则：JSON.parse 异常会冒成 500；"超限直接 throw" 会让没读完的
-  // socket 变脏 —— 客户端连接池下次复用这条连接就是 ECONNRESET。
+  // 抛出的错误必须是可暴露的 HTTP 错误（带 .expose 标记），由 /api 分发层统一转成
+  // 4xx。否则 JSON.parse 异常会冒成 500；"超限直接 throw" 还会让没读完的 socket
+  // 变脏，客户端连接池下次复用这条连接就是 ECONNRESET。
   const MAX_BODY_BYTES = 2 * 1024 * 1024;
   const HARD_BODY_LIMIT = 16 * 1024 * 1024;   // 超此值不再排空，直接断链
   function httpError(status, message) {
@@ -1532,9 +1465,9 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   }
 
   // ── 来源校验（CSRF / DNS rebinding 防护）────────────────────────────────
-  // 服务只监听回环，但**浏览器里的任意网页都能向 127.0.0.1 发简单请求**，
-  // 而 CORS 只挡"读响应"、挡不住"副作用"（改配置、暂停、重置数据…）。
-  // 所以所有 /api/* 都必须来自回环 Host；带 Origin/Referer 时必须同源。
+  // 服务只监听回环，但浏览器里的任意网页都能向 127.0.0.1 发简单请求，而 CORS 只挡
+  // "读响应"、挡不住"副作用"（改配置、暂停、重置数据…）。所以所有 /api/* 都必须来自
+  // 回环 Host；带 Origin/Referer 时必须同源。
   function isLoopbackHostHeader(host) {
     return /^127\.0\.0\.1(:\d+)?$/.test(host)
       || /^localhost(:\d+)?$/.test(host)
@@ -1545,36 +1478,28 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   function hasProvenance(req) {
     if (String(req.headers.origin ?? '')) return true;
     if (String(req.headers.referer ?? '')) return true;
-    // ⚠️ 2026-10-17 补：**本应用自己把 Referer 掐掉了**。
-    //   静态服务器给控制台页面发的是 `referrer-policy: no-referrer`
-    //   （见本文件 2818/2863 两处），所以页面里发的同源 fetch **永远不带 Referer**；
-    //   而同源 GET 也不带 Origin。于是"页面 fetch 有来源信息"这个前提在这里并不成立
-    //   （原注释写的就是这个假设，它已经被同一份代码里的 referrer-policy 推翻了）。
-    //   Sec-Fetch-Site 是浏览器强制标注的请求来源类别：页面脚本改不了、不受
-    //   referrer-policy 影响、curl 默认也不会发 —— 正好补上"请求确实出自我们自己的页面"。
-    //   安全性没有放宽：本机进程本来就能伪造 Referer（伪造 Sec-Fetch-Site 同理），
-    //   这里仍要再过 originAllowed() 的回环 Host 校验；密钥端点的强凭据是
-    //   keyEndpointAllowed() 里那个进程私有的渲染进程凭据。
+    // 本应用自己把 Referer 掐掉了：静态服务器给控制台页面发的是
+    // `referrer-policy: no-referrer`，页面里发的同源 fetch 永远不带 Referer，
+    // 同源 GET 也不带 Origin。Sec-Fetch-Site 是浏览器强制标注的请求来源类别，
+    // 页面脚本改不了、不受 referrer-policy 影响、curl 默认也不发，正好补上
+    // "请求确实出自我们自己的页面"。
+    // 安全性没有放宽：本机进程本来就能伪造 Referer（Sec-Fetch-Site 同理），
+    // 这里仍要再过 originAllowed() 的回环 Host 校验；密钥端点的强凭据是
+    // keyEndpointAllowed() 里那个进程私有的渲染进程凭据。
     if (String(req.headers['sec-fetch-site'] ?? '').toLowerCase() === 'same-origin') return true;
     return false;
   }
 
   /**
-   * @param {boolean} [opts.readOnly] 传入true 时表示这是一个**只读**请求
-   *   （GET/HEAD）。无来源信息时，只读请求放行、有副作用的请求拒绝。
+   * @param {boolean} [opts.readOnly] 传入 true 时表示这是一个只读请求（GET/HEAD）。
+   *   无来源信息时，只读请求放行、有副作用的请求拒绝。
    *
-   * ⚠️ 2026-10-07 审查修正：原实现对"无来源信息"一律放行，
-   *   理由写的是「留空 = 只监听 127.0.0.1」——**这个推理是错的**：
-   *   回环绑定只挡远程，**不挡本机上的任何进程**（非管理员即可）。
-   *   于是 `curl http://127.0.0.1:3210/api/api-key` 能读走明文主 API Key
-   *   （curl 不发 Origin/Referer → 命中最后一行放行），
-   *   /api/reset-data（删库）、/api/config（改配置）同理。
-   *
-   *   现在的规则：无来源信息（curl / 本机脚本 / 地址栏直达）时，
-   *   **只有只读请求放行**，任何有副作用的请求（POST/PUT/DELETE/PATCH）
-   *   一律拒绝。这样既关掉了本机进程的越权面，
-   *   又不影响控制台正常使用 —— 页面里的 fetch 虽然是同源，
-   *   但浏览器会带 Referer（有来源信息），走的是上面两条正常校验。
+   * 回环绑定只挡远程，不挡本机上的任何进程（非管理员即可）。若对"无来源信息"一律
+   * 放行，`curl http://127.0.0.1:3210/api/api-key` 就能读走明文主 API Key，
+   * /api/reset-data（删库）、/api/config（改配置）同理。
+   * 所以无来源信息（curl / 本机脚本 / 地址栏直达）时只有只读请求放行。
+   * 控制台不受影响：页面里的 fetch 虽然是同源，但浏览器会带 Referer 或
+   * Sec-Fetch-Site，走的是上面两条正常校验。
    */
   function originAllowed(req, opts = {}) {
     const host = String(req.headers.host ?? '');
@@ -1596,13 +1521,13 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     if (opts.readOnly) return true;
     return false;
   }
-  // ── 外部脚本调用口径（收包人报告 P3 问"为什么 POST 全 403"）──────────────
-  // 这是上面的**有意设计**（2026-10-07 安全审查：回环绑定挡不住本机其它进程，
-  // 无来源的写请求一律拒绝）。脚本要调写接口，两条正路：
-  //   1. 带 `Origin: http://127.0.0.1:<实际端口>` 头（回环同源即过；实际端口
-  //      看 <DATA_DIR>/console-port，多安装并存时不一定等于 config.server.port）；
+  // ── 外部脚本调用口径（常被问"为什么 POST 全 403"）──────────────────────
+  // 这是上面的有意设计：回环绑定挡不住本机其它进程，无来源的写请求一律拒绝。
+  // 脚本要调写接口，两条正路：
+  //   1. 带 `Origin: http://127.0.0.1:<实际端口>` 头（实际端口看 <DATA_DIR>/console-port，
+  //      多安装并存时不一定等于 config.server.port）；
   //   2. 配置 server.token 后，外部脚本带 `x-console-token: <token>` 头或 ?token= 参数
-  //      （过 authorize；但 originAllowed 仍要求 Origin 同源 —— 两条都要满足）。
+  //      （过 authorize；但 originAllowed 仍要求 Origin 同源，两条都要满足）。
   // Electron 控制台的随机凭据由主进程通过 webRequest 注入，不暴露到渲染页面。
   // 纯读取（GET）无来源也放行，脚本探测无需任何头。
 
@@ -1616,10 +1541,10 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   }
 
   // ── 配置脱敏 ────────────────────────────────────────────────────────────
-  // 凡是字段名命中这些模式的，值一律替换为空串（保留"有/无"的 hasXxx 标记）。
+  // 字段名命中这些模式的值一律替换为空串（保留"有/无"的 hasXxx 标记）。
   // 覆盖：apiKey / api_key / accessToken / httpAccessToken / token / secret / password / cookie …
-  // ⚠️ cookie 必须在内：media-download 插件的 bilibiliCookie / douyinCookie
-  //    是登录凭据，曾经 pattern 不认导致 /api/config 明文返回。
+  // cookie 必须在内：media-download 插件的 bilibiliCookie / douyinCookie 是登录凭据，
+  // 曾经 pattern 不认导致 /api/config 明文返回。
   const SECRET_KEY_PATTERN = /(apikey|api_key|accesstoken|access_token|communitykey|cookie|secret|password|privatekey|private_key)/i;
   // 形如 apiKeyFrom 的字段存的是"密钥来源标识"（如 manual），不是密钥本身，不要脱敏
   const SECRET_KEY_EXCLUDE = /from$/i;
@@ -1639,10 +1564,9 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         // 不排除就会连锁生成 hasHasXxx
         if (/^has/i.test(key) && typeof value === 'boolean') continue;
         if (SECRET_KEY_PATTERN.test(key)) {
-          // ⚠️ 必须"删除字段"而不是"置为空串"。
-          // 前端保存设置时会把整个 config 展开成 patch 回传（...c.webSearch?.deepseek），
-          // 若这里留一个空串，deepMerge 会拿空串覆盖掉服务端保存的真 Key ——
-          // 表现为：用户点一次"保存设置"，所有搜索 Key 就被静默清空。
+          // 必须"删除字段"而不是"置为空串"：前端保存设置时会把整个 config 展开成
+          // patch 回传（...c.webSearch?.deepseek），留一个空串，deepMerge 就会拿它
+          // 覆盖掉服务端保存的真 Key，用户点一次"保存设置"，所有搜索 Key 被静默清空。
           // 删掉字段则展开时不会带上该键，服务端原值得以保留。
           delete node[key];
           const flagName = `has${key.charAt(0).toUpperCase()}${key.slice(1)}`;
@@ -1677,23 +1601,19 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   // ── 明文密钥端点守卫 ────────────────────────────────────────────────────
   /**
    * 这是本地单机程序，控制台就在本机浏览器打开，「显示密钥」是用户自己的操作，
-   * 不该被禁用。真正的风险来自**外部网页**冒用浏览器读 127.0.0.1（CSRF /
-   * DNS rebinding）—— 所以防线是「校验请求来源」。
+   * 不该被禁用。真正的风险来自外部网页冒用浏览器读 127.0.0.1（CSRF / DNS
+   * rebinding），所以防线是「校验请求来源」。
    *
-   * ⚠️ 历史实现里有一句 `if (req.headers['x-console-token']) return true`：
-   *    只看"有没有这个头"、不看值，等于任何人加个头就能读明文密钥。
-   *    已删除 —— 来源校验交由 originAllowed() 统一负责。
+   * 历史实现里有一句 `if (req.headers['x-console-token']) return true`：
+   * 只看"有没有这个头"、不看值，等于任何人加个头就能读明文密钥。已删除。
    */
   function keyEndpointAllowed(req) {
     // ① 渲染进程凭据：主进程用 webRequest 注入，进程私有（每次启动随机 32 字节）、
-    //    不落盘、不进 DOM、不进 preload。这是控制台自己的最强凭据，**必须独立判定**。
-    //    ⚠️ 2026-10-17 修（本次 bug 的根因）：这条判断原先被写在下面对 `if (token)` 的
-    //    分支里 —— `config.server.token` 为空（默认值，也是 Electron 控制台的常态）时
-    //    整段被跳过，于是**最强的凭据从头到尾没被看过一眼**，只能落到 hasProvenance()。
-    //    而静态服务器给控制台页面发 referrer-policy: no-referrer，同源 GET 又不带
-    //    Origin ⇒ 控制台里所有密钥端点恒 403：协议端「控制台密码」永远是
-    //    「读取失败（后端没有应答）」，设置页的「显示 API Key」同理。
-    //    修前沙箱实测：带渲染进程凭据的请求 403（见 _luofix/t-verify-keyendpoint.mjs）。
+    //    不落盘、不进 DOM、不进 preload。这是控制台自己的最强凭据，必须独立判定。
+    //    这条判断曾经被写在对 `if (token)` 的分支里，`config.server.token` 为空
+    //    （默认值，也是 Electron 控制台的常态）时整段被跳过，最强的凭据从头到尾没被
+    //    看过一眼，只能落到 hasProvenance()。而控制台页面带 referrer-policy: no-referrer、
+    //    同源 GET 又不带 Origin，于是所有密钥端点恒 403。
     if (rendererAuthToken && req.headers['x-console-token'] === rendererAuthToken) return true;
 
     // ② 用户自配的 server.token（给外部脚本用；也可放在 ?token= 上）。
@@ -1703,17 +1623,14 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       if (req.headers['x-console-token'] === token
         || url.searchParams.get('token') === token) return true;
     }
-    // ⚠️ 这里**不能**退化成 originAllowed 的"无来源即放行"（见上面 originAllowed 注释）：
-    //   明文密钥端点全是只读 GET，若跟着放行，本机任意进程 curl 一下就能读走主 API Key。
-    //   也没必要退化 —— ①② 已经覆盖了控制台（渲染进程凭据）和脚本（server.token）两条正路；
-    //   剩下的 ③ 只是"没有配置 token、又从浏览器里打开控制台"的兜底。
-    //    ⚠️ 2026-10-21 修（体检 F5）：③ 不能默认生效 —— Origin / Referer / Sec-Fetch-Site
-    //    都是**客户端可自由设置**的请求头，本机任意进程伪造一个同源 Origin 就能读走
-    //    明文凭据（实测：带 `Origin: http://127.0.0.1:<port>` 请求密钥读取端点
-    //    返回 200 + 明文）。
-    //    ①② 已经覆盖了"控制台"与"脚本"两条正路，这一层没有存在的必要；
-    //    外部浏览器要读密钥 → 先配 server.token 带 x-console-token，或显式打开
-    //    server.allowBrowserKeyRead（默认 false，自己承担本机其他进程可读的风险）。
+    // 这里不能退化成 originAllowed 的"无来源即放行"：明文密钥端点全是只读 GET，
+    // 跟着放行的话本机任意进程 curl 一下就能读走主 API Key。
+    // ①② 已经覆盖了控制台（渲染进程凭据）和脚本（server.token）两条正路；剩下的 ③
+    // 只给"没有配置 token、又从浏览器里打开控制台"的兜底，且不能默认生效，
+    // Origin / Referer / Sec-Fetch-Site 都是客户端可自由设置的请求头，本机任意进程
+    // 伪造一个同源 Origin 就能读走明文凭据。外部浏览器要读密钥：先配 server.token
+    // 带 x-console-token，或显式打开 server.allowBrowserKeyRead（默认 false，
+    // 自己承担本机其他进程可读的风险）。
     if (getConfig().server?.allowBrowserKeyRead === true) {
       return hasProvenance(req) && originAllowed(req);
     }
@@ -1789,7 +1706,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       }
       const method = req.method;
 
-      // 桌宠接口：必须留在上面 authorize + originAllowed 之后 —— 它复用控制台
+      // 桌宠接口：必须留在上面 authorize + originAllowed 之后，它复用控制台
       // 鉴权与同源口径，屏幕截图只进桌面上下文，不额外开口子。
       if (pathname.startsWith('/api/desktop-pet/')) {
         try {
@@ -1829,10 +1746,9 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
 
     // 静态 UI
     if (req.method === 'GET') {
-      // 路径穿越防护：
-      // 旧实现 file.replace(/\.\./g,'') 只删字面 ".." —— "/....//" 删完仍还原出 ".."，
+      // 路径穿越防护：先 URL 解码 → 规范化 → 拼接 → 用 path.relative 判断跳出界。
+      // 旧实现 file.replace(/\.\./g,'') 只删字面 ".."（"/....//" 删完仍还原出 ".."），
       // 且 startsWith 校验在 path.join 之后做（顺序颠倒），形同虚设。
-      // 正确做法：先 URL 解码 → 规范化 → 拼接 → 用 path.relative 判断跳出界。
       let decoded;
       try {
         decoded = decodeURIComponent(pathname === '/' ? '/index.html' : pathname);
@@ -1862,7 +1778,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       // 插件在 plugin.json 的 configSchema 里声明 { type: 'action', panel: 'panel/x.html' }，
       // 加载时被规范成 manifest.panels（含校验好的 URL），设置弹窗据此渲染按钮。
       //
-      // 两个根，都**只读**：
+      // 两个根，都只读：
       //   /plugin-panel/<id>/…        → <APP_ROOT>/plugins/<id>/… 或 <APP_ROOT>/skills/<id>/…
       //   /plugin-panel/<id>/@data/…  → <DATA_DIR>/plugin-data/<id>/…
       // 后者是插件运行时数据的出口：api.storage 写进去的东西，页面 fetch 出来用。
@@ -1870,13 +1786,12 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       //
       // 安全（五道）：
       //   ① 来源校验：只有本机控制台同源 / 无来源的 GET 能过（同 /api 的口径）。
-      //      ⚠️ 与 /ui 的静态分支不同 —— 那边是应用自身资源，这里可能带插件运行时数据，
-      //         不能让"恶意网页借浏览器读 127.0.0.1"顺手读走。
+      //      与 /ui 的静态分支不同，那边是应用自身资源，这里可能带插件运行时数据。
       //   ② id 只允许 [A-Za-z0-9._-] 且必须真实存在于 plugins/ 或 skills/ 下。
       //      上面已按 / \ 切过段，所以 id 里不可能带路径分隔符。
       //   ③ 其余段沿用同一套校验（拒 .. / 控制字符）。
       //   ④ 扩展名白名单（PANEL_FILE_TYPES）：不做通用文件下载器。
-      //   ⑤ realpath 二次确认 —— 挡符号链接/目录联接指向目录外，这是 path.relative 挡不住的。
+      //   ⑤ realpath 二次确认，挡符号链接/目录联接指向目录外，这是 path.relative 挡不住的。
       if (clean[0] === PANEL_ROUTE_PREFIX.slice(1) && clean.length >= 3) {
         if (!originAllowed(req)) {
           res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
@@ -1950,18 +1865,17 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.json': 'application/json; charset=utf-8', '.woff2': 'font/woff2' };
         const headers = { 'content-type': types[ext] ?? 'application/octet-stream', 'cache-control': 'no-cache' };
         if (ext === '.html') {
-          // CSP 用 HTTP 头再声明一次：header 里的 frame-ancestors 才生效
-          // （meta 版本会被浏览器忽略该指令），同时给不解析 meta 的场景兜底。
-          // ⚠️ 口径必须与 index.html 的 meta 版本**逐条一致** —— 双份 CSP 是
-          //    取交集执行的：2026-10-17 人机验证接入时只改了 meta、漏了这份头，
-          //    script-src 少了 kondius.cn，结果 SDK 脚本被头拦死，滑块永远
-          //    "加载失败"（界面出现脚本错误 toast 就是它）。改 meta 时务必同步这里。
+          // CSP 用 HTTP 头再声明一次：header 里的 frame-ancestors 才生效（meta 版本会被
+          // 浏览器忽略该指令），同时给不解析 meta 的场景兜底。
+          // 口径必须与 index.html 的 meta 版本逐条一致，双份 CSP 取交集执行：人机验证
+          // 接入时只改了 meta、漏了这份头，script-src 少了 kondius.cn，SDK 脚本被头拦死，
+          // 滑块永远"加载失败"。改 meta 时务必同步这里。
           headers['content-security-policy'] = [
             "default-src 'self'",
             // 桌宠页（/desktop-pet/pet.html）要跑 Live2D：Cubism Core 是 WebAssembly，
-            // 必须放行 wasm-unsafe-eval。**只对这一个路径**开口子 —— 注意它不等于
-            // JavaScript 的 'unsafe-eval'（那条仍然全线禁止，PixiJS 用随包的
-            // unsafe-eval 替代实现绕开 eval，见 ui/desktop-pet/vendor/）。
+            // 必须放行 wasm-unsafe-eval。只对这一个路径开口子，它不等于 JavaScript 的
+            // 'unsafe-eval'（那条仍然全线禁止，PixiJS 用随包的替代实现绕开 eval，
+            // 见 ui/desktop-pet/vendor/）。
             clean.join('/') === 'desktop-pet/pet.html'
               ? "script-src 'self' 'wasm-unsafe-eval'"
               : "script-src 'self' https://kondius.cn https://o.alicdn.com",
@@ -1970,10 +1884,10 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
             "media-src 'self' data: blob:",
             "connect-src 'self' https://kondius.cn",
             "font-src 'self' data:",
-            // ⚠️ 'self' 不能省（2026-10-18）：插件自带页面（表情库 viewer.html 等）
-            //    是同源 http://127.0.0.1:port/plugin-panel/... 的 iframe，只写 https:
-            //    会让「查看收藏的表情」等入口直接 ERR_BLOCKED_BY_CSP。
-            //    与 ui/index.html 的 meta 版本必须逐条一致（双份 CSP 取交集）。
+            // 'self' 不能省：插件自带页面（表情库 viewer.html 等）是同源
+            // http://127.0.0.1:port/plugin-panel/... 的 iframe，只写 https: 会让
+            // 「查看收藏的表情」等入口直接 ERR_BLOCKED_BY_CSP。
+            // 与 ui/index.html 的 meta 版本必须逐条一致（双份 CSP 取交集）。
             "frame-src 'self' https:",
             "object-src 'none'",
             "base-uri 'none'",
@@ -2000,14 +1914,12 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   // ── 启停 ──
   // DSH 自动导入已移除：模型目录改为在设置页手动维护（见 /api/providers 相关接口）。
 
-  // ── 启停 ──
   async function listenOn(port) {
     return new Promise((resolve, reject) => {
       server.once('error', reject);
-      // R112：localhost 长连接下 Node 默认 keepAliveTimeout(5s) 比 Chromium 空闲
-      // socket 复用窗口短 —— 服务端先关了 socket，渲染进程还拿它复用，触发
-      // ERR_CONNECTION_RESET，前端表现为"Failed to fetch"（curl 是新连接不受影响）。
-      // 这正是"长期运行后用量页/会话列表反复卡加载"的根因。把服务端保活时间抬到
+      // localhost 长连接下 Node 默认 keepAliveTimeout(5s) 比 Chromium 空闲 socket 复用
+      // 窗口短，服务端先关了 socket 而渲染进程还拿它复用，触发 ERR_CONNECTION_RESET，
+      // 前端表现为"Failed to fetch"（curl 是新连接不受影响）。把服务端保活时间抬到
       // Chromium 空闲超时之上，避免"服务端已关、客户端还在用"的半死 socket。
       server.keepAliveTimeout = 61000;
       server.headersTimeout = 65000;
@@ -2020,24 +1932,20 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
 
   async function start() {
     // ── 版本迁移（必须排在插件扫描之前）──────────────────────────────────
-    // 为什么排第一：老用户升级后，旧版被删掉的插件目录可能还在（免安装覆盖路径
-    // 只写新文件、不删旧文件），而 config.trustedPlugins 里指向它的引用也还在
-    // —— 信任闸按目录名直接放行，残留插件就会照常加载、与新插件抢同名能力。
-    // reloadSkills 读的正是这份 trustedPlugins，晚一步处理等于白做。
-    // 同步、开销极小（几次 stat，最多写一次 config）；内部已逐项隔离失败。
+    // 老用户升级后，旧版被删掉的插件目录可能还在（免安装覆盖路径只写新文件、不删
+    // 旧文件），而 config.trustedPlugins 里指向它的引用也还在，信任闸按目录名直接
+    // 放行，残留插件就会照常加载、与新插件抢同名能力。reloadSkills 读的正是这份
+    // trustedPlugins。同步、开销极小（几次 stat，最多写一次 config）。
     try {
       runUpgrades({ log });
     } catch (error) {
       log(`[upgrade] ⚠️ 迁移流程异常（不影响启动）：${error?.message ?? error}`);
     }
 
-    // ── 启动顺序（2026-09-18 按耗时画像重排）────────────────────────────
-    // 旧顺序的瓶颈：HTTP → 遥测 → Skill加载(串行import) → 协议端启动(最长20s等端口)
-    //              → OneBot连接 → 就绪。Skill 与协议端互不依赖却串行，
-    //             白白把两段等待加在一起。协议端改由用户自行运行后，启动路径只余
-    //             HTTP → 遥测 → Skill 加载 → OneBot 连接。会话索引的磁盘对账
-    //             （reconcileInBackground）
-    //         在 HTTP 起来后就排上，不占启动关键路径。
+    // ── 启动顺序 ──────────────────────────────────────────────────────
+    // 启动关键路径只余 HTTP → 遥测 → Skill 加载 → OneBot 连接。Skill 与协议端互不依赖，
+    // 协议端改由用户自行运行后不再串行等待；会话索引的磁盘对账
+    // （reconcileInBackground）在 HTTP 起来后就排上，不占启动关键路径。
     const basePort = Number(getConfig().server?.port) || 3210;
     let port = null;
     let lastError = null;
@@ -2052,11 +1960,9 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     }
     if (port == null) throw lastError ?? new Error('无法监听端口');
 
-    // 实际端口落盘（收包人报告 P4）：多安装并存时 basePort 起步逐个 +10 试听，
-    // 实际端口往往 ≠ config.server.port（配置里写 3210、实际在 3211）——
-    // 外部脚本/运维无从得知。写到 <DATA_DIR>/console-port（一行数字），
-    // 每次启动覆盖；故意**不**在退出时删除 —— 应用没起时脚本还能读到
-    // "上次端口"作为猜测起点，比没有强。
+    // 实际端口落盘：多安装并存时 basePort 起步逐个 +10 试听，实际端口往往 ≠
+    // config.server.port，外部脚本/运维无从得知。写到 <DATA_DIR>/console-port（一行数字），
+    // 每次启动覆盖；故意不在退出时删除，应用没起时脚本还能读到"上次端口"作为猜测起点。
     try {
       fs.writeFileSync(path.join(DATA_DIR, 'console-port'), String(port), 'utf8');
       log(`[api] 控制台实际端口 ${port} 已写入 ${path.join(DATA_DIR, 'console-port')}`);
@@ -2067,13 +1973,12 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     startTelemetryLoop(log);
 
     // 会话索引后台对账：启动读的是毫秒级缓存，这里异步补扫磁盘修正差异
-    // （缓存缺失的新文件/外部删除的文件）。不 await —— 不挡任何启动步骤。
+    // （缓存缺失的新文件/外部删除的文件）。不 await，不挡任何启动步骤。
     sessions.reconcileInBackground();
 
     // 用量档案预热：首次打开用量页的卡顿来自"冷 parse 全部会话文件"
-    //（2290 个 / 178MB 实测 1.3~1.9 秒）。启动后台先预热一次（collectUsageRows
-    // 内部分片让步，不阻塞事件循环），用户点开用量页时档案已就绪，
-    // 只剩窗口过滤（毫秒级）。不 await；失败静默（用量页会自己再算）。
+    //（实测 1.3~1.9 秒）。启动后台先预热一次（collectUsageRows 内部分片让步，不阻塞
+    // 事件循环），用户点开用量页时档案已就绪。不 await；失败静默（用量页会自己再算）。
     collectUsageRows({ range: '7' }).catch(() => {});
 
     const skillsReady = (async () => {
@@ -2104,12 +2009,9 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       }
     })();
 
-    // R81（BUG-10 轻量版）：出窗不死等 Skill 加载。
-    // 原实现会等协议端就绪（最长 20 秒）才返回，而 main.js 是 core.start()
-    // 完成后才 createWindow —— 那段时间用户连窗口都没有。协议端就绪只影响
-    // OneBot 首连，而首连失败有现成兜底：connectLoop 退避重试 + 2 秒一次的
-    // 端口就绪轮询（端口一通立即 reconnect）。所以启动关键路径只给 Skill
-    // 加载留 5 秒宽限，到点继续，连接恢复交给轮询。
+    // 出窗不死等 Skill 加载：main.js 是 core.start() 完成后才 createWindow，
+    // 而协议端就绪只影响 OneBot 首连，首连失败有现成兜底（connectLoop 退避重试 +
+    // 2 秒一次的端口就绪轮询）。启动关键路径只给 Skill 加载留 5 秒宽限，到点继续。
     const SKILL_GRACE_MS = 5000;
     let skillGraceTimer = null;
     const boundedSkillsReady = Promise.race([
@@ -2126,14 +2028,13 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
 
     await onebot.connect();
 
-    // ── 首次启动自动读取协议端配置（2026-10-24）──────────────────────────────
-    // 协议端自 10-23 起由用户自行安装，令牌是 SnowLuma 按账号随机生成的；让新用户
-    // 从 WebUI 抄两串 43 位随机字符，是首次配置最容易卡死的一步（现象：端口通了但
-    // 401，页面只会说"令牌不一致"，用户根本不知道该去哪找）。
+    // ── 首次启动自动读取协议端配置 ──────────────────────────────────────
+    // 令牌是 SnowLuma 按账号随机生成的，让新用户从 WebUI 抄两串 43 位随机字符是首次
+    // 配置最容易卡死的一步（现象：端口通了但 401，页面只会说"令牌不一致"）。
     //
-    // 只在**两个令牌都为空**时跑：这是"从没配过"的可靠信号；用户手填过任何一枚，
+    // 只在两个令牌都为空时跑：这是"从没配过"的可靠信号；用户手填过任何一枚，
     // 就说明他会配，此时静默探测反而可能把对的值覆盖成错的。
-    // 异步、不 await —— 探测要 spawn 一次 PowerShell（实测约 0.8 秒），不能挡住开窗。
+    // 异步、不 await，探测要 spawn 一次 PowerShell（实测约 0.8 秒），不能挡住开窗。
     const shouldAutoFill = () => {
       const p = getConfig().protocol || {};
       return !String(p.accessToken || '').trim() && !String(p.httpAccessToken || '').trim();
@@ -2153,56 +2054,46 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     };
     if (shouldAutoFill()) setTimeout(() => void runAutoFill('首次启动'), 0);
 
-    // ── OneBot 端口就绪轮询（2026-09-19）────────────────────────────────────
+    // ── OneBot 端口就绪轮询 ────────────────────────────────────────────────
     // WS 3001 只有「QQ 登录 → Hook 检出 → OneBot 实例拉起」后才监听。常见时序：
-    // QQ Agent 先启动（此时 3001 未开）→ connectLoop 吃 ECONNREFUSED → 退避
-    // 涨到 30 秒 → 用户在这中间扫码登录 → 3001 开了，但下一次重试可能还要等
-    // 二十多秒，用户看到的就是"登录了半天连不上 / 重启就好了"。
-    // 这里加一个主动轮询：每 2 秒探一次 WS 端口，端口一开立即触发重连（走
-    // connectLoop 的代际互斥，不会产生并发连接）。已连接后轮询自动停止；
-    // 断线（协议端重启等）时轮询自动恢复 —— 恢复延迟从"最多 30 秒"降到
-    // "最多 2 秒 + 一次连接建立"。
+    // QQ Agent 先启动（此时 3001 未开）→ connectLoop 吃 ECONNREFUSED → 退避涨到
+    // 30 秒 → 用户在这中间扫码登录 → 3001 开了，但下一次重试可能还要等二十多秒。
+    // 这里每 2 秒探一次 WS 端口，端口一开立即触发重连（走 connectLoop 的代际互斥，
+    // 不会产生并发连接）。已连接后轮询自动停止；断线时自动恢复，恢复延迟从
+    // "最多 30 秒"降到"最多 2 秒 + 一次连接建立"。
     const obWsPort = protocolWsPort();
-    // r92（R78-3）：边沿触发。原实现端口开着就每 2 秒无条件 reconnect()，而
-    // reconnect 会清零 onebot 的指数退避 —— 端口已开但连接失败（如 token 未
-    // 就绪）时，3s→6s→12s→24s→30s 的退避完全失效，被钉死在 2 秒一轮，
-    // 协议端侧日志里全是永不收敛的 unauthorized 尝试。只在"关→开"的
-    // 边沿触发一次重连，之后交给 onebot 自己的退避循环。
+    // 边沿触发：原实现端口开着就每 2 秒无条件 reconnect()，而 reconnect 会清零
+    // onebot 的指数退避，端口已开但连接失败（如 token 未就绪）时退避完全失效，
+    // 被钉死在 2 秒一轮，协议端侧日志里全是永不收敛的 unauthorized 尝试。
+    // 只在"关→开"的边沿触发一次重连，之后交给 onebot 自己的退避循环。
     let obPortWasOpen = false;
-    // 2026-10-20（S4 补）：首轮探测只建立基线，不能当成"关→开"边沿。
-    // 冷启动时进程已经是连接状态、obPortWasOpen 初值为 false，若不区分，
-    // 第一次探测就会误判为"端口刚开"而白重连一次（还会清掉一次退避）。
+    // 首轮探测只建立基线，不能当成"关→开"边沿：冷启动时进程已经是连接状态、
+    // obPortWasOpen 初值为 false，不区分的话第一次探测就会误判为"端口刚开"而白重连一次。
     let obPortEdgePrimed = false;
     obPortPollTimer = setInterval(async () => {
-      // 整段兜住异常（2026-10-17 加固）：这是个 async 定时器回调，里面抛出的异常
-      // 没人 await → 变成 unhandledRejection。主进程那条兜底只记日志、**不退出**
-      // （electron/main.js 的 `fallbackLog`），所以一旦这里每 2 秒抛一次，用户看到的就是
-      // "窗口还在、但什么都不工作"的半死状态，日志里刷满同一条。宁可单轮失败。
+      // 整段兜住异常：这是个 async 定时器回调，抛出的异常没人 await → unhandledRejection。
+      // 主进程那条兜底只记日志、不退出，所以一旦这里每 2 秒抛一次，用户看到的就是
+      // "窗口还在、但什么都不工作"的半死状态。宁可单轮失败。
       try {
-      // ── 2026-10-20（S4 修）：已连接时也要更新端口边沿状态 ─────────────────
-      // 旧写法是 `if (onebot.connected) return;` —— obPortWasOpen 只在"未连接"
-      // 分支里更新。若协议端在一个轮询周期内快速重启（端口关→开），而 QQ Agent 的
-      // socket 还没收到 close（TCP 半开，connected 仍为 true），这次边沿就被永久
-      // 吞掉，只能等 onebot 自己的退避（最长 30 秒）或 TCP 超时 —— 与下面注释承诺的
-      // "恢复延迟最多 2 秒"不符。connected 时顺手探一次端口，成本是一次本机 connect。
+      // ── 已连接时也要更新端口边沿状态 ─────────────────────────────────────
+      // 旧写法是 `if (onebot.connected) return;`，obPortWasOpen 只在"未连接"分支里更新。
+      // 若协议端在一个轮询周期内快速重启（端口关→开），而 QQ Agent 的 socket 还没收到
+      // close（TCP 半开，connected 仍为 true），这次边沿就被永久吞掉。connected 时
+      // 顺手探一次端口，成本是一次本机 connect。
       if (onebot.connected) {
         const stillOpen = await isPortOpen('127.0.0.1', obWsPort);
-        // 2026-10-20（S4 补）：只是"把状态记下来"还不够 —— 记下来不等于处理了。
-        // 端口关过一次又开（协议端重启 / 换端口前的短暂关闭），说明手里这条 socket
-        // 连的已经是上一代进程，边沿必须在**这里**消费掉，否则要等 TCP 自己超时
-        // 才发现断线。reconnect 内部有连接代际互斥（onebot.js 的 `reconnect`），不会双连。
+        // 只是"把状态记下来"还不够：端口关过一次又开（协议端重启 / 换端口前的短暂
+        // 关闭），说明手里这条 socket 连的已经是上一代进程，边沿必须在这里消费掉，
+        // 否则要等 TCP 自己超时才发现断线。reconnect 内部有连接代际互斥，不会双连。
         if (obPortEdgePrimed && stillOpen && !obPortWasOpen) {
-          // 协议端重启过（端口关→开）：旧 socket 连的已是上一代进程，立即重连
-          // （reconnect 内部有连接代际互斥，不会双连）。
           onebot.reconnect();
         }
         obPortWasOpen = stillOpen;
         obPortEdgePrimed = true;
         return;
       }
-      // 注：曾经在这里做「selfId 自动学习 botQQ」，已移除（2026-10-15 三次调整）——
-      // selfId 只是「当前占用 OneBot 端口的账号」，双号在线时会抓到个人号（实测
-      // 个人号被学成了机器人）。botQQ 现在只有两个可靠来源：
+      // 这里不做「selfId 自动学习 botQQ」：selfId 只是「当前占用 OneBot 端口的账号」，
+      // 双号在线时会抓到个人号。botQQ 只有两个可靠来源：
       //   ① 用户在页面「注入目标」显式输入/点选；
       //   ② QQ Agent 自己启动的 QQ 注入成功后，把 probe-login 读到的 uin 记下来
       //     （协议端自行管理账号注入）。
@@ -2211,7 +2102,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       if (open && !obPortWasOpen && !onebot.connected) {
         // 端口从关到开：协议端就绪（QQ 登录完成 / 协议端刚拉起）。
         // 若这时还没配令牌（典型时序：先开 Agent，再去装/登录 SnowLuma），先试一次
-        // 自动读取 —— 否则只会拿空令牌去撞 401，撞到用户自己去翻配置为止。
+        // 自动读取，否则只会拿空令牌去撞 401，撞到用户自己去翻配置为止。
         // 30 秒冷却：协议端反复重启时，别每次都 spawn 一遍 PowerShell。
         if (shouldAutoFill() && Date.now() - lastAutoFillAt > 30000) {
           // 探测成功会自己走 setEndpoint → reconnect；失败时下面这条 reconnect
@@ -2228,11 +2119,10 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     }, 2000);
     obPortPollTimer.unref?.();
 
-    // ── WS 就绪后的账号信息兜底（2026-09-19）
+    // ── WS 就绪后的账号信息兜底
     // 协议端重启/换号后，QQ Agent 侧的 WS 可能先于 OneBot 实例完全就绪连上，
     // open 时的 get_login_info 失败 → selfInfo 恒空 → UI"检测不到账号"。
-    // onebot.js 里已有 15 秒延迟补拉；这里再挂一道 45 秒后的终检：
-    // 连着但仍没有 selfInfo 就强制补一次并广播状态（长期运行的兜底，幂等）。
+    // onebot.js 里已有 15 秒延迟补拉；这里再挂一道 45 秒后的终检。
     setTimeout(() => {
       if (!onebot.connected || onebot.selfInfo) return;
       onebot.call('get_login_info').then((info) => {
@@ -2247,10 +2137,10 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     orchestrator.startReminderLoop();   // 提醒（闹钟）调度：到点往群里发提醒
     log(`控制台已就绪：http://127.0.0.1:${port}`);
 
-    // ── 用量档案后台预热（2026-09-22）────────────────────────────────────
-    // 首次打开用量页要先把全部会话文件解析一遍（实测 170MB ≈ 3.1 秒）——
-    // 启动后闲置时先付掉，用户点「今日」就不用等。延迟 8 秒避开启动高峰
-    // （插件加载 / 价格表 / 遥测都挤在头几秒），解析本身分片让步不阻塞事件循环。
+    // ── 用量档案后台预热 ─────────────────────────────────────────────────
+    // 首次打开用量页要先把全部会话文件解析一遍（实测 170MB ≈ 3.1 秒）。延迟 8 秒
+    // 避开启动高峰（插件加载 / 价格表 / 遥测都挤在头几秒），解析本身分片让步不阻塞
+    // 事件循环。
     const usageWarmTimer = setTimeout(() => {
       warmUsageArchive()
         .then((r) => { if (r) log(`[usage] 用量档案已后台预热（${r.files} 个会话，${r.ms}ms）`); })
@@ -2258,15 +2148,14 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     }, 8000);
     usageWarmTimer.unref?.();
 
-    // ── 数据盘空间巡检（2026-10-16 外部审查 #9）──────────────────────────
-    // 应用本体原来没有任何磁盘满处理：写不进去时只会看到一串次级错误，真正的
-    // "盘满了"反而不见。这里启动时查一次 + 每小时一次，水位过低就记警告/错误；
-    // critical 档另由 image-cache.js 的 enabled() 停止写入（见 disk-space.js）。
+    // ── 数据盘空间巡检 ───────────────────────────────────────────────────
+    // 应用本体原来没有任何磁盘满处理：写不进去时只会看到一串次级错误，真正的"盘满了"
+    // 反而不见。这里启动时查一次 + 每小时一次，水位过低就记警告/错误；critical 档另由
+    // image-cache.js 的 enabled() 停止写入（见 disk-space.js）。
     const diskCheck = () => {
-      // 同步定时器回调**必须**自己兜异常（2026-10-17 加固）：这里抛出去没有任何
-      // try/catch 能接住，直接变成 uncaughtException → 主进程弹窗后 app.exit(1)。
-      // diskPressure() 内部要 statfs / 查盘，权限、卷被卸载、网络盘掉线都可能抛 ——
-      // 「磁盘巡检失败」绝不该等于「整个程序退出」。
+      // 同步定时器回调必须自己兜异常：这里抛出去没有任何 try/catch 能接住，直接变成
+      // uncaughtException → 主进程弹窗后 app.exit(1)。diskPressure() 内部要 statfs /
+      // 查盘，权限、卷被卸载、网络盘掉线都可能抛，「磁盘巡检失败」不该等于「整个程序退出」。
       try {
         const level = diskPressure();
         if (level === 'ok') return;
@@ -2279,7 +2168,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       }
     };
     diskCheck();
-    // 注意：赋值给外层 let，不能用 const（会遮蔽，stop() 里的 clearInterval 永远清不到）
+    // 赋值给外层 let，不能用 const（会遮蔽，stop() 里的 clearInterval 永远清不到）
     diskPatrolTimer = setInterval(diskCheck, 60 * 60 * 1000);
     diskPatrolTimer.unref?.();
     log(`OneBot 协议端: ws=${getConfig().protocol?.wsUrl} http=${getConfig().protocol?.httpUrl}`);
@@ -2288,31 +2177,28 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   }
 
   // ── Skill 重扫：UI「刷新」按钮的唯一后端入口 ──────────────────────────
-  // 之前「刷新」只重读内存注册表（GET /api/skills），不碰磁盘 —— watcher 丢事件
-  // （目录删除重建后 fs.watch 句柄失效、网络盘、杀毒软件）时，点多少次刷新都
-  // 看不到新插件。这里把"重扫磁盘 + 激活 + 刷工具 + 重建 watcher"做成一个
-  // 幂等函数，启动流程和手动重扫共用，行为完全一致。
+  // 「刷新」只重读内存注册表的话，watcher 丢事件（目录删除重建后 fs.watch 句柄失效、
+  // 网络盘、杀毒软件）时点多少次都看不到新插件。这里把"重扫磁盘 + 激活 + 刷工具 +
+  // 重建 watcher"做成一个幂等函数，启动流程和手动重扫共用。
   async function reloadSkills({ reason = 'manual', result: preloaded = null } = {}) {
-    // ── 批量加载静默期（2026-10-23）───────────────────────────────────────
-    // loadSkillRoot 是**串行**加载（并行 import 时两个 Skill 抢同一 id 顺序不
-    // 确定），而每个插件的 setup() 在 import 期间就把工具注册进表。于是 N 个
-    // 带工具的插件会产生 N 次工具集增长：35 → 38 → 41 → 44 …
-    // 群聊活跃时每一级增长都可能被某个请求看到 = 一次 17k 全价重算。
-    // "新加插件后缓存爆炸"就是这个 —— 不是插件让前缀变大，是中间态被看见了。
+    // ── 批量加载静默期 ───────────────────────────────────────────────────
+    // loadSkillRoot 是串行加载（并行 import 时两个 Skill 抢同一 id 顺序不确定），而每个
+    // 插件的 setup() 在 import 期间就把工具注册进表。于是 N 个带工具的插件会产生 N 次
+    // 工具集增长：35 → 38 → 41 → 44 …，群聊活跃时每一级增长都可能被某个请求看到，
+    // 等于一次 17k 全价重算。"新加插件后缓存爆炸"就是这个，不是插件让前缀变大，
+    // 是中间态被看见了。
     //
     // 包进 batch 后：中间态一律沿用旧集合，endToolsetBatch() 把所有桶标脏，
-    // 下一次请求立即按最终集合重建基线。N 次折叠成 1 次，且"装完就能用"
-    // 的体验不变（延迟上限 = 一次重扫耗时）。
+    // 下一次请求立即按最终集合重建基线。N 次折叠成 1 次，延迟上限是一次重扫耗时。
     beginToolsetBatch();
     try {
-      // r92：watcher 的 runReload 已经 loadPlugins 过一遍（它的 result 通过
-      // onReload 传进来）—— 原实现这里无视入参再 loadPlugins 一遍，每个插件的
-      // setup() 实跑两遍（import(url?t=) 两次）：日志洪水、插件副作用双跑
+      // watcher 的 runReload 已经 loadPlugins 过一遍（它的 result 通过 onReload 传进来）。
+      // 无视入参再扫一遍会让每个插件的 setup() 实跑两遍：日志洪水、插件副作用双跑
       // （计时器/计数/通知）、工具集反复重建导致系统提示重建 → 前缀缓存断裂 ×N。
       // 手动/接口入口没有预载结果，照常全量扫。
       const result = preloaded || await loadPlugins({ log });
       // 内置工具链（自检/修复/锻造台/开发工单）：不走插件目录，由核心直接注册。
-      // 放在 loadPlugins 之后、激活循环之前 —— 它同样需要参与 activate 与工具刷新。
+      // 放在 loadPlugins 之后、激活循环之前，它同样需要参与 activate 与工具刷新。
       try { registerHarness({ skillManager, log }); } catch (error) { log(`[harness] 注册失败：${error?.message ?? error}`); }
       for (const st of skillManager.list()) {
         if (st.enabled && st.loaded) {
@@ -2328,9 +2214,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       try { pluginWatcher?.close?.(); } catch { /* ignore */ }
       pluginWatcher = null;
       if (hotReloadOn) {
-        // r92：新 watcher 继承一段静默期 —— 原实现重建后 quietUntil=0，而重扫
-        // 自己会 import/触碰 skill 目录里的文件，晚到的事件会立刻再触发一轮
-        // 全量重扫（旧 watcher 花 2.5s 建的静默期随 close 一起作废）。
+        // 新 watcher 继承一段静默期：重建后 quietUntil=0 的话，重扫自己 import/触碰
+        // skill 目录产生的晚到事件会立刻再触发一轮全量重扫。
         pluginWatcher = watchPlugins({ log, quietMs: 2500, onReload: (r) => reloadSkills({ reason: 'watch', result: r }) });
       }
 
@@ -2344,8 +2229,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       // 必须放 finally：加载中途抛异常时也要放开静默期，否则工具集永久冻结
       // （虽然 tool-registry 里还有 30s 超时兜底，但那是最后一道保险）。
       const released = endToolsetBatch();
-      // absorbed = 本轮扫描被折叠掉的中间变化次数，每一次原本都是一次
-      // 全前缀重算（实测 17k tok）。这条日志是"装插件到底省了几次击穿"的凭据。
+      // absorbed = 本轮扫描被折叠掉的中间变化次数，每一次原本都是一次全前缀重算
+      // （实测 17k tok）。这条日志是"装插件到底省了几次击穿"的凭据。
       if (released && released.absorbed > 0) {
         log(`[tools-batch] 重扫结束：折叠 ${released.absorbed} 次中间工具集变化`
           + `（原本各击穿一次前缀缓存），${released.scopes} 个会话桶待下次请求按最终集合生效`);
@@ -2357,30 +2242,30 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     // 先停掉热重载 watcher：否则 stop() 之后文件变动仍会触发重载 + 广播
     try { pluginWatcher?.close?.(); } catch { /* ignore */ }
     pluginWatcher = null;
-    // r92：退订本次 createApp 挂的日志监听器（见上方 onLog 注释）
+    // 退订本次 createApp 挂的日志监听器（见上方 onLog 注释）
     try { unsubscribeAppLog?.(); } catch { /* ignore */ }
     unsubscribeAppLog = null;
     await orchestrator.abortAll();
     orchestrator.stopReminderLoop();
-    // 主动发言循环也要停（2026-09-26 补）：此前只停了 reminderLoop，
-    // proactiveTimer 在 stop() 后仍会继续 tick，headless 下进程不死就一直调度。
+    // 主动发言循环也要停：只停 reminderLoop 的话，proactiveTimer 在 stop() 后仍会
+    // 继续 tick，headless 下进程不死就一直调度。
     try { orchestrator.stopProactiveLoop(); } catch { /* ignore */ }
-    // 回收全部 Skill 实例：插件自己的 setInterval/落盘定时器（health-system
-    // 的状态衰减等）此前从不 dispose —— 句柄泄漏 + 退出窗口可能写坏数据文件。
+    // 回收全部 Skill 实例：插件自己的 setInterval/落盘定时器（health-system 的状态
+    // 衰减等）不 dispose 就是句柄泄漏，退出窗口还可能写坏数据文件。
     try { skillManager.disposeAll({ reason: 'shutdown' }); } catch { /* ignore */ }
     if (communitySyncTimer) clearInterval(communitySyncTimer);
     try { cacheWarm?.stop?.(); } catch { /* ignore */ }
     if (obPortPollTimer) clearInterval(obPortPollTimer);
     if (diskPatrolTimer) clearInterval(diskPatrolTimer);
-    // 退出前停掉遥测与价格表轮询（2026-09-25 补）：headless 模式 stop() 后进程若
-    // 继续存活，这两个定时器会照常发起网络请求。
+    // 退出前停掉遥测与价格表轮询：headless 模式 stop() 后进程若继续存活，
+    // 这两个定时器会照常发起网络请求。
     try { stopTelemetryLoop(); } catch { /* ignore */ }
     try { stopPriceFeed(); } catch { /* ignore */ }
     // 索引缓存立刻落盘：正常运行中靠防抖（5s），退出前必须写一次，
     // 否则最后的会话变动丢失、下次启动要靠后台对账补（慢路径）
     sessions.flushIndexCache();
-    // 消息存档的延迟落盘也要立刻兑现（报告3 M5）：saveChat 现在按会话节流 300ms，
-    // 退出前不 flush 就会丢掉"刚看到消息就关程序"那最后几百毫秒的聊天记录。
+    // 消息存档的延迟落盘也要立刻兑现：saveChat 按会话节流 300ms，退出前不 flush
+    // 就会丢掉"刚看到消息就关程序"那最后几百毫秒的聊天记录。
     try { store.flushPendingSaves(); } catch { /* 退出路径上不再抛 */ }
     // 关闭所有 SSE 长连接，避免 server.close() 一直等它们
     for (const c of [...sseClients]) {
@@ -2397,11 +2282,10 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
 
   return {
     server, onebot, store, memory, sender, sessions, orchestrator, start, stop, emit, getConfig, updateConfig, getRendererAuthToken: () => rendererAuthToken, launchPortableQQ, stopPortableQQ, qqPortableStatus, reloadSkills,
-    // 2026-10-24：桌宠宿主（electron/desktop-pet.js）要反向调用这三个，但一直
-    // 没有挂在返回值上 —— 主进程侧 `core?.xxx?.()` 全是 undefined，
-    // 于是「模型已加载」上报、角色预览、动作预览、屏幕观察、今日用量卡片、开发工单
-    // 全部静默失效，表现为桌面上的角色好好的、控制台永远停在"正在加载"。
-    // bindHost 是幂等的，这里多一条从 reconcileService 来的绑定不会重复。
+    // 桌宠宿主（electron/desktop-pet.js）要反向调用这三个，必须挂在返回值上：
+    // 主进程侧 `core?.xxx?.()` 取不到就是静默失效，表现为桌面上的角色好好的、
+    // 控制台永远停在"正在加载"。
+    // bindHost 是幂等的，多一条从 reconcileService 来的绑定不会重复。
     getDesktopPetService, getUsageToday, devApi
   };
 }
@@ -2410,8 +2294,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
  * 成本看板数据：按天 / 按会话 / 按群聚合最近 N 天的用量。
  *
  * 数据源是 data/sessions/*.json（会话留档），每个会话对象里已有
- * usage.{promptTokens, completionTokens, cachedTokens} 与 chatKey / model / rounds。
- * 没有历史汇总文件也能算 —— 直接扫留档即可。
+ * usage.{promptTokens, completionTokens, cachedTokens} 与 chatKey / model / rounds，
+ * 没有历史汇总文件也能直接扫留档算。
  */
 
 /**
@@ -2431,8 +2315,8 @@ function resolveRange(raw) {
   if (s === '24h') {
     return { mode: '24h', start: now - 24 * 60 * 60 * 1000, end: now, label: '最近 24 小时' };
   }
-  // 前端"全部"按钮：不设起始时间。曾经静默回落"近 7 天"（Number('all')||7），
-  // 用户以为在看全量历史实际被截断 —— 与"求和一致"的产品口径冲突。
+  // 前端"全部"按钮：不设起始时间。静默回落"近 7 天"（Number('all')||7）会让用户
+  // 以为在看全量历史实际被截断，与"求和一致"的产品口径冲突。
   if (s === 'all') {
     return { mode: 'all', start: 0, end: now, label: '全部' };
   }
@@ -2455,34 +2339,29 @@ function dayKeyOf(ts) {
  * 都带自己的 token、发生时刻、模型、所属会话。
  */
 // ── 用量行缓存 ──
-// collectUsageRows 要遍历并 JSON.parse 全部会话文件。实测 300 个文件 / 25MB 时
-// 单次约 200ms，而前端每 15 秒轮询一次、stats 与 breakdown 还各扫一遍。
-// 会话文件是"结束写一次、之后不再改"，所以缓存很安全。
+// collectUsageRows 要遍历并 JSON.parse 全部会话文件。实测 300 个文件 / 25MB 时单次约
+// 200ms，而前端每 15 秒轮询一次、stats 与 breakdown 还各扫一遍。会话文件是"结束写一次、
+// 之后不再改"，所以缓存很安全。
 //
 // 失效策略（双保险，任一条命中就重算）：
 //   1. 目录快照变化：文件数或目录 mtime 变了（新增/删除会话）
 //   2. TTL 到期：20 秒。兜住"内容被改写但目录快照不变"这类边缘情况。
-//      原来是 5 秒，但轮询间隔 4 秒、用户切页签的时机又很随机，
-//      导致切过去时缓存经常刚好过期 → 每次都走 200ms 的冷启动（"黑一下"）。
-//      用量统计不是实时数据，20 秒的新鲜度完全够用。
+//      原为 5 秒，但轮询间隔 4 秒、用户切页签的时机又很随机，缓存经常刚好过期，
+//      每次都走 200ms 的冷启动（"黑一下"）。用量统计不是实时数据，20 秒够用。
 //      另外前端还有一层：切过去先用上次数据立即渲染，不等网络。
 //
-// ⚠️ 数据量增长后的实测（2026-09-17，真实部署 2144 个会话 / 172MB）：
-//    全量 parse 需要 ~1.9s —— 20 秒 TTL 到期后的每次重算都会把主进程
-//    event loop 阻塞近 2 秒，期间 HTTP/SSE/消息处理全部排队 —— 前端表现
-//    就是"用量页卡住、整个控制台无响应"。两条治理（同步进 collectUsageRows）：
-//    A. **增量解析**：目录快照没变时复用上一轮解析结果（不只 TTL 内 ——
-//       sig 相同就复用，只是重做时间窗过滤与派生字段），冷启动只在
-//       真有新会话落盘时才发生。TTL 仍然保留，兜"内容被改写"的边缘情况。
-//    B. **流式分片解析**：真要冷启动时，把 172MB 的同步 parse 拆成
-//       每 50 个文件一让步（setImmediate）的异步流水线 —— 单次让步前的
-//       阻塞 <100ms，消息处理/界面请求不再被长阻塞。
-//      会话文件"结束写一次、之后不改"的语义不变，A 的复用与原缓存同样安全。
+// 数据量增长后（真实部署 2144 个会话 / 172MB）全量 parse 需要 ~1.9s，TTL 到期后的
+// 每次重算都会把主进程 event loop 阻塞近 2 秒，期间 HTTP/SSE/消息处理全部排队，
+// 前端表现就是"用量页卡住、整个控制台无响应"。两条治理（同步进 collectUsageRows）：
+//   A. 增量解析：目录快照没变时复用上一轮解析结果（sig 相同就复用，只重做时间窗过滤
+//      与派生字段），冷启动只在真有新会话落盘时才发生。TTL 仍然保留，兜"内容被改写"。
+//   B. 流式分片解析：真要冷启动时，把 172MB 的同步 parse 拆成每 50 个文件一让步
+//      （setImmediate）的异步流水线，单次让步前的阻塞 <100ms。
 const usageRowsCache = { key: '', at: 0, rows: null, win: null };
 const USAGE_CACHE_TTL_MS = 20000;
 // 已解析会话的档案（增量解析的持久层）：sig（目录快照）→ 每会话的展开行/计数。
-// 与 usageRowsCache 的区别：后者是"某个时间窗的最终 rows"，前者是
-// "全部会话的原始素材" —— 换 range 时不必重新读盘。
+// 与 usageRowsCache 的区别：后者是"某个时间窗的最终 rows"，前者是"全部会话的原始素材"，
+// 换 range 时不必重新读盘。
 const usageArchive = { sig: '', at: 0, sessions: null };   // sessions: Map(file -> {rows[], searchCount, toolCounts})
 // 让步前最多同步解析的文件数（B 方案的切片粒度）
 const USAGE_PARSE_CHUNK = 50;
@@ -2503,7 +2382,7 @@ function sessionsDirSignature() {
 
 /**
  * 读盘解析单个会话文件 → { rows, searchCount, toolCounts, started }。
- * 纯函数（不含时间窗过滤）：窗口过滤在 collectUsageRows 里做 —— 这样
+ * 纯函数（不含时间窗过滤）：窗口过滤在 collectUsageRows 里做，这样
  * 换 range（今天/7天/全部）时可以完全复用这份解析结果。
  */
 function parseUsageSessionFile(dir, f) {
@@ -2513,8 +2392,8 @@ function parseUsageSessionFile(dir, f) {
     const st = fs.statSync(fp);
     out.mtime = st.mtimeMs;
     // size 与 mtime 一起当"这个文件没变过"的判据：NTFS 的 mtime 粒度是 100ns，
-    // 单独用 mtime 已经够稳；多存一个 size 是白送的保险（同一个 mtime 刻度内
-    // 被改写且长度恰好相同 —— 概率极低但不是零）。
+    // 单独用 mtime 已经够稳；多存一个 size 是白送的保险（同一 mtime 刻度内被改写
+    // 且长度恰好相同，概率极低但不是零）。
     out.size = st.size;
     const s = JSON.parse(fs.readFileSync(fp, 'utf8'));
     const started = Number(s.startedAt) || 0;
@@ -2569,30 +2448,24 @@ function parseUsageSessionFile(dir, f) {
 
 /**
  * （异步）刷新"已解析档案"到当前目录快照。
- * 只重读**变化过的文件**（新文件 + mtime/size 变了的文件），其余复用 ——
+ * 只重读变化过的文件（新文件 + mtime/size 变了的文件），其余复用，
  * 2144 个文件只有几个新增时，重读量从 172MB 降到几 MB。
  * 解析按 USAGE_PARSE_CHUNK 分片、片间 setImmediate 让步，不长阻塞事件循环。
  *
- * ⚠️ 2026-09-22 修：这里曾经有一行"前置复用条件"，只有目录签名前两段
- *    （文件数 : 目录 mtime）完全一致才肯以旧档案为底，否则 `prev = new Map()`
- *    —— 于是**每落一个新会话文件就把已解析的整份档案全部丢弃、全量重解析**。
- *    机器人正常运行时新会话每几分钟落一个，等于这个增量缓存从未生效过。
- *    实测（800 文件 / 121MB 合成数据）：增量解析 5ms，被整体丢弃后 2157ms，
- *    而用量页"点今日"走的正是这条路径 —— 这就是"加载非常久"的直接原因。
- *
- *    那行条件本来是想兜"目录被换掉/清空"的场景，但下面**逐文件**比对
- *    (mtime, size) 已经覆盖了它：文件被删就不在 files 列表里、被改写则
- *    mtime/size 必变。所以现在无条件以现有档案为底，稳定性由逐文件判据保证。
+ * 这里曾经有一行"前置复用条件"：只有目录签名前两段（文件数 : 目录 mtime）完全一致
+ * 才肯以旧档案为底，否则 `prev = new Map()`，于是每落一个新会话文件就把已解析的
+ * 整份档案全部丢弃、全量重解析。机器人正常运行时新会话每几分钟落一个，等于这个增量
+ * 缓存从未生效过（实测：增量解析 5ms，被整体丢弃后 2157ms）。那行条件本来想兜
+ * "目录被换掉/清空"，但下面逐文件比对 (mtime, size) 已经覆盖了它：文件被删就不在
+ * files 列表里、被改写则 mtime/size 必变。所以现在无条件以现有档案为底。
  */
 async function refreshUsageArchive(dir, files, sig) {
-  // ⚠️ 这里**故意不做** "sig 相同就直接返回" 的短路（2026-09-22 实测踩到）：
-  //    sessionsDirSignature 只是「文件数 : 目录 mtime : 文件名总长」，
-  //    而会话文件是**原地改写**的（会话跑完 #persist 落盘、运行中节流保存），
-  //    NTFS 下改写文件内容不会动父目录的 mtime —— 于是"内容变了但签名没变"
-  //    会让档案一直沿用旧的解析结果。实测：把一个会话从 4 次调用改写成 40 次，
-  //    档案里仍然是 4 —— 而且只要目录没有增删文件，这个错值就**永远**不修正。
-  //    多付的代价只是一次"每文件一次 stat"的扫描（1200 文件 ≈ 5ms）；
-  //    真正省钱的判据是下面逐文件的 (mtime, size) 比对，那是零读盘的。
+  // 这里故意不做 "sig 相同就直接返回" 的短路：sessionsDirSignature 只是
+  // 「文件数 : 目录 mtime : 文件名总长」，而会话文件是原地改写的（会话跑完落盘、
+  // 运行中节流保存），NTFS 下改写文件内容不会动父目录的 mtime，于是"内容变了但
+  // 签名没变"会让档案一直沿用旧的解析结果，而且只要目录没有增删文件，这个错值就永远
+  // 不修正。多付的代价只是一次"每文件一次 stat"的扫描（1200 文件 ≈ 5ms）；
+  // 真正省钱的判据是下面逐文件的 (mtime, size) 比对，那是零读盘的。
   const prev = usageArchive.sessions || new Map();
   const next = new Map();
   for (let i = 0; i < files.length; i++) {
@@ -2617,11 +2490,10 @@ async function refreshUsageArchive(dir, files, sig) {
 }
 
 /**
- * 后台预热用量档案（2026-09-22）。
+ * 后台预热用量档案。
  *
  * 用量统计的第一道工序是把全部会话文件 JSON.parse 一遍（实测 1200 文件 /
- * 170MB ≈ 3.1 秒）。不预热的话，**每次启动后第一次打开用量页都要等这 3 秒**，
- * 用户看到的就是"点今日加载非常久"—— 而这 3 秒完全可以在启动后闲置时先付掉。
+ * 170MB ≈ 3.1 秒）。不预热的话，每次启动后第一次打开用量页都要等这 3 秒。
  *
  * 由 start() 在启动 8 秒后调用：那时插件加载、价格表、遥测都已就位，档案解析
  * 又是分片让步的，不会长阻塞事件循环。没有任何会话文件（全新安装）直接跳过。
@@ -2641,20 +2513,18 @@ async function warmUsageArchive() {
 /**
  * 历史文件指纹：只统计"已完结"的会话文件（最后写盘时刻早于今天 0 点）。
  *
- * 为什么日快照判据不用目录签名（sessionsDirSignature）：目录签名含目录 mtime，
- * 机器人每结束一个新会话就落一个新文件 → 签名必变。旧判据下签名一变，
- * **全部历史日快照同时失效** → 每次统计把窗口内每一天从档案全量重算
- * （每天遍历全部会话行 + 逐行计价，同步无让步），数据量大时事件循环被
- * 阻塞数秒、所有接口排队 —— 长期使用后"用量页卡死在加载界面"的根因。
+ * 日快照判据不用目录签名（sessionsDirSignature）：目录签名含目录 mtime，机器人每结束
+ * 一个新会话就落一个新文件 → 签名必变，全部历史日快照同时失效 → 每次统计把窗口内
+ * 每一天从档案全量重算（每天遍历全部会话行 + 逐行计价，同步无让步），数据量大时
+ * 事件循环被阻塞数秒、所有接口排队。
  *
- * 而已完结文件（会话写完一次后不再改写）的集合对历史日是稳定的：
- * 新增会话只影响"今天"（今天永远实时聚合、不进快照）。指纹不变 →
- * 历史快照持续有效；清理/删除旧会话文件会改变指纹 → 相关快照正确失效。
- * 每天 0 点跨越会让指纹变一次（昨天写完的文件被纳入）→ 一天仅重算一次。
+ * 已完结文件（会话写完一次后不再改写）的集合对历史日是稳定的：新增会话只影响"今天"
+ * （今天永远实时聚合、不进快照）。指纹不变 → 历史快照持续有效；清理/删除旧会话文件
+ * 会改变指纹 → 相关快照正确失效。每天 0 点跨越会让指纹变一次 → 一天仅重算一次。
  *
- * 指纹从已解析档案派生（每文件 mtime 在 refreshUsageArchive 时已 stat），
- * 零额外 IO。格式带 h: 前缀，与旧目录签名天然不同 —— 旧快照首次统计时
- * 自动失效重算一遍，随即迁移成新格式，无需专门迁移代码。
+ * 指纹从已解析档案派生（每文件 mtime 在 refreshUsageArchive 时已 stat），零额外 IO。
+ * 格式带 h: 前缀，与旧目录签名天然不同，旧快照首次统计时自动失效重算一遍，
+ * 随即迁移成新格式，无需专门迁移代码。
  */
 function historySignatureOf(archive, todayStartMs) {
   let count = 0, mtimeSum = 0;
@@ -2663,11 +2533,10 @@ function historySignatureOf(archive, todayStartMs) {
     count++;
     mtimeSum += parsed.mtime;
   }
-  // ⚠️（2026-10-17）h: → h2: 是一次性快照作废：账本补差修好之后
-  // （"已知覆盖"不再拿账本总量顶数、补差改按会话粒度生成），旧快照的
-  // 口径与新算法不同。改前缀让全部历史日按新算法重算一遍，随后迁移成
-  // 新格式；算不出数据的日子会走"保留旧值 + 对齐新签名"的自愈路径，
-  // 不会把仅存的快照抹成 0。
+  // h: → h2: 是一次性快照作废：账本补差修好之后（"已知覆盖"不再拿账本总量顶数、
+  // 补差改按会话粒度生成），旧快照的口径与新算法不同。改前缀让全部历史日按新算法
+  // 重算一遍，随后迁移成新格式；算不出数据的日子会走"保留旧值 + 对齐新签名"的自愈
+  // 路径，不会把仅存的快照抹成 0。
   return `h2:${count}:${mtimeSum}`;
 }
 
@@ -2678,8 +2547,7 @@ async function collectUsageRows({ range }) {
   if (usageRowsCache.rows && usageRowsCache.key === sig
       && (Date.now() - usageRowsCache.at) < USAGE_CACHE_TTL_MS) {
     return {
-      // 深拷贝：曾经 slice() 只是浅拷贝，调用方往行对象上写字段（如 dayKey）
-      // 会写穿到缓存对象；当前写入恰好幂等无害，但承诺的"防污染"并不成立
+      // 深拷贝：slice() 只是浅拷贝，调用方往行对象上写字段（如 dayKey）会写穿到缓存对象
       rows: usageRowsCache.rows.map((r) => ({ ...r })),
       win: win || usageRowsCache.win,
       searchCount: usageRowsCache.searchCount || 0,
@@ -2691,14 +2559,13 @@ async function collectUsageRows({ range }) {
   let files = [];
   try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch { return { rows: [], win, searchCount: 0, toolCounts: {} }; }
 
-  // ── 数据量治理（2026-09-17，见"用量行缓存"注释的 A/B 方案）──
+  // ── 数据量治理（见"用量行缓存"注释的 A/B 方案）──
   // 档案层增量解析 + 分片让步；时间窗过滤只对窗口内的素材做。
   const archive = await refreshUsageArchive(dir, files, sig.split('@')[0]);
 
   const rows = [];
   // 会话级计数：搜索次数、各工具的调用次数。
-  // 注意这些是"次数"不是"成本"：搜索通常是资源包或免费的，
-  // 所以只列数量、绝不参与成本计算（用户明确要求）。
+  // 这些是"次数"不是"成本"：搜索通常是资源包或免费的，所以只列数量、不参与成本计算。
   let searchCount = 0;
   const toolCounts = Object.create(null);
 
@@ -2721,13 +2588,13 @@ async function collectUsageRows({ range }) {
 
   // ── 账本兜底：补回被 keepFiles 裁掉的会话的用量 ──────────────────
   //
-  // 会话文件是可裁剪的（config.json 的 store.keepSessionFiles，默认 120），
-  // 文件一删，它携带的用量就再也读不到了 —— 统计会被冻结在"最近 N 个会话"上，
-  // 用户看到的现象是"今日 200 次运行，页面只算 120 次"。
+  // 会话文件是可裁剪的（config.json 的 store.keepSessionFiles，默认 120），文件一删，
+  // 它携带的用量就再也读不到了，统计会被冻结在"最近 N 个会话"上，用户看到的现象是
+  // "今日 200 次运行，页面只算 120 次"。
   //
-  // 补差分两层，全部以**按会话 id 去重**为前提：
+  // 补差分两层，全部以按会话 id 去重为前提：
   //   ① 逐会话补行：账本里"文件已不在"的会话，每条转一行统计行
-  //      （带 chatKey/model/vendor/calls，见 ledgerSessionRow）——
+  //      （带 chatKey/model/vendor/calls，见 ledgerSessionRow），
   //      按会话、按模型、调用次数、成本全部恢复；
   //   ② 按天聚合补差：① 之后与权威真值（账本 / 跨天归档 / usage-today.json
   //      逐字段取最大，见 authoritativeGapForDay）仍有差距的
@@ -2748,8 +2615,8 @@ async function collectUsageRows({ range }) {
         rows.push(ledgerSessionRow(rec));
       }
     }
-    // 已进 rows 的覆盖量（按天；runs 按去重后的会话数计 —— 真值侧的
-    // runs 是会话数，两边必须同口径，否则次数补差永远算不平）
+    // 已进 rows 的覆盖量（按天；runs 按去重后的会话数计，真值侧的 runs 是会话数，
+    // 两边必须同口径，否则次数补差永远算不平）
     const coveredByDay = new Map();
     const seenSessions = new Set();
     for (const r of rows) {
@@ -2776,7 +2643,7 @@ async function collectUsageRows({ range }) {
     const { days: ledgerByDay } = usageLedgerTotals(ledgerDayInWin);
     const doneDays = new Set();
     // 归档日也要进循环：账本是从"启用那一天"起记的，更早的跨天归档只存在于
-    // usage-archived-days.json 里 —— 只遍历账本的日就等于永远看不到它们。
+    // usage-archived-days.json 里，只遍历账本的日就等于永远看不到它们。
     for (const dayKey of new Set([...ledgerByDay.keys(), ...Object.keys(loadArchivedUsageDays())])) {
       if (!ledgerDayInWin(dayKey)) continue;
       const gap = authoritativeGapForDay(coveredByDay, ledgerByDay, dayKey);
@@ -2785,9 +2652,8 @@ async function collectUsageRows({ range }) {
       searchCount += gap.webSearchCount;
       doneDays.add(dayKey);
     }
-    // 账本日里**没有今天**时（账本刚建立、或跨天后第一段时间），当天权威值
-    // 仍在 usage-today.json 里 —— 单独为它补一次，否则「今日」卡片会一直
-    // 显示残缺值，而这正是用户报的"估算根本不更新"。
+    // 账本日里没有今天时（账本刚建立、或跨天后第一段时间），当天权威值仍在
+    // usage-today.json 里，单独为它补一次，否则「今日」卡片会一直显示残缺值。
     {
       const todayFile = loadUsageTodayFile();
       if (todayFile && !doneDays.has(todayFile.dayKey) && ledgerDayInWin(todayFile.dayKey)) {
@@ -2798,15 +2664,15 @@ async function collectUsageRows({ range }) {
         }
       }
     }
-    // ②-b 工具调用计数补回（2026-10-19）
+    // ②-b 工具调用计数补回
     //
-    // 上面第一圈的 toolCounts 只来自**磁盘上还存在的**会话文件。keepSessionFiles
-    // （默认 120）一裁，调用明细就只剩"最近 120 个会话"—— 实测 120 个文件只覆盖
+    // 上面第一圈的 toolCounts 只来自磁盘上还存在的会话文件。keepSessionFiles
+    // （默认 120）一裁，调用明细就只剩"最近 120 个会话"， 实测 120 个文件只覆盖
     // 5 小时，弹窗却写"近 7 天共 157 次"，而单日账本里就有上千次调用。
     //
-    // 账本自 2026-10-19 起记录 toolCounts，这里把"文件已不在磁盘上"的会话补回来，
-    // 与上面 token 的补差（authoritativeGapForDay）同一口径：
-    // 文件在的用文件（带逐次明细），文件不在的用账本（只有计数），两边不重叠。
+    // 账本记录 toolCounts 后，这里把"文件已不在磁盘上"的会话补回来，与上面 token 的
+    // 补差（authoritativeGapForDay）同一口径：文件在的用文件（带逐次明细），
+    // 文件不在的用账本（只有计数），两边不重叠。
     {
       const onDiskIds = new Set(files.map((f) => f.replace(/\.json$/, '')));
       for (const [dayKey, dayAgg] of ledgerByDay) {
@@ -2828,18 +2694,16 @@ async function collectUsageRows({ range }) {
       }
     }
   }
-  // 模型身份 = 渠道 + 模型 id。
-  // 渠道取**会话自己记录的** vendor（创建会话时由当时的配置派生）。
-  // 老会话没这个字段 → 标为「未知渠道」，绝不拿当前配置去倒推历史 ——
+  // 模型身份 = 渠道 + 模型 id。渠道取会话自己记录的 vendor（创建会话时由当时的配置
+  // 派生）。老会话没这个字段就标为「未知渠道」，绝不拿当前配置去倒推历史，
   // 用户很可能早就换过渠道了，猜出来的结果是错的。
   for (const r of rows) {
     r.vendor = String(r.vendor || '').trim() || UNKNOWN_VENDOR;
     r.modelKey = modelLabel(r.vendor, r.model);
   }
-  // 写缓存：存的是"清洗完的 rows"，取用时给副本避免调用方污染
-  // ⚠️ rows 里的对象来自档案层（可能被多个 range 的缓存共享引用）——
-  //    上面 vendor/modelKey 的改写是幂等的，但调用方还会写 dayKey，
-  //    所以缓存里也存一份浅拷贝行（同 range 复用时的防污染，与旧行为一致）。
+  // 写缓存：存的是"清洗完的 rows"，取用时给副本避免调用方污染。
+  // rows 里的对象来自档案层（可能被多个 range 的缓存共享引用），上面 vendor/modelKey
+  // 的改写是幂等的，但调用方还会写 dayKey，所以缓存里也存一份浅拷贝行。
   usageRowsCache.key = sig;
   usageRowsCache.at = Date.now();
   usageRowsCache.rows = rows.map((r) => ({ ...r }));
@@ -2849,28 +2713,27 @@ async function collectUsageRows({ range }) {
   return { rows, win, searchCount, toolCounts };
 }
 
-// ── 按日快照（2026-09-19）──────────────────────────────────────────
+// ── 按日快照 ────────────────────────────────────────────────────────
 //
-// 问题：collectUsageRows 即使有档案层缓存，冷启动（2144 文件 / 172MB）仍要
-// 全量流式解析；"今天之前的每一天"的数据是**不可变的**（会话结束写一次、
-// 之后不改），每次打开用量页都从头统计它们是纯浪费。
+// collectUsageRows 即使有档案层缓存，冷启动（2144 文件 / 172MB）仍要全量流式解析；
+// "今天之前的每一天"的数据是不可变的（会话结束写一次、之后不改），每次打开用量页
+// 都从头统计它们是纯浪费。
 //
-// 方案：把"已完结自然日"（今天之前）的聚合结果固化到
-// data/usage-daily.json。读取路径优先快照；只有快照缺失/失效的日才回退
-// 到"从档案聚合"。写快照时机：每次统计完顺手补齐（异步、不阻塞响应）。
+// 方案：把"已完结自然日"（今天之前）的聚合结果固化到 data/usage-daily.json。
+// 读取路径优先快照；只有快照缺失/失效的日才回退到"从档案聚合"。写快照时机：
+// 每次统计完顺手补齐（异步、不阻塞响应）。
 //
-// 有效性判据：每条日快照带生成时的目录快照 sig。sig 没变 → 该日必然没
-// 新增会话（会话文件不改写），直接用。sig 变了 → 重算该日（分片解析会
-// 复用 mtime 相同的旧解析结果，增量代价很小）。"今天"永远不进快照。
+// 有效性判据：每条日快照带生成时的目录快照 sig。sig 没变 → 该日必然没新增会话
+// （会话文件不改写），直接用。sig 变了 → 重算该日（分片解析会复用 mtime 相同的
+// 旧解析结果，增量代价很小）。"今天"永远不进快照。
 //
-// ⚠️ 成本口径：快照存 costOfRows 聚合结果。价格表（自定义价/远程价）变化
-//    会让历史成本跟着变 —— 快照固定的是"生成当时的计价"。这是刻意取舍：
-//    量级收益（秒→毫秒）远大于"改价后历史成本不联动"的小误差；想重算
-//    任何一天，删掉快照文件对应条目即可。
+// 成本口径：快照存 costOfRows 聚合结果。价格表（自定义价/远程价）变化会让历史成本
+// 跟着变，快照固定的是"生成当时的计价"。这是刻意取舍：量级收益（秒→毫秒）远大于
+// "改价后历史成本不联动"的小误差；想重算任何一天，删掉快照文件对应条目即可。
 const USAGE_DAILY_FILE = path.join(DATA_DIR, 'usage-daily.json');
-// 跨天归档（sessions.js 的 #archiveDayUsage 写的**独立文件**）。
-// ⚠️ 它与 usage-daily.json 是两回事，别混：usage-daily 存的是"按日聚合快照"，
-//    这个存的是 usage-today.json 那个单槽文件在跨零点时被顶下来的**上一日权威总量**。
+// 跨天归档（sessions.js 的 #archiveDayUsage 写的独立文件）。
+// 与 usage-daily.json 是两回事：usage-daily 存"按日聚合快照"，这个存
+// usage-today.json 那个单槽文件在跨零点时被顶下来的上一日权威总量。
 const USAGE_ARCHIVED_FILE = path.join(DATA_DIR, 'usage-archived-days.json');
 const USAGE_DAILY_VERSION = 1;
 
@@ -2913,19 +2776,19 @@ function completedDayKeys(fromTs) {
 }
 
 /**
- * 「数据元年」——最早**可能**有数据的自然日 0 点。
+ * 「数据元年」：最早可能有数据的自然日 0 点。
  *
- * 为什么需要它（2026-09-22）：'all' 范围给 completedDayKeys 传的起点是 0，
- * 于是从 1970-01-01 一路枚举到昨天 —— 实测 20718 个空日。代价有三层：
+ * 'all' 范围给 completedDayKeys 传的起点是 0，于是从 1970-01-01 一路枚举到昨天，
+ * 实测 20718 个空日。代价有三层：
  *   1. 枚举本身要遍历两万多次（13ms，还算便宜）；
  *   2. 每个空日都会生成一条快照写进 usage-daily.json → 文件被灌到 9.95MB，
- *      而这份文件**每次统计**都要 JSON.parse 一遍（≈65ms）；
- *   3. 更糟的是 days 维度会吐 20718 个数据点，前端折线图直接画两万个点。
+ *      而这份文件每次统计都要 JSON.parse 一遍（≈65ms）；
+ *   3. days 维度会吐 20718 个数据点，前端折线图直接画两万个点。
  *
  * 取两侧较小值，宁可保守（算早不算晚，绝不把真有数据的日子切掉）：
  *   ① 档案里最早一个会话的开始时刻；
  *   ② 日快照里最早一个"确有数据"（runs 或 token 非零）的日。
- * 两边都拿不到 → 返回 0，等于不做任何下限（老行为），安全兜底。
+ * 两边都拿不到 → 返回 0，等于不做任何下限，安全兜底。
  */
 function usageDataFloorMs(archive, snapshotDays) {
   let floorMs = Infinity;
@@ -2933,9 +2796,9 @@ function usageDataFloorMs(archive, snapshotDays) {
     const t = Number(parsed?.started) || 0;
     if (t > 0 && t < floorMs) floorMs = t;
   }
-  // ⚠️ 账本也要计入数据元年！否则会出现：会话文件被裁光后档案层的最早
-  //    会话已经是很近的日子，但账本里还有更早的日子 —— 按档案算出的
-  //    下限会把那些日子判成"元年之前"并裁掉，历史数据凭空消失。
+  // 账本也要计入数据元年！否则会话文件被裁光后，档案层的最早会话已经是很近的日子，
+  // 但账本里还有更早的日子，按档案算出的下限会把那些日子判成"元年之前"并裁掉，
+  // 历史数据凭空消失。
   for (const dayKey of listUsageLedgerDays()) {
     const t = new Date(`${dayKey}T00:00:00`).getTime();
     if (Number.isFinite(t) && t < floorMs) floorMs = t;
@@ -2963,7 +2826,7 @@ function usageDataFloorMs(archive, snapshotDays) {
  *
  * 保守三条，确保它永远不会删掉真实数据：
  *   ① 元年拿不到（0 / 非有限数）→ 一条都不裁；
- *   ② 只裁 **严格早于** 元年的日 —— 元年当天及以后原样保留；
+ *   ② 只裁严格早于元年的日，元年当天及以后原样保留；
  *   ③ 只裁字典序比较这一天（不做任何数值猜测）。
  * 被裁掉的日子如果将来真有数据，会作为"快照缺失"被正常重算，不会丢。
  *
@@ -2984,14 +2847,13 @@ function pruneUsageDaily(snapshotDays, floorMs) {
 }
 
 /**
- * 读 data/usage-today.json —— **当天**用量的权威值。
+ * 读 data/usage-today.json，当天用量的权威值。
  *
- * ⚠️ 这是用量统计最重要的一块拼图（用户报"估算根本不更新"）：
  * 会话文件会被 keepFiles 裁掉、账本只从启用那天起记，所以两者都覆盖不了
- * 「今天早些时候」的历史。而 usage-today.json 是 #bumpTodayUsage 在每次会话
- * 结束时**累加**写下的当天总量，它**永远不被裁剪**，是当天唯一完整可信的数。
+ * 「今天早些时候」的历史。而 usage-today.json 是 #bumpTodayUsage 在每次会话结束时
+ * 累加写下的当天总量，它永远不被裁剪，是当天唯一完整可信的数。
  *
- * 有了它，即使今天有 85% 的会话文件已被删除，统计也能对齐到真值 ——
+ * 有了它，即使今天有 85% 的会话文件已被删除，统计也能对齐到真值，
  * 缺的量作为"归档补差"计入，而不是让用户对着一个偏小的数字反复刷新。
  *
  * @returns {null | {dayKey:string, promptTokens:number, completionTokens:number,
@@ -3018,14 +2880,12 @@ function loadUsageTodayFile() {
 /**
  * 跨天归档的每日权威总量（data/usage-archived-days.json）。
  *
- * ⚠️（2026-10-17 补完 报告3 M2 的另一半）这个文件此前**只写不读**：
- *   sessions.js 的 #archiveDayUsage 把 usage-today.json 被顶下来的旧槽位按天写进去，
- *   而下面 authoritativeGapForDay 的注释早就把它列为"权威总量来源③" —— 代码里却
- *   从来没打开过它。于是那段归档等于白写，注释与实现对不上（这正是报告点的问题）。
- *   这里补上读取：账本没覆盖到的日子，用归档里的权威值补差。
+ * 这个文件此前只写不读：sessions.js 的 #archiveDayUsage 把 usage-today.json 被顶下来
+ * 的旧槽位按天写进去，而 authoritativeGapForDay 的注释早就把它列为"权威总量来源③"，
+ * 代码里却从来没打开过它。这里补上读取：账本没覆盖到的日子，用归档里的权威值补差。
  *
  * 缓存按 (mtimeMs,size) 失效：本函数在补差循环里会被逐日调用，不能每天都读一次盘。
- * 文件不存在是**常态**（还没发生过跨天归档），不是错误。
+ * 文件不存在是常态（还没发生过跨天归档），不是错误。
  */
 let archivedDaysCache = { sig: '', days: {} };
 
@@ -3061,17 +2921,15 @@ function archivedDayTotals(dayKey) {
 /**
  * 算出某一天"已经进统计行的量"与权威真值之间还差多少。
  *
- * 三个数据源取**逐字段最大值**作为真值：
- *   ① 用量账本 —— 按天留档、跨天也准（启用那天起）
- *   ② usage-archived-days.json —— 跨零点归档的权威总量
- *   ③ usage-today.json —— 当天总量（仅当天匹配时）
+ * 三个数据源取逐字段最大值作为真值：
+ *   ① 用量账本，按天留档、跨天也准（启用那天起）
+ *   ② usage-archived-days.json，跨零点归档的权威总量
+ *   ③ usage-today.json，当天总量（仅当天匹配时）
  *
- * ⚠️（2026-10-17）"已知覆盖"只认**调用方已经放进 rows 的量** ——
- * coveredByDay 必须已含账本逐会话补行。曾经的实现把账本当日总量同时
- * 当成"已知覆盖"（known = max(文件覆盖, 账本总量)）和"真值"
- * （truth = 账本总量）→ gap 恒等于 0 → 补差永远不触发。用户报的
- * "今日 200 次运行只算 120 次"就是这么来的：账本明明记全了，
- * 却因为对账逻辑自相矛盾，一行都补不回去。
+ * "已知覆盖"只认调用方已经放进 rows 的量：coveredByDay 必须已含账本逐会话补行。
+ * 曾经的实现把账本当日总量同时当成"已知覆盖"（known = max(文件覆盖, 账本总量)）
+ * 和"真值"（truth = 账本总量）→ gap 恒等于 0 → 补差永远不触发。用户报的
+ * "今日 200 次运行只算 120 次"就是这么来的。
  *
  * @param {Map<string, object>} coveredByDay 已进 rows 的覆盖量（按天，含 runs=去重会话数）
  * @param {Map<string, object>} ledgerByDay   账本汇总量
@@ -3118,8 +2976,8 @@ function ledgerGapRow(dayKey, gap) {
     cachedTokens: gap.cachedTokens,
     at: Number.isFinite(at) ? at : Date.now(),
     // 这一行代表的会话数。costOfRows 的 runs 按行的 runs 累加，补差行不带
-    // runs 会按 1 计 —— "调用次数"照样对不上（200 次运行只算 120 次的
-    // 另一半原因）。纯 token 差价的补差行 runs 为 0，不影响计数。
+    // runs 会按 1 计，"调用次数"照样对不上。纯 token 差价的补差行 runs 为 0，
+    // 不影响计数。
     runs: Number(gap.runs) || 0,
     model: '(已归档会话)',
     vendor: UNKNOWN_VENDOR,
@@ -3133,11 +2991,11 @@ function ledgerGapRow(dayKey, gap) {
 /**
  * 把一条账本记录转成统计行：一个被裁掉的会话 = 一行。
  *
- * 为什么必须逐会话转行、而不是按天合成一行：
+ * 必须逐会话转行而不是按天合成一行：
  *   ① 次数：costOfRows 的 runs 按行累加，按天合成的一行只代表 1 次调用；
- *   ② 归属：chatKey / model / vendor / calls 都在账本记录里，逐会话转行
- *      才能让"按会话 / 按模型"两张表把补回来的量归到真正的群和模型上，
- *      而不是全塞进"(已归档会话) / 未知渠道"这种糊涂账。
+ *   ② 归属：chatKey / model / vendor / calls 都在账本记录里，逐会话转行才能让
+ *      "按会话 / 按模型"两张表把补回来的量归到真正的群和模型上，而不是全塞进
+ *      "(已归档会话) / 未知渠道"这种糊涂账。
  *
  * @param {object} rec 账本记录（usage-ledger.js 的 ledgerRecordOf 产出）
  */
@@ -3158,14 +3016,14 @@ function ledgerSessionRow(rec) {
 }
 
 /**
- * 从档案层聚合出"某一个自然日"的统计（不使用快照 —— 这是重算路径）。
+ * 从档案层聚合出"某一个自然日"的统计（不使用快照，这是重算路径）。
  * 返回与 buildUsageStats 的 days/chats/models 三段同构的聚合体。
  */
 function aggregateDayFromArchive(archive, dayKey) {
   const dayStart = new Date(dayKey + 'T00:00:00');
   if (isNaN(dayStart.getTime())) return null;
-  // ⚠️ 不能写死 +24h 夏令时切换日会错 1 小时（本地 23h 或 25h 的一天），
-  // 那一天的尾巴或开头会被漏掉 / 多算。用 setDate(+1) 让 Date 自己处理日界线。
+  // 不能写死 +24h：夏令时切换日会错 1 小时（本地 23h 或 25h 的一天），那一天的尾巴
+  // 或开头会被漏掉 / 多算。用 setDate(+1) 让 Date 自己处理日界线。
   const dayEndDate = new Date(dayStart.getTime());
   dayEndDate.setDate(dayEndDate.getDate() + 1);
   const dayEnd = dayEndDate.getTime() - 1;
@@ -3200,20 +3058,18 @@ function aggregateDayFromArchive(archive, dayKey) {
     for (const parsed of archive.values()) {
       if (parsed?.started >= dayStart.getTime() && parsed.started <= dayEnd) s += parsed.searchCount || 0;
     }
-    // ⚠️（2026-10-17 修崩溃）**不能直接 coveredByDay.get(dayKey).webSearchCount = s**：
-    //    上面的累加循环只在 rows 非空时才 set(dayKey, …)，所以"这一天没有任何会话记录"
-    //    （归档为空 / 该日无会话文件）时 map 里没有这个 key，get() 返回 undefined，
-    //    赋值直接抛 TypeError: Cannot set properties of undefined (setting 'webSearchCount')。
-    //    而"归档为空"恰恰是会话文件被外部清空后的常态 —— 于是快照路径每次必抛、
-    //    被 buildUsageStats 的 catch 回落到实时聚合，表现为用量页按天只剩今天、
-    //    下钻 0 行、成本 0。参考包同位置有同样的问题。
+    // 不能直接 coveredByDay.get(dayKey).webSearchCount = s：上面的累加循环只在 rows
+    // 非空时才 set(dayKey, …)，所以"这一天没有任何会话记录"（归档为空 / 该日无会话文件）
+    // 时 map 里没有这个 key，get() 返回 undefined，赋值直接抛
+    // TypeError: Cannot set properties of undefined。而"归档为空"恰恰是会话文件被外部
+    // 清空后的常态，于是快照路径每次必抛、被 buildUsageStats 的 catch 回落到实时聚合，
+    // 表现为用量页按天只剩今天、下钻 0 行、成本 0。
     const cur = coveredByDay.get(dayKey)
       || { promptTokens: 0, completionTokens: 0, cachedTokens: 0, webSearchCount: 0 };
     cur.webSearchCount = s;
     coveredByDay.set(dayKey, cur);
   }
   // 账本补差：会话文件被 keepFiles 裁掉的会话，其用量在这里补回来。
-  // 不补的话统计会被冻结在"最近 N 个会话文件"上（用户报"200 次只算 120 次"）。
   // 与 collectUsageRows 同构：先逐会话补行，再按天对账补聚合差。
   {
     // ① 逐会话补行：账本里"文件已不在磁盘"的会话，每条转一行
@@ -3224,14 +3080,14 @@ function aggregateDayFromArchive(archive, dayKey) {
       rows.push(row);
       pushed.push(row);
     }
-    // ② 覆盖量把刚补的行并进去。runs 必须**无条件**按去重会话数重算
-    //    （不能只在裁了文件的日子算）—— 真值侧的 runs 是会话数，两边
-    //    不同口径会让次数补差永远算不平，没裁文件的日子也会补出幽灵次数。
+    // ② 覆盖量把刚补的行并进去。runs 必须无条件按去重会话数重算（不能只在裁了文件
+    //    的日子算）， 真值侧的 runs 是会话数，两边不同口径会让次数补差永远算不平，
+    //    没裁文件的日子也会补出幽灵次数。
     {
       const cur = coveredByDay.get(dayKey)
         || { promptTokens: 0, completionTokens: 0, cachedTokens: 0, webSearchCount: 0, runs: 0 };
-      // ⚠️ 上面建 coveredByDay 时没有 runs 字段，直接 += 会得到 NaN，
-      //    而 num(NaN)=0 → 次数补差把整天的量再补一遍（实测 runs 翻倍）。
+      // 上面建 coveredByDay 时没有 runs 字段，直接 += 会得到 NaN，
+      // 而 num(NaN)=0 → 次数补差把整天的量再补一遍（实测 runs 翻倍）。
       if (!Number.isFinite(Number(cur.runs))) cur.runs = 0;
       const seen = new Set();
       for (const r of rows) {
@@ -3271,11 +3127,10 @@ function aggregateDayFromArchive(archive, dayKey) {
  * 抽成模块级是因为快照路径与回落实时路径都要用，两边的字段约定必须一致。
  *
  * 做两件必须做的事：
- *  ① 重算派生比率 cacheHitRate / peakRatio —— 它们是「比率」不是「量」，
- *     跨日相加没有意义，聚合时一律先归零再在此处按当天自身重算
- *     （见 buildUsageStatsWithSnapshots 里 totals 的归零骨架）。
- *  ② 补 key 字段 —— chats / models 维度都有 key，前端下钻与横向条形图统一按
- *     key 取值；days 曾经只给 day，把 days 接进 usageBars 时 x.key 会是 undefined。
+ *  ① 重算派生比率 cacheHitRate / peakRatio，它们是「比率」不是「量」，
+ *     跨日相加没有意义，聚合时一律先归零再在此处按当天自身重算；
+ *  ② 补 key 字段，chats / models 维度都有 key，前端下钻与横向条形图统一按
+ *     key 取值；days 只给 day 的话，把 days 接进 usageBars 时 x.key 会是 undefined。
  *
  * @param {string} dayKey  'YYYY-MM-DD'
  * @param {object} aggTotals 该日的聚合体（costOfRows 的返回或 groupBy 的返回）
@@ -3313,14 +3168,12 @@ async function buildUsageStatsWithSnapshots({ range = '7' } = {}) {
 
   // 需要的已完结日：窗口起点到昨天；快照里已有的更早日子只在 all 模式需要
   const snapshotDays = loadUsageDaily();
-  // ⚠️ 顺序要紧：先读出快照（数据元年的判据之一），再算起点、再枚举日。
+  // 顺序要紧：先读出快照（数据元年的判据之一），再算起点、再枚举日。
   //
-  // 起点 = 「窗口起点」与「数据元年」的**较晚者**。两条同时要满足：
-  //   ① 'all' 不能给 0 —— 那会从 1970-01-01 枚举两万多个空日（见元年函数注释）；
-  //   ② 元年之前的日子必然是空的，枚举出来只会在快照里写一批空条目、
-  //      下一次调用又按"空日裁剪"删掉 —— 一边写一边删，**每次统计都重算那几个空日**。
-  //      实测（R49 / usage-daily-test 抓到的）：只有 3 天数据的部署上，
-  //      7 天窗口会稳定地每次重算 3 个空日，等于把刚修好的性能又还回去一部分。
+  // 起点 = 「窗口起点」与「数据元年」的较晚者。两条同时要满足：
+  //   ① 'all' 不能给 0，那会从 1970-01-01 枚举两万多个空日（见元年函数注释）；
+  //   ② 元年之前的日子必然是空的，枚举出来只会在快照里写一批空条目、下一次调用
+  //      又按"空日裁剪"删掉，一边写一边删，每次统计都重算那几个空日。
   //      枚举与裁剪用同一个下限，"写什么"就等于"留什么"，churn 自然消失。
   // 元年拿不到（= 整份数据里一条会话都没有）：'all' 干脆一天都不枚举，
   // 其他范围退回窗口起点（Math.max(start, 0) 即起点本身）。
@@ -3331,9 +3184,9 @@ async function buildUsageStatsWithSnapshots({ range = '7' } = {}) {
   const wantedDays = completedDayKeys(fromTs);
   let recomputed = 0;
 
-  // days 维度：每日一条聚合（快照优先，缺失则重算）
+  // days 维度：每日一条聚合（快照优先，缺失则重算）。
   // 先攒 { dayKey, totals } 原始对，等 totals/withDerived 定义好之后再摊平
-  // （见下方注释：摊平时必须重算派生比率、补 key 字段）。
+  // （摊平时必须重算派生比率、补 key 字段）。
   const byDayRaw = [];
   const needDays = [];
   for (const dayKey of wantedDays) {
@@ -3346,30 +3199,28 @@ async function buildUsageStatsWithSnapshots({ range = '7' } = {}) {
   }
   for (const dayKey of needDays) {
     const agg = aggregateDayFromArchive(archive, dayKey);
-    // ⚠️（2026-10-17）重算"算不出数据"时**不能拿零去覆盖已有快照**。
-    //    触发场景：会话文件被外部清空（用户点了「清空已结束的会话记录」）→
-    //    归档为空 → 所有历史日的 sig 全部失配进 needDays → 每个都重算出全零，
-    //    若照旧写回 snapshotDays 再 saveUsageDaily，磁盘上那几天的真实聚合值
-    //    就被永久抹成 0 了。快照本身是这些天唯一的凭据，必须保住。
+    // 重算"算不出数据"时不能拿零去覆盖已有快照。触发场景：会话文件被外部清空
+    // （用户点了「清空已结束的会话记录」）→ 归档为空 → 所有历史日的 sig 全部失配进
+    // needDays → 每个都重算出全零，若照旧写回 snapshotDays 再 saveUsageDaily，
+    // 磁盘上那几天的真实聚合值就被永久抹成 0 了。快照本身是这些天唯一的凭据。
     const aggHasData = agg
       && ((Number(agg.totals?.runs) || 0) > 0 || (Number(agg.totals?.totalTokens) || 0) > 0);
     if (!aggHasData) {
       const prev = snapshotDays[dayKey];
       if (prev?.aggregates) {
         byDayRaw.push({ dayKey, totals: prev.aggregates.totals });
-        // ⚠️（2026-10-17 N9）**把签名一起对齐到当前归档状态** —— 让快照"自愈"。
+        // 把签名一起对齐到当前归档状态，让快照"自愈"。
         //
-        //    只保住数据还不够：只要 sig 不更新，这个日子下一轮统计仍会进 needDays、
-        //    再算一次、再判定"算不出数据"，陷入**每轮都重算**的循环。数据是保住了，
-        //    但快路径永远回不来（每次打开用量页都要把整个窗口的天数过一遍）。
+        // 只保住数据还不够：只要 sig 不更新，这个日子下一轮统计仍会进 needDays、
+        // 再算一次、再判定"算不出数据"，陷入每轮都重算的循环，数据是保住了，
+        // 但快路径永远回不来。
         //
-        //    为什么这样对齐是安全的：
-        //      · historySig 是"**已完结会话文件**的 数量: mtime 之和"。
-        //        归档为空（会话被清空/删除）时它恒为 `h:0:0` —— 在归档回到非空前，
-        //        任何一天都不可能算出数据，所以"这份快照在当前状态下已是最终值"成立。
-        //      · 一旦归档恢复/新增（用户补回文件、或明天又有会话完结），
-        //        historySig 立刻变 → 快照重新失配 → 正常走重算路径并覆盖。
-        //        也就是说对齐只**推迟**重算，不会**阻止**重算。
+        // 这样对齐是安全的：
+        //   · historySig 是"已完结会话文件的数量: mtime 之和"。归档为空（会话被清空/
+        //     删除）时它恒为 `h:0:0`，在归档回到非空前，任何一天都不可能算出数据，
+        //     所以"这份快照在当前状态下已是最终值"成立。
+        //   · 一旦归档恢复/新增（用户补回文件、或明天又有会话完结），historySig 立刻变
+        //     → 快照重新失配 → 正常走重算路径并覆盖。也就是说对齐只推迟重算，不会阻止重算。
         snapshotDays[dayKey] = { sig: historySig, aggregates: prev.aggregates };
       }
       continue;
@@ -3386,17 +3237,15 @@ async function buildUsageStatsWithSnapshots({ range = '7' } = {}) {
     todayAgg = aggregateDayFromArchive(archive, todayKey);
   }
 
-  // ⚠️ 把今天补进 days（2026-10-16 修复「按天」图表空白）。
+  // 把今天补进 days（修复「按天」图表空白）。
   //
-  // 背景：completedDayKeys() 从**昨天** 0 点开始往回枚举（见该函数里明写的
-  // `setDate(-1)`），所以 `today` 永远不会进 wantedDays —— 这是设计，今天走
-  // 实时聚合、不进日快照。而 days 维度只在 wantedDays 循环里 push，于是今天的
-  // 数据**从来没进过 days 维度**。
+  // completedDayKeys() 从昨天 0 点开始往回枚举（见该函数里明写的 `setDate(-1)`），
+  // 所以 today 永远不会进 wantedDays，这是设计，今天走实时聚合、不进日快照。
+  // 而 days 维度只在 wantedDays 循环里 push，于是今天的数据从来没进过 days 维度。
   //
-  // 为什么这是个 bug：下面 chats / models / totals **三个维度都合并了
-  // todayAgg**，唯独 days 漏了。后果是顶部卡片（读 totals）数字在动，
-  // 而「按天」图表（读 days）显示「这段时间没有记录」——同一份数据两个口径。
-  // 只要某天的数据全在当天产生且当天没过完，图表就是空的。
+  // 下面 chats / models / totals 三个维度都合并了 todayAgg，唯独 days 漏了：
+  // 顶部卡片（读 totals）数字在动，而「按天」图表（读 days）显示「这段时间没有记录」，
+  // 同一份数据两个口径。
   //
   // 曾经这里把展开写在 byDay.sort() 前后两次、且摊平的是聚合体原对象；
   // 现在统一在 withDerived 里做，日期升序也只排一次。
@@ -3408,13 +3257,12 @@ async function buildUsageStatsWithSnapshots({ range = '7' } = {}) {
     for (const groups of groupsList) {
       for (const g of groups || []) {
         const key = String(g.key ?? '');
-        // ⚠️（2026-10-17 修重复计数）建桶时必须把**所有被累加的字段**归零：
-        //    旧实现只归零 runs/exactCalls/cost，而下面累加循环一共加 11 个字段
-        //    （cost/peakCost/offPeakCost/peakTokens/offPeakTokens/promptTokens/
-        //    completionTokens/cachedTokens/totalTokens/runs/exactCalls）——
-        //    漏掉的 8 个会随 `{ ...g }` 原样进桶、再被累加循环加第二遍，
-        //    导致每个键"首次出现"的日贡献翻倍（实测 7 日模型表虚高 35%、
-        //    会话表虚高 75%、单日范围整表翻倍）。总量与"按天"表不走这里，不受影响。
+        // 建桶时必须把所有被累加的字段归零：旧实现只归零 runs/exactCalls/cost，
+        // 而下面累加循环一共加 11 个字段（cost/peakCost/offPeakCost/peakTokens/
+        // offPeakTokens/promptTokens/completionTokens/cachedTokens/totalTokens/runs/
+        // exactCalls），漏掉的 8 个会随 `{ ...g }` 原样进桶、再被累加循环加第二遍，
+        // 导致每个键"首次出现"的日贡献翻倍（实测 7 日模型表虚高 35%、会话表虚高 75%、
+        // 单日范围整表翻倍）。总量与"按天"表不走这里，不受影响。
         if (!map.has(key)) map.set(key, {
           key, ...g,
           cost: 0, peakCost: 0, offPeakCost: 0,
@@ -3444,10 +3292,9 @@ async function buildUsageStatsWithSnapshots({ range = '7' } = {}) {
   const snapAggs = [...wantedDays].map((k) => snapshotDays[k]?.aggregates).filter(Boolean);
   const totalsAggs = snapAggs.map((a) => a.totals);
   if (todayAgg) totalsAggs.push(todayAgg.totals);
-  // ⚠️ 曾经首元素走 `{ ...t }` 分支（把聚合体的**全部**字段原样带进来），
-  // 后续元素才走固定字段累加。后果：单日范围的 totals 字段集与多日不同
-  // （多出来的 cacheHitRate/peakRatio/hasPeakModel 在单日时是原值、
-  // 多日时被丢弃后重算），前端拿到两种形状的对象。
+  // 曾经首元素走 `{ ...t }` 分支（把聚合体的全部字段原样带进来），后续元素才走固定
+  // 字段累加。后果：单日范围的 totals 字段集与多日不同（多出来的 cacheHitRate/peakRatio/
+  // hasPeakModel 在单日时是原值、多日时被丢弃后重算），前端拿到两种形状的对象。
   // 现在统一形状：先铺一份全零骨架，再逐日累加固定的可加字段。
   const TOTAL_ZERO = {
     cost: 0, peakCost: 0, offPeakCost: 0, peakTokens: 0, offPeakTokens: 0,
@@ -3476,7 +3323,7 @@ async function buildUsageStatsWithSnapshots({ range = '7' } = {}) {
   totals.peakRatio = (totals.peakTokens + totals.offPeakTokens) ? totals.peakTokens / (totals.peakTokens + totals.offPeakTokens) : 0;
 
   // byDay 的每一条也是从聚合体摊平的，聚合体里的 cacheHitRate/peakRatio 是
-  // 上面那张全零骨架带来的 0 —— 必须在入表前按该日自身的 token 重算，
+  // 上面那张全零骨架带来的 0，必须在入表前按该日自身的 token 重算，
   // 否则「按天」表的命中率列会整列显示 0%。
   const byDay = byDayRaw
     .map((x) => withDerived(x.dayKey, x.totals))
@@ -3495,12 +3342,12 @@ async function buildUsageStatsWithSnapshots({ range = '7' } = {}) {
   }
   for (const [k, v] of Object.entries(todayAgg?.toolCounts || {})) toolCounts[k] = (toolCounts[k] || 0) + v;
 
-  // 快照回写（有新增/失效重算的日子才写）
-  // 顺带裁掉数据元年之前的空日：老版本被 'all' 范围灌进来的两万条空日
-  // 就靠这一句自愈（正常运行时每次统计都过一遍，裁剪本身是字符串比较，可忽略）。
+  // 快照回写（有新增/失效重算的日子才写）。
+  // 顺带裁掉数据元年之前的空日：老版本被 'all' 范围灌进来的两万条空日就靠这一句
+  // 自愈（正常运行时每次统计都过一遍，裁剪本身是字符串比较，可忽略）。
   const prunedDays = pruneUsageDaily(snapshotDays, floorMs);
   if (recomputed > 0 || needDays.length > 0 || prunedDays > 0) {
-    // 只保留窗口需要的 + 已有的（不清老数据——删掉将来还得重算）
+    // 只保留窗口需要的 + 已有的（不清老数据，删掉将来还得重算）
     saveUsageDaily(snapshotDays);
   }
 
@@ -3522,15 +3369,14 @@ async function buildUsageStatsWithSnapshots({ range = '7' } = {}) {
   };
 }
 
-/** 用配置解析价格（成本只与实际调用的模型有关，与当前选中模型无关）。 */
 /**
  * 取某次调用的单价。
  *
- * 按「渠道：模型 id」优先查 —— 用户可以为某个渠道下的模型单独定价
+ * 按「渠道：模型 id」优先查，用户可以为某个渠道下的模型单独定价
  * （A6API 的 GLM-5.3-Flash 与 OpenRouter 的可能是两个价）。
  * 查不到再退回裸模型 id（通用价），最后才是全局兜底。
  *
- * ⚠️ 必须与前端展示/批量编辑用的身份一致，否则用户设的渠道价永远不会生效。
+ * 必须与前端展示/批量编辑用的身份一致，否则用户设的渠道价永远不会生效。
  */
 function priceOf(model, vendor) {
   const cfg = getConfig();
@@ -3572,8 +3418,8 @@ function costOfRows(rows) {
     peakRatio: (peakTokens + offPeakTokens) ? peakTokens / (peakTokens + offPeakTokens) : 0,
     exactCalls, hasPeakModel,
     // runs = 这些行代表的 LLM 调用总数。会话文件行每次调用一行（runs 缺省 1）；
-    // 账本补行带真实 calls（见 ledgerSessionRow）—— 不累加它，被裁掉的会话
-    // 在"模型调用次数"里永远少算（"200 次运行只算 120 次"的一半原因）。
+    // 账本补行带真实 calls（见 ledgerSessionRow），不累加它，被裁掉的会话在
+    // "模型调用次数"里永远少算。
     runs: rows.reduce((n, r) => n + (Number(r?.runs) || 1), 0)
   };
 }
@@ -3593,10 +3439,10 @@ function groupBy(rows, field, limit = 0) {
 }
 
 /** 主统计：按天 / 按会话 / 按模型三个维度。
- * 2026-09-19 起优先走"按日快照"路径（历史日聚合固化在 data/usage-daily.json，
- * 只实时算今天），快照层出错时自动回落到旧的实时聚合 —— 用量页绝不能白屏。
+ * 优先走"按日快照"路径（历史日聚合固化在 data/usage-daily.json，只实时算今天），
+ * 快照层出错时自动回落到实时聚合，用量页绝不能白屏。
  *
- * 2026-09-22 加三道闸（长期使用后"用量页卡死在加载"的治理之三）：
+ * 三道闸（治理"用量页卡死在加载"）：
  *   1. 结果缓存 3 小时（用户要求）：见下方 USAGE_STATS_CACHE_TTL_MS 注释。
  *   2. 微缓存 5 秒：前端轮询 + SSE 事件都会打到这里，5 秒内的重复请求直接复用。
  *      （已被第 1 条覆盖，保留是因为它先于结果缓存判定、命中更快，也兜住
@@ -3606,19 +3452,19 @@ function groupBy(rows, field, limit = 0) {
 const USAGE_STATS_MICRO_TTL_MS = 5000;
 
 /**
- * 结果缓存 TTL（2026-09-22，用户要求）。
+ * 结果缓存 TTL（用户要求）。
  *
  * 用户原话："用量界面点今日的时候会加载非常久 …… 我认为可以改成 3 小时自动
  * 统计一次，外加用户手动刷新的时候统计。"
  *
- * 为什么值得缓存整个结果：统计本身不贵了（档案增量解析 + 快照），但**入口太多**
- * —— 15 秒轮询、SSE 事件、切页签、来回点时间范围按钮，每个入口都会把
+ * 为什么值得缓存整个结果：统计本身不贵了（档案增量解析 + 快照），但入口太多，
+ * 15 秒轮询、SSE 事件、切页签、来回点时间范围按钮，每个入口都会把
  * 「读目录 → 增量解析 → 逐日聚合 → 逐行计价 → 读 10MB 快照」重走一遍。
  * 缓存整个结果，这些入口全部退化成一次 Map.get。
  *
  * 语义要点：
- *   - 命中时 `computedAt` **保持真正算出来的时刻**，前端据此显示"数据更新于 HH:MM"
- *     —— 新鲜度是可见的，不会假装数字是刚算的。
+ *   - 命中时 `computedAt` 保持真正算出来的时刻，前端据此显示"数据更新于 HH:MM"，
+ *     新鲜度是可见的，不会假装数字是刚算的。
  *   - force=true（用户点了「刷新」）跳过缓存重新统计并覆盖缓存。
  *   - 想调新鲜度：改这一个常量即可（单位毫秒）。
  */
@@ -3637,12 +3483,11 @@ function resetUsageStatsCache() {
 /**
  * 计价输入的价格指纹。
  *
- * ⚠️ 为什么缓存 key 必须带它（曾经的 bug）：
- * 3 小时结果缓存的 key 原本只有 range，用户在设置里改了自定义单价之后，
- * 用量页的成本数字 3 小时内纹丝不动 —— 而这恰恰是最需要立刻生效的场景
- * （用户改价就是想看新口径）。价格指纹一变，缓存 key 就变，缓存自动失效。
+ * 为什么缓存 key 必须带它：3 小时结果缓存的 key 原本只有 range，用户在设置里改了
+ * 自定义单价之后，用量页的成本数字 3 小时内纹丝不动，而这恰恰是最需要立刻生效的
+ * 场景（用户改价就是想看新口径）。价格指纹一变，缓存 key 就变，缓存自动失效。
  *
- * 取的是「真正影响计价的两处」：
+ * 取的是真正影响计价的两处：
  *   ① data/config.json 里的自定义价（mtime + 字节长度，够用且便宜）
  *   ② 远程价表 setRemotePrices 的条目数（远程价刷新会改变条目数）
  * 不做深度哈希：config.json 很小，而计价本身只在重算时发生。
@@ -3660,9 +3505,8 @@ async function buildUsageStats({ range = '7', force = false } = {}) {
   const rangeKey = String(range);
   // 缓存键带上价格指纹：改单价后旧缓存自动作废（见 priceSignature 注释）
   const key = `${rangeKey}#${priceSignature()}`;
-  // force 必须**同时**绕过两层缓存。踩过的坑：微缓存判定写在前面却没看 force，
-  // 于是"点刷新"在两次请求间隔 <5 秒时直接吃微缓存 —— 结果是刷新按钮按下去
-  // 数字纹丝不动（实测 computedAt 完全不变），比慢更让人困惑。
+  // force 必须同时绕过两层缓存：微缓存判定写在前面却没看 force 时，"点刷新"在两次
+  // 请求间隔 <5 秒时直接吃微缓存，刷新按钮按下去数字纹丝不动，比慢更让人困惑。
   if (!force) {
     // ① 5 秒微缓存（先判，命中最快：轮询 + SSE 事件风暴不再叠加统计）
     if (usageStatsMicro.stats && usageStatsMicro.key === key
@@ -3677,10 +3521,9 @@ async function buildUsageStats({ range = '7', force = false } = {}) {
     }
   }
   // ③ 防重入：同 key 正在算就搭同一趟车。
-  // ⚠️ 曾经这里是**单个全局槽**（let usageStatsInflight），key 不同就直接
-  // 新开一个 Promise 覆盖掉前一个 —— 于是切 range 时前后两个 range 会
-  // 同时全量重算，把刚做的缓存优化全还回去（大档案下表现为卡顿）。
-  // 改成 Map：每个 key 各有各的在途 Promise，互不覆盖。
+  // 曾经这里是单个全局槽（let usageStatsInflight），key 不同就直接新开一个 Promise
+  // 覆盖掉前一个，于是切 range 时前后两个 range 会同时全量重算，把刚做的缓存优化
+  // 全还回去。改成 Map：每个 key 各有各的在途 Promise，互不覆盖。
   const inflight = usageStatsInflight.get(key);
   if (inflight) return infight;
   const promise = (async () => {
@@ -3732,9 +3575,8 @@ async function buildUsageStats({ range = '7', force = false } = {}) {
     const stats = await promise;
     usageStatsCache.set(key, { at: Date.now(), stats });
     usageStatsMicro = { key, at: Date.now(), stats };
-    // key 里带了价格指纹，用户每改一次价就多一组条目。虽然 TTL 判定期会
-    // 让过期条目自然失效（get 时不看它、但它还占着 Map），但长时间反复改价
-    // 仍会攒下垃圾。这里顺手裁掉已过期的，只保留 range 数量级的条目。
+    // key 里带了价格指纹，用户每改一次价就多一组条目。这里顺手裁掉已过期的，
+    // 只保留 range 数量级的条目。
     if (usageStatsCache.size > 32) {
       const now = Date.now();
       for (const [k, v] of usageStatsCache) {
@@ -3794,7 +3636,7 @@ export function __testUsageDaily() {
     saveUsageDaily,
     completedDayKeys,
     aggregateDayFromArchive,
-    // 2026-09-22 新增（R68）：数据元年下限 / 快照裁剪 / 结果缓存 / 后台预热
+    // 数据元年下限 / 快照裁剪 / 结果缓存 / 后台预热
     usageDataFloorMs,
     pruneUsageDaily,
     resetUsageStatsCache,

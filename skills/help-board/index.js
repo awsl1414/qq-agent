@@ -1,35 +1,23 @@
-// 指令一览面板 —— /help 时把所有插件的能力汇总成一张图发到群里。
+// 指令一览面板：/help 时把所有插件的能力汇总成一张图发到群里。
 //
-// ── 面板上到底列什么 ────────────────────────────────────────────────────
-//   光列"注册的工具"是不完整的。这个系统里其实有三类东西，
-//   而群友不看文档根本发现不了后两类：
+// 面板要列三类东西，只列注册的工具会漏掉后两类，而群友不看文档发现不了它们：
+//   ① 指令（工具）：listTools() 能拿到，但光有名字没用，还得知道怎么说才会触发，
+//      所以从清单的 prompt.when / prompt.examples 里挖触发话术标在每条下面。
+//   ② 自动功能：只声明 capabilities、不注册工具的插件（如 media-download、
+//      speech-to-text、red-packet-radar），listTools() 里查不到，但确实是机器人会干的事。
+//      单独一个「自动生效」区，并标明是否已启用。
+//   ③ 装了但没启用的插件，也标出来，省得以为没有。
 //
-//   ① 指令（工具）—— listTools() 能拿到，模型可主动调用。
-//      但只知道名字没用，得知道**怎么说**才会触发。
-//      → 从清单的 prompt.when / prompt.examples 里挖触发话术，标在每条下面。
+// 图怎么来：项目里没有图像库，但这是 Electron 应用，主进程开隐藏 BrowserWindow
+// 加载 HTML，用 Chromium 排版后 capturePage 截成 PNG，中文渲染、换行、emoji 都白拿。
+// 拿不到 Electron 或截图失败时降级为文字列表，保证 /help 永远有回应。
 //
-//   ② 自动功能（没有指令）—— 只声明了 capabilities 的插件，
-//      比如 media-download（发 B站/抖音链接自动下载）、speech-to-text（语音转文字）、
-//      red-packet-radar（红包雷达）。它们压根不注册工具，listTools() 里永远查不到，
-//      但确实是机器人"会干的事"。
-//      → 单独一个「自动生效」区，并标明当前是否已启用。
+// 给别的插件补「怎么说」：新格式清单没有 prompt.when 时挖不出来，
+// 改本插件自己的 <DATA_DIR>/skills/help-board/triggers.json 即可（不碰别人的文件）：
+//   { "weather-alert": { "when": "问台风/暴雨预警", "examples": ["台风预警"] } }
+// 键可以是插件 id（对该插件全部指令生效），也可以是完整工具 id（只对这一条生效）。
 //
-//   ③ 未启用的插件 —— 装了但没开，开了才有。也标出来，省得以为没有。
-//
-// ── "图"怎么来 ────────────────────────────────────────────────────────
-//   项目里没有任何图像库（sharp/canvas/jimp 都没装），但它是 Electron 应用：
-//   主进程开一个隐藏 BrowserWindow 加载 HTML，用 Chromium 把中文排好版，
-//   再 capturePage 截图成 PNG —— 中文渲染、自动换行、emoji 全都白拿。
-//   拿不到 Electron（或截图失败）时降级为文字列表，保证 /help 永远有回应。
-//
-// ── 想给别的插件补"怎么说" ──────────────────────────────────────────────
-//   新格式插件的清单里没有 prompt.when，自动挖不出来。这时改本插件**自己的**
-//   配置文件即可（不碰别人的文件）：<DATA_DIR>/skills/help-board/triggers.json
-//      { "weather-alert": { "when": "问台风/暴雨预警", "examples": ["台风预警"] } }
-//   键可以是插件 id（对该插件全部指令生效），也可以是完整工具 id
-//   （形如 weather-alert__weather_alert，只对这一条生效）。
-//
-// ⚠️ 全程只读：import 核心模块 + 扫描 skills/ plugins/ 目录，不写任何已有文件。
+// 全程只读：import 核心模块 + 扫描 skills/ plugins/ 目录，不写任何已有文件。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -270,7 +258,7 @@ export function buildGroups(tools, manifests = new Map(), opts = {}) {
 }
 
 /**
- * 收集"没有指令、但会自己触发"的插件 —— listTools() 里永远查不到的那一批。
+ * 收集"没有指令、但会自己触发"的插件，即 listTools() 里永远查不到的那一批。
  * 纯函数，便于测试。
  */
 export function collectPassive(manifests = new Map(), hasTools = new Set(), opts = {}) {
@@ -403,7 +391,7 @@ export function buildText(opts = {}) {
 
 /**
  * 用 Electron 的隐藏窗口把 HTML 渲染成 PNG Buffer。
- * 拿不到 Electron 或中途出错一律抛错 —— 由调用方决定降级。
+ * 拿不到 Electron 或中途出错一律抛错，由调用方决定降级。
  */
 async function renderPng(html, width) {
   const req = createRequire(import.meta.url);

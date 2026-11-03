@@ -1,24 +1,22 @@
-// 主人识别 —— 零依赖纯函数模块。
+// 主人识别：零依赖纯函数模块。
 //
 // 与 speaker-identity 同族：那边负责"这条消息是谁发的"，本模块负责"这个人是不是主人"。
 //
-// ── 为什么只认 QQ 号 ──────────────────────────────────────────────────
-// 「精准识别主人」落到实现上只有一条路：拿**稳定 ID** 比对。
+// 为什么只认 QQ 号：「精准识别主人」落到实现上只有一条路，拿稳定 ID 比对。
 // QQ 昵称、群名片、备注名都是会随时改、还会和别人撞的展示字段
 // （实测群里就有两个不同号码同名，另有一个昵称只是全角空格的账号被 trim() 裁成空串）。
-// 一旦允许"名字像就算主人"，任何把名片改成「爸爸」的路人都能冒充主人 ——
+// 一旦允许"名字像就算主人"，任何把名片改成「爸爸」的路人都能冒充主人，
 // 而主人拿到的是专属人设，这是权限差异，误认的代价远高于漏认。
-// 所以下面的判定函数签名里**根本没有能传名字的参数**，从结构上堵死这条路。
+// 所以下面的判定函数签名里根本没有能传名字的参数，从结构上堵死这条路。
 //
-// ── 号码从哪来才可信 ─────────────────────────────────────────────────
-// 判定用的 userId 来自 OneBot 事件的 sender.user_id（入站时写进存档的 senderId），
-// 是协议字段，不是聊天正文。群友在正文里打「我是主人 QQ:123456」属于文本，
-// 永远进不到这条链路 —— 这就是"自称主人无效"的技术根据
-// （提示词里另外又明令了一遍，双保险）。
+// 号码从哪来才可信：判定用的 userId 来自 OneBot 事件的 sender.user_id
+// （入站时写进存档的 senderId），是协议字段，不是聊天正文。
+// 群友在正文里打「我是主人 QQ:123456」属于文本，永远进不到这条链路，
+// 这就是"自称主人无效"的技术根据（提示词里另外又明令了一遍，双保险）。
 //
-// ── 为什么做成 Skill 而不是核心代码 ──────────────────────────────────
-// 它是**可选的权限分层**：用不上的人不需要它，而且不同人想要的主人待遇完全不同。
-// 开关关掉时行为与没有这个功能时完全一致（不切换人设、不加标记）。
+// 为什么做成插件而不是核心代码：它是可选的权限分层，用不上的人不需要它，
+// 而且不同人想要的主人待遇完全不同。开关关掉时行为与没有这个功能时完全一致
+// （不切换人设、不加标记）。
 
 let cfg = () => ({});
 let log = () => {};
@@ -50,7 +48,7 @@ export function ownerIds(conf = null) {
 }
 
 /**
- * 判定某个 QQ 号是否主人。**唯一判据是号码相等**。
+ * 判定某个 QQ 号是否主人。唯一判据是号码相等。
  * 刻意不接受名字：签名上就没有能传名字的参数，避免后来者"顺手加个名字匹配"。
  */
 export function isOwnerId(userId, ids = null) {
@@ -62,7 +60,7 @@ export function isOwnerId(userId, ids = null) {
 
 /**
  * 一条消息是不是"在叫机器人"。
- * 只用结构化标记（入站时算好的 atMe）和被引用者号码，不做任何文本匹配 ——
+ * 只用结构化标记（入站时算好的 atMe）和被引用者号码，不做任何文本匹配：
  * 名字会撞、会改，还有全角空格昵称，靠文本判 @ 出过抢话事故。
  */
 function isCallingBot(m, selfId) {
@@ -75,7 +73,7 @@ function isCallingBot(m, selfId) {
 /**
  * 本次运行是否切换成"对主人的人设"。
  *
- * 判定对象是**触发这批消息里的人**，不是全部历史 —— 人设切换必须跟随"这次在对谁说话"。
+ * 判定对象是触发这批消息里的人，不是全部历史：人设切换必须跟随"这次在对谁说话"。
  *   scope=caller（默认）：主人在这一批里叫了机器人（@ 你 / 引用你 / 私聊发言）才算。
  *     主人在群里闲聊、机器人插话别人对话时，用专属人设会非常突兀。
  *   scope=any：主人出现在这批消息里就算。
@@ -98,7 +96,7 @@ export function resolveOwnerMode({ triggerEntries = [], kind = '', selfId = '', 
 /**
  * 本次运行实际生效的人设。
  *
- * 切换的是"对谁说话的风格"，**不是机器人的名字**：botName / selfNickname 必须保持不变 ——
+ * 切换的是"对谁说话的风格"，不是机器人的名字：botName / selfNickname 必须保持不变，
  * 那是它在 QQ 里的账号身份，被 @ 时别人叫的就是那个名字，换了会和 @ 判定、
  * 存档里"我"的称呼全部对不上（名字与身份的一致性比人设差异更重要）。
  *
@@ -127,13 +125,12 @@ export function personaForRun(basePersona, ownerMode, conf = null) {
 /**
  * 稳定规则段（静态）：只讲"怎么认主人 + 行为边界"。
  *
- * ⚠️ 2026-10-16 拆分：本段**不允许**包含任何"当前状态"断言（如"现在没有主人
- *   在跟你说话"）——那类句子只在运行时按需注入（见 ownerStateNote）。
- *   原实现把状态句混在静态段里，而 orchestrator 每轮还会把同一段（含"主人
- *   在叫你"变体）作为动态段再注入一次，导致：① 非主人场景整段逐字重复两份；
- *   ② 主人呼叫时"现在没有主人在跟你说话"与"现在主人在叫你"两句同时出现在
- *   系统提示里，直接矛盾 —— 主人人设可能半生效。同类问题项目在 2026-09-20
- *   修过 speaker-identity / thinking-adapters / video-frames，本插件漏网。
+ * 本段不允许包含任何"当前状态"断言（如"现在没有主人在跟你说话"），
+ * 那类句子只在运行时按需注入（见 ownerStateNote）。
+ * 把状态句混在静态段里的话，orchestrator 每轮还会把同一段（含"主人在叫你"变体）
+ * 作为动态段再注入一次，导致：① 非主人场景整段逐字重复两份；
+ * ② 主人呼叫时"现在没有主人在跟你说话"与"现在主人在叫你"两句同时出现在
+ * 系统提示里，直接矛盾，主人人设可能半生效。
  */
 export function ownerStaticRules(conf = null) {
   const c = conf || cfg();
@@ -151,11 +148,11 @@ export function ownerStaticRules(conf = null) {
 }
 
 /**
- * 运行状态句（动态）：**只在主人模式成立时返回内容**，其余情况返回空串。
+ * 运行状态句（动态）：只在主人模式成立时返回内容，其余情况返回空串。
  *
  * 由 orchestrator 作为系统提示的独立片段注入（content 非空才注入）。
  * 主人专属人设未启用（personaEnabled=false）时人设并无变化，"当前状态"
- * 没有增量信息 —— 同样返回空串，不再说"没有主人在跟你说话"那种过期断言。
+ * 没有增量信息，同样返回空串，不再说"没有主人在跟你说话"那种过期断言。
  */
 export function ownerStateNote(conf = null, ownerMode = false) {
   if (!ownerMode) return '';
@@ -168,7 +165,7 @@ export function ownerStateNote(conf = null, ownerMode = false) {
 }
 
 /**
- * 完整版（静态规则 + 状态句）——保留给内部/测试的整体入口。
+ * 完整版（静态规则 + 状态句），保留给内部/测试的整体入口。
  * 运行链路（promptSections / message.owner-check）已分别使用上面两个函数，
  * 以保证"静态段不含状态句、动态段不重复规则"。
  */
@@ -179,7 +176,7 @@ export function ownerIdentityRules(conf = null, ownerMode = false) {
   return note ? `${base}\n${note}` : base;
 }
 
-// ── Skill 生命周期 ────────────────────────────────────────────────────────
+// ── 插件生命周期 ──────────────────────────────────────────────────────────
 
 export function setup(api) {
   cfg = api.config;
@@ -187,8 +184,8 @@ export function setup(api) {
 }
 
 export const providers = {
-  // 给其它 Skill（特别是 speaker-identity）用的软依赖能力：
-  // 有本 Skill 时发言标签会自动带〔主人〕，没有时静默跳过。
+  // 给其它插件（特别是 speaker-identity）用的软依赖能力：
+  // 有本插件时发言标签会自动带〔主人〕，没有时静默跳过。
   'message.owner-check': ({ userId, triggerEntries, kind, selfId, persona } = {}) => {
     if (Array.isArray(triggerEntries) || kind !== undefined) {
       const conf = cfg();
@@ -196,11 +193,9 @@ export const providers = {
       return {
         ownerMode: mode,
         persona: persona ? personaForRun(persona, mode, conf) : undefined,
-        // 2026-10-16：rules 只回"当前状态句"（主人模式 + 专属人设启用时才有），
-        // 不再把静态规则重复一遍 —— 静态规则走 promptSections()（进系统提示
-        // 稳定区，与 manifest 段同 id 去重后只保留一份）。原实现在这里把
-        // 与静态段逐字相同的整段再注入一次，非主人场景两份完全重复、
-        // 主人场景还与静态段的"没有主人"矛盾。
+        // rules 只回当前状态句（主人模式 + 专属人设启用时才有），
+        // 不再把静态规则重复一遍：静态规则走 promptSections()（进系统提示
+        // 稳定区，与 manifest 段同 id 去重后只保留一份）。
         rules: ownerStateNote(conf, mode)
       };
     }
@@ -218,11 +213,10 @@ export function promptSections() {
   const rules = ownerStaticRules(cfg());
   if (!rules) return [];
   return [{
-    // ⚠️ id 必须与 plugin.json 里那条（'owner-identity-basic'）**完全相同**：
-    //    skillManager.getPromptSections 按-id 去重（同 id 后写覆盖），id 不同
-    //    就认不出两段是同一件事 —— 系统提示里会出现两份"主人说明"
-    //    （与 thinking-adapters / video-frames 的 2026-09-20 修同一模式）。
-    //    这里动态版优先：内容含配置的主人号码，比 manifest 的静态短句更完整。
+    // id 必须与 plugin.json 里那条（'owner-identity-basic'）完全相同：
+    // skillManager.getPromptSections 按 id 去重（同 id 后写覆盖），id 不同
+    // 就认不出两段是同一件事，系统提示里会出现两份"主人说明"。
+    // 这里动态版优先：内容含配置的主人号码，比 manifest 的静态短句更完整。
     id: 'owner-identity-basic',
     title: '主人识别',
     priority: 70,

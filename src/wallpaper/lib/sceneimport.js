@@ -1,7 +1,7 @@
 // 动态壁纸导入编排 + 内容寻址 LRU 缓存 + 任务表。
 // 移植自 zcode-beautify（MIT，https://github.com/Logocceai/zcode-beautify），
 // 按本项目改造：数据落在 <dataDir>/wallpaper-dynamic/，任务表在内存
-// （重启丢任务不心疼 —— 缓存命中时重导是秒级的）。
+// （重启丢任务不心疼，缓存命中时重导是秒级的）。
 //
 // 管线：detect → deps → cache 命中? → [视频] 截中段/交叉淡化 → [场景] 开 WE
 // 渲染窗 → ddagrab 录 15s → 关窗 → 无缝循环 → poster → 落盘 → LRU 限额

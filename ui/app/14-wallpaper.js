@@ -1,7 +1,7 @@
 // 「壁纸」页：把 Wallpaper Engine 壁纸库搬进控制台当界面背景（毛玻璃风格）。
 //
 // 两部分职责：
-//   1. 全局背景引擎 —— 开机即恢复上次选的壁纸（localStorage），在 body 底层铺
+//   1. 全局背景引擎：开机即恢复上次选的壁纸（localStorage），在 body 底层铺
 //      video / 预览图层；壁纸自身一次性预模糊，#tabs、侧栏、卡片用半透明色
 //      叠在上面形成毛玻璃观感（不用 backdrop-filter，理由见 wpGlassCss）。
 //      开关只挂 html[data-wp='on']，关掉壁纸时这些覆盖全部失效，界面还原。
@@ -11,13 +11,13 @@
 //          功能色（ok/warn/err）与玻璃色板不动。开关挂 html[data-monet]。
 //        - 智能取景：与全图均值色距平方的加权重心 = 画面主体位置，作为
 //          cover 焦点；极端宽高比自动切 contain（完整显示 + 同图模糊底）。
-//   2. 壁纸管理页 —— 网格列出壁纸（预览图 + 动态/静态徽标），点选即换背景；
+//   2. 壁纸管理页：网格列出壁纸（预览图 + 动态/静态徽标），点选即换背景；
 //      模糊强度 / 压暗程度两个滑条 + 取景模式 + 莫奈开关，实时生效并持久化。
 //
 // 后端：/api/wallpaper/list 与 /api/wallpaper/file（src/routes.js 的能力中介 →
-// 内置模块 src/wallpaper/core.js）。媒体 URL 必须带 token 查询参数 —— <img>/<video> 标签
+// 内置模块 src/wallpaper/core.js）。媒体 URL 必须带 token 查询参数：<img>/<video> 标签
 // 发不了自定义请求头，而 /api/* 的鉴权同时接受 ?token=。统一由 00-core.js 的
-// withToken() 拼（它取的是 CONSOLE_AUTH_TOKEN，不是 CONSOLE_MARKER —— 后者只是
+// withToken() 拼（它取的是 CONSOLE_AUTH_TOKEN，不是 CONSOLE_MARKER，后者只是
 // Electron 下被主进程换成真凭据的占位符，浏览器里没人认）。
 'use strict';
 
@@ -47,7 +47,7 @@ function wpMediaUrl(id, kind) {
 /** md3 缺失时的内置降级取色：饱和度加权直方图找主导色相 → 明暗两档
  *  强调色。没有 MD3 的精细色阶，但"颜色跟随壁纸"的观感成立。
  *  场景：分发时 vendor-md3.js 或 index.html 引入行被漏装（纯插件思路
- *  安装最常见的缺口）——宁可降级也不能静默失去整个功能。 */
+ *  安装最常见的缺口），宁可降级也不能静默失去整个功能。 */
 function wpFallbackAccent(data, off) {
   const W = [255, 255, 255], K = [0, 0, 0];
   const mix = (c, t, k) => c.map((v, i) => Math.round(v + (t[i] - v) * k));
@@ -187,12 +187,12 @@ function wpApplyFraming(cfg) {
   }
   const bd = document.getElementById('wp-bg-backdrop');
   if (bd) {
-    /* ⚠️ 2026-10-23 修「刚开始打开是一张特别糊的壁纸」的第二处（第一处是
-       #app-bg 的插件缩略图，见 00-core.js）。
+    /* 修「刚开始打开是一张特别糊的壁纸」的第二处（第一处是 #app-bg 的插件缩略图，
+       见 00-core.js）。
        contain 模式的模糊底本身就是"preview 缩略图 × cover 铺满 + blur 28px"：
        它的职责只是填 contain 视频两侧的留白，本该永远被视频盖住。可启动时
        4K 120fps 视频还没解出首帧（readyState < 2），视频元素是黑的、整屏只剩
-       这层 28px 模糊 —— 用户看到的就是"一张特别糊的壁纸"，等视频起播才消失。
+       这层 28px 模糊，用户看到的就是"一张特别糊的壁纸"，等视频起播才消失。
        所以视频没就绪就先别开它；loadeddata 之后由 wpRenderBackground 里那个
        一次性监听重新跑本函数，把留白补回来。（静态图没有这个问题：它自己就是
        可见主体，backdrop 在它下面，开着也无害。） */
@@ -203,7 +203,7 @@ function wpApplyFraming(cfg) {
 
 /**
  * 莫奈 + 焦点的主入口：有缓存（monetCache/fitCache，按 id 失效）直接用，
- * 没有就后台分析一次、落缓存再应用 —— 开机/换壁纸首跑多花 ~50ms，之后秒出。
+ * 没有就后台分析一次、落缓存再应用。开机/换壁纸首跑多花 ~50ms，之后秒出。
  */
 function wpApplyThemeSmart(cfg) {
   const cachedColors = cfg.monetCache && cfg.monetCache.id === cfg.id
@@ -415,18 +415,16 @@ html[data-text='purple'] { --fg:#c3a1ff; --fg-dim:rgba(195,161,255,.72);  --fg-m
 /** 面板透明度：已并入 20-glass.js 的「全界面玻璃层」。
  *  透明度只有一个真值 config.ui.panelAlpha，由那套变量统一落成
  *  --layer-1/2/3、--inset-bg、--code-bg、顶栏与吸顶表头。
- *  这里保留空实现，只是为了不断开 wpRenderBackground 的调用链 ——
- *  ⚠️ 别再在这里自己算一套 alpha：两套一起写，谁后写谁赢，
- *  调起来会互相打架（这正是本次统一掉的问题）。 */
+ *  这里保留空实现，只是为了不断开 wpRenderBackground 的调用链。
+ *  别再在这里自己算一套 alpha：两套一起写，谁后写谁赢，会互相打架。 */
 function wpApplyPanelAlpha(/* cfg */) { /* no-op：见上 */ }
 
 /** 确保本页样式表已注入。
  *
- *  ⚠️（2026-10-24 修）此前这张表（.wp-grid / .wp-cell / .wp-ctrl / .wp-hintbox…）
- *  和壁纸背景层的规则一起塞在 #wp-bg-style 里，而注入它的只有 wpRenderBackground()，
- *  且那函数第一句就是「没有 cfg 就 return」——
- *  结果是：**没选过壁纸的人、根本没装小红车的人，进壁纸页看到的是一坨裸 HTML**
- *  （没有网格、没有卡片、没有字号，就是默认字体）。点了「打开壁纸库…」撞见的正是它。
+ *  此前这张表（.wp-grid / .wp-cell / .wp-ctrl / .wp-hintbox…）和壁纸背景层的规则
+ *  一起塞在 #wp-bg-style 里，而注入它的只有 wpRenderBackground()，且那函数第一句
+ *  就是「没有 cfg 就 return」。结果是没选过壁纸的人、根本没装小红车的人，进壁纸页
+ *  看到的是一坨裸 HTML（没有网格、没有卡片、没有字号）。
  *
  *  页面样式和"当前有没有启用壁纸"无关，进页就注入，幂等。
  *  wpRenderBackground() 里那段 `if (!$('#wp-bg-style'))` 会自动复用它，不会重复插。 */
@@ -438,9 +436,8 @@ function wpEnsurePageCss() {
   document.head.appendChild(style);
 }
 
-/** 字体颜色预设：正文/标题/次要灰字整套替换（tx2/tx3 用同色透明度分层
- *  保持阅读层级）；强调色不动（归莫奈管）。值挑的都是明暗壁纸上都读得清
- *  的亮度档。 */
+/** 字体颜色预设：正文/标题/次要灰字整套替换（同色透明度分层保持阅读层级），
+ *  强调色不动（归莫奈管）。值挑的都是明暗壁纸上都读得清的亮度档。 */
 const WP_TEXT_PRESETS = {
   theme:  { label: '主题', swatch: 'linear-gradient(135deg,#e3e6ef,#17191d)' },
   white:  { label: '白', tx: [242, 244, 248] },
@@ -470,7 +467,7 @@ function wpSyncVeil() {
 }
 
 /* 改「底色不透明度」（config.ui.frameAlpha）的唯一入口：即时生效 + 落盘 + 同步设置页滑条。
-   「用底色遮住」按钮传 100，选壁纸时传 0 —— 两边必须走同一套，否则一个改了 DOM、
+   「用底色遮住」按钮传 100，选壁纸时传 0，两边必须走同一套，否则一个改了 DOM、
    另一个没改 state，滑条和实际值就会打架。 */
 function wpSetFrameAlpha(v) {
   try {
@@ -480,8 +477,8 @@ function wpSetFrameAlpha(v) {
     const cur = Math.round(Number(state.config.ui?.frameAlpha ?? 100));
     if (cur === next) { wpSyncVeil(); return; }
     state.config.ui = { ...(state.config.ui || {}), frameAlpha: next };
-    // ⚠️ 必须传**整份** ui：00-core 的 applyUiCustom 对缺失字段是"清掉"语义
-    //   （强调色传空就 removeProperty），只传 frameAlpha 会把强调色一起抹了。
+    // 必须传整份 ui：00-core 的 applyUiCustom 对缺失字段是"清掉"语义
+    // （强调色传空就 removeProperty），只传 frameAlpha 会把强调色一起抹了。
     if (typeof applyUiCustom === 'function') applyUiCustom(state.config.ui);
     // 设置页那条滑条如果已经渲染过，同步数字，别让两边显示打架
     const fa = document.getElementById('cfg-framealpha');
@@ -526,8 +523,8 @@ function wpRenderBackground() {
   wpApplyText(cfg);
   const dim = document.createElement('div');
   dim.id = 'wp-bg-dim';
-  // ⚠️ 必须带 wp-bg-el：上面那句清理只认这个 class，漏了的话每渲染一次就多叠
-  //    一层压暗（启动时 boot + 插件事件各跑一次 → 20% 变 36%，壁纸莫名发黑）。
+  // 必须带 wp-bg-el：上面那句清理只认这个 class，漏了的话每渲染一次就多叠
+  // 一层压暗（启动时 boot + 插件事件各跑一次 → 20% 变 36%，壁纸莫名发黑）。
   dim.className = 'wp-bg-el';
   document.body.appendChild(dim);
   const previewUrl = wpMediaUrl(cfg.id, 'preview');
@@ -547,7 +544,7 @@ function wpRenderBackground() {
     // 隐藏期创建的 autoplay 不生效：加载完成后（可见时）补播
     v.addEventListener('canplay', () => wpEnsureVideoPlaying(), { once: true });
     /* 首帧就绪：contain 模式的模糊底在视频没画面时是 force 关掉的（见
-       wpApplyFraming），这里补一次取景 —— 视频有画面了才允许它出来填两侧留白。 */
+       wpApplyFraming），这里补一次取景，视频有画面了才允许它出来填两侧留白。 */
     v.addEventListener('loadeddata', () => {
       const cur = wpCfgLoad();
       if (cur && cur.id === cfg.id) wpApplyFraming(cur);
@@ -574,9 +571,8 @@ function wpRenderBackground() {
 //   1) 页面隐藏期间创建的 autoplay 不生效（Electron 窗口 show:false 的
 //      启动阶段就是隐藏的），回前台必须手动补 play()；
 //   2) play() 的 Promise 会被 AbortError 拒绝（加载中暂停/换源竞态），
-//      静默吞掉就永远停在 paused —— 实测复现过：play→playing→pause 连发，
-//      时间轴冻结。
-// 策略：可见就确保在播 —— 带重试的 play() + canplay 事件补播 + 3 秒一次的
+//      静默吞掉就永远停在 paused（实测 play→playing→pause 连发，时间轴冻结）。
+// 策略：可见就确保在播：带重试的 play() + canplay 事件补播 + 3 秒一次的
 // 轻量看门狗（无视频/隐藏/本就暂停条件不满足时立即返回，零成本）。
 let wpPlayRetry = 0;
 function wpEnsureVideoPlaying() {
@@ -597,7 +593,7 @@ setInterval(wpEnsureVideoPlaying, 3000);
 // ── 与后端同步（机器人换壁纸 → 控制台实时跟随）─────────────────────────
 // 控制台本地 localStorage 是主状态；每次保存顺路 POST 给后端一份镜像，
 // 后端（或 QQ 聊天里的机器人技能）改状态后广播 wallpaper-changed，这里
-// 拉回来应用。失败全部静默 —— 后端是旧版本时功能自然退化为纯本地。
+// 拉回来应用。失败全部静默：后端是旧版本时功能自然退化为纯本地。
 // 同步规则（非对称，防回环/防误清空）：
 //   远端有壁纸且与本地不同 → 远端为准（机器人或别的窗口改的）；
 //   远端为空而本地有      → 只把本地推回去重新对齐，绝不清用户的选择。
@@ -664,7 +660,7 @@ if (typeof EventSource !== 'undefined') {
   } catch { /* 静默 */ }
 }
 
-// defer 脚本在 DOM 解析完、首帧绘制前执行 —— 开机直接恢复壁纸，基本无闪白
+// defer 脚本在 DOM 解析完、首帧绘制前执行，开机直接恢复壁纸，基本无闪白
 wpRenderBackground();
 wpPullState();
 
@@ -680,7 +676,7 @@ function wpBadge(item) {
 
 /** 能否转动态：场景（录 WE 渲染窗）或源视频（截段+无缝循环）。
  *  后端 dynSupported=false 时整条链路都跑不通（非 Windows 没有 ddagrab），
- *  直接不渲染入口 —— 与运行时的 unsupported_platform 提示形成两层：
+ *  直接不渲染入口，与运行时的 unsupported_platform 提示形成两层：
  *  一层防用户白点，一层防页面数据过期。 */
 function wpCanDyn(it, dynSupported) {
   if (dynSupported === false) return false;
@@ -720,14 +716,13 @@ function wpPageHtml(data, cfg, settings) {
     return Math.round((Number(cfg?.panel ?? 1)) * 100);
   })();
   // 「用底色遮住」= 把 config.ui.frameAlpha（设置页「底色不透明度」同一个键）拉到 100，
-  // 用不透明底色把壁纸盖住。**不清空壁纸配置** —— 旧版是 wpCfgSave(null)，选择直接丢了，
-  // 想看回来还得重新挑，用户反馈"没什么用"。
+  // 用不透明底色把壁纸盖住，不清空壁纸配置。旧版是 wpCfgSave(null)，选择直接丢了，
+  // 想看回来还得重新挑。
   // 想恢复透明：设置 → 外观个性化 → 底色不透明度 调回 0（同一个键，两边联动）。
-  // ⚠️（2026-10-23 晚）这个按钮**不叫「关闭壁纸」了**：它只盖住壁纸，html[data-wp='on']
-  //    和壁纸选择都还在，所以 #app-bg 仍是 display:none —— 设置里的本地背景图照样显示不出来。
-  //    真正的"关闭壁纸"（清选择、摘 data-wp、让本地图回来）现在在
-  //    设置 → 外观与数据 → 界面背景 → 「关闭壁纸」。两个按钮同名会重演本次要修的困惑，
-  //    所以这里保留原行为、只把文案说准。
+  // 这个按钮不叫「关闭壁纸」：它只盖住壁纸，html[data-wp='on'] 和壁纸选择都还在，
+  // 所以 #app-bg 仍是 display:none，设置里的本地背景图照样显示不出来。
+  // 真正的"关闭壁纸"（清选择、摘 data-wp、让本地图回来）在
+  // 设置 → 外观与数据 → 界面背景 → 「关闭壁纸」。两个按钮同名会让人分不清。
   return `
   <div class="usage-wrap">
     <div class="usage-head">
@@ -735,7 +730,7 @@ function wpPageHtml(data, cfg, settings) {
       <span class="muted wp-weinfo" title="${esc(data.weDir)}">Wallpaper Engine 壁纸库 · ${data.count} 张 · <code>${esc(data.weDir)}</code></span>
       <!-- 三颗按钮包成一组：.usage-head 是 flex-wrap:wrap，不包的话最后一个
            「用底色遮住」会被挤到第二行、孤零零贴在左边（990px 页宽下必现）。
-           ⚠️ 这一行**不放 flex:1 占位块** —— wrap 是先按自然宽度排、放不下才换行，
+           ⚠️ 这一行**不放 flex:1 占位块**，wrap 是先按自然宽度排、放不下才换行，
            占位块会把说明挤到换行；改成让 .wp-weinfo 自己 flex:1 1 0（见样式）。 -->
       <span class="wp-headbtns">
         <button class="btn btn-small" id="wp-back" title="回到 设置 → 外观与数据 → 界面背景">← 外观与数据</button>
@@ -773,9 +768,9 @@ function wpPageHtml(data, cfg, settings) {
   </div>`;
 }
 
-/* 回设置：这一页现在是从「设置 → 外观与数据 → 界面背景 → 打开壁纸库…」点进来的。
-   ⚠️ 顶栏此刻高亮的是「设置」，左栏二级导航（#settings-sidebar）是收起的
-   （syncChrome 对壁纸页走 is-none），所以页面上不给回头路 = 把人扔在这儿。
+/* 回设置：这一页是从「设置 → 外观与数据 → 界面背景 → 打开壁纸库…」点进来的。
+   顶栏此刻高亮的是「设置」，左栏二级导航（#settings-sidebar）是收起的
+   （syncChrome 对壁纸页走 is-none），所以页面上不给回头路就是把人扔在这儿。
    回到 'app' 分区并滚到「界面背景」那一节，正好是进来的地方。 */
 function wpBackToSettings() {
   try { state.settingsSection = 'app'; } catch { /* state 未就绪 */ }
@@ -789,16 +784,15 @@ function wpBackToSettings() {
 
 /* ── 壁纸库弹窗 ──────────────────────────────────────────────────────
    入口：设置 → 外观与数据 → 界面背景 → 「🎨 打开壁纸库…」。
-   ⚠️ 为什么是弹窗、不是设置的下级整页：这里每点一张壁纸都是**即时生效**的
-      （背景当场就换），选完就该原路回去。整页跳转会把"看一眼就回去"变成
-      "切页 → 挑 → 再切回设置"，而且设置页的滚动位置、展开的分区全丢。
-      弹窗浮在设置之上，点 ✕ 回到原处，背后已经是新壁纸了。
-   ⚠️ #wallpaper-page 是**搬家**不是重建：同一个 DOM 节点换宿主，节点上的
-      监听器原样带走，loadWallpaperPage() 一个字都不用改。
-   ⚠️ 搬回来必须挂在 overlay 的 qa-close 上 —— closeModelModal 的四条关闭路径
-      （✕ / Esc / 点遮罩 / 自己的「关闭」按钮）全部汇合到那一个事件。挂在自己
-      的关闭按钮上会漏掉另外三条，结果是弹窗一关 #wallpaper-page 就被一起
-      remove() 掉，再点「打开壁纸库」什么都不发生。 */
+   做成弹窗而不是设置的下级整页：这里每点一张壁纸都是即时生效的（背景当场就换），
+   选完就该原路回去。整页跳转会把"看一眼就回去"变成"切页 → 挑 → 再切回设置"，
+   而且设置页的滚动位置、展开的分区全丢。弹窗浮在设置之上，点 ✕ 回到原处。
+   #wallpaper-page 是搬家不是重建：同一个 DOM 节点换宿主，节点上的监听器原样带走，
+   loadWallpaperPage() 一个字都不用改。
+   搬回来必须挂在 overlay 的 qa-close 上：closeModelModal 的四条关闭路径
+   （✕ / Esc / 点遮罩 / 自己的「关闭」按钮）全部汇合到那一个事件。挂在自己的
+   关闭按钮上会漏掉另外三条，结果是弹窗一关 #wallpaper-page 就被一起 remove() 掉，
+   再点「打开壁纸库」什么都不发生。 */
 let wpLibOverlay = null;
 
 function wpOpenLibrary() {
@@ -817,7 +811,7 @@ function wpOpenLibrary() {
     foot: `<button class="btn" type="button" id="wp-lib-close">关闭</button>`
   });
   overlay.classList.add('wp-lib');
-  // 壁纸选择、滑条全部即时生效，这里没有"未保存的修改"这回事 ——
+  // 壁纸选择、滑条全部即时生效，这里没有"未保存的修改"这回事，
   // 不关掉守卫的话，拖一下模糊滑条再关弹窗就会弹「是否丢弃修改」。
   overlay._noDirtyGuard = true;
   page.classList.remove('settings-pane');
@@ -839,9 +833,9 @@ function wpOpenLibrary() {
 }
 
 /* 壁纸库不可用时的空状态。
-   ⚠️「电脑上没装小红车」和「内置模块没加载起来」是两回事：前者用户自己能解决
+   「电脑上没装小红车」和「内置模块没加载起来」是两回事：前者用户自己能解决
    （装上，或手填安装目录），后者是安装/开发问题。以前两种都甩同一句
-   「壁纸功能不可用」外加 src/wallpaper 的实现细节 —— 既不是这个软件的语言，
+   「壁纸功能不可用」外加 src/wallpaper 的实现细节，既不是这个软件的语言，
    也没给出路。现在分开写，且第一种直接把目录输入框摆在页面上。 */
 function wpMissingHtml(msg) {
   const weMissing = /没有找到 Wallpaper Engine/i.test(msg);
@@ -880,8 +874,8 @@ function wpMissingHtml(msg) {
 }
 
 /* 空状态上的按钮：都只改这一页，不碰别处。
-   ⚠️ 保存目录走的是和正常页「保存设置」同一条 /api/config（deepMerge 只改这一个键），
-   别另开接口 —— 两套写同一字段，早晚打起来。 */
+   保存目录走的是和正常页「保存设置」同一条 /api/config（deepMerge 只改这一个键），
+   别另开接口，两套写同一字段早晚打起来。 */
 function wpBindMissing() {
   $('#wp-back')?.addEventListener('click', wpBackToSettings);
   $('#wp-retry')?.addEventListener('click', () => loadWallpaperPage());
@@ -907,15 +901,15 @@ function wpBindMissing() {
   $('#wp-dir-save')?.addEventListener('click', saveDir);
   // 选完目录直接存 + 重扫：这个框只出现在「扫不到壁纸库」的报错页上，
   // 选了目录就等于"我要用这个"，再让人多点一次「保存并重试」是多余的。
-  // （正常页的「小红车目录」不自动存 —— 那行还有别的字段要一起保存。）
+  // （正常页的「小红车目录」不自动存，那行还有别的字段要一起保存。）
   wpBindDirPicker($('#wp-dir-input'), $('#wp-dir-browse'), saveDir);
 }
 
 /* 目录输入框 → 原生「选择文件夹」。
    像 D:\Steam\steamapps\common\wallpaper_engine 这种路径让人肉眼抄一遍是折磨，
    抄错一个字符还只会得到"目录不存在"，很难自查。
-   ⚠️ 只在桌面桥存在时给这条路：纯浏览器里打开控制台时拿不到原生对话框，
-   那就把「浏览…」藏掉、输入框照旧手填/粘贴 —— 不做一枚点了没反应的按钮。 */
+   只在桌面桥存在时给这条路：纯浏览器里打开控制台时拿不到原生对话框，
+   那就把「浏览…」藏掉、输入框照旧手填/粘贴，不做一枚点了没反应的按钮。 */
 function wpPickDir(input, onPicked) {
   const bridge = window.qqaDesktop;
   if (!bridge || typeof bridge.pickDirectory !== 'function') return false;
@@ -932,9 +926,8 @@ function wpPickDir(input, onPicked) {
 }
 
 /* 给一个输入框接上「浏览…」按钮。
-   ⚠️ 只在**按钮**上开对话框，点输入框不弹 —— 输入框是给人打字/粘贴/选字改的，
-   点一下就弹原生窗口会把最基本的"点进框里改一个字"变成"先关掉一个对话框"。
-   （2026-10-24 按用户反馈改回来：之前做成了点框即弹。） */
+   只在按钮上开对话框，点输入框不弹：输入框是给人打字/粘贴/选字改的，
+   点一下就弹原生窗口会把最基本的"点进框里改一个字"变成"先关掉一个对话框"。 */
 function wpBindDirPicker(input, btn, onPicked) {
   if (btn) {
     const hasPicker = !!(window.qqaDesktop && typeof window.qqaDesktop.pickDirectory === 'function');
@@ -948,7 +941,7 @@ async function loadWallpaperPage() {
   const box = $('#wallpaper-page');
   if (!box) return;
   // 先保样式：本页所有 .wp-* 规则都在 wpGlassCss() 里，而它以前只在
-  // 「已经选了壁纸」时被注入 —— 否则这个页面是裸 HTML（见 wpEnsurePageCss 注释）。
+  // 「已经选了壁纸」时被注入，否则这个页面是裸 HTML（见 wpEnsurePageCss 注释）。
   wpEnsurePageCss();
   // 进页先按当前 frameAlpha 把「盖住壁纸」的状态对齐一次（首屏 state 未必就绪）
   wpSyncVeil();
@@ -980,7 +973,7 @@ async function loadWallpaperPage() {
   } catch { /* 读不到就留空：输入框空着，保存时照常可写 */ }
   // kind 自愈：本地因某次瞬态错误被降级成 still（视频加载失败会持久降级），
   // 但列表最新认定它是可播视频（原生视频或已导入的动态循环）时，自动升回
-  // video 并重铺背景 —— 不用用户手点一遍才恢复。
+  // video 并重铺背景，不用用户手点一遍才恢复。
   if (cfg?.id) {
     const it = wpItems.find((x) => x.id === cfg.id);
     if (it && it.kind === 'video' && cfg.kind !== 'video') {
@@ -995,7 +988,7 @@ async function loadWallpaperPage() {
   $('#wp-back')?.addEventListener('click', wpBackToSettings);
   $('#wp-refresh')?.addEventListener('click', () => loadWallpaperPage());
   // 小红车目录：「浏览…」按钮弹原生目录选择框（点输入框本身不弹，留给手填/粘贴）。
-  // 这里**不自动保存** —— 同一行还有管家白名单，一起点「保存设置」才合理。
+  // 这里不自动保存：同一行还有管家白名单，一起点「保存设置」才合理。
   wpBindDirPicker($('#wp-wedir'), $('#wp-wedir-browse'));
   // 模块设置保存：只上报这两个键（后端 updateConfig 是 deepMerge，不会碰别的字段）。
   $('#wp-settings-save')?.addEventListener('click', async () => {
@@ -1006,7 +999,7 @@ async function loadWallpaperPage() {
       wallpaperEngineDir: ($('#wp-wedir')?.value || '').trim(),
       whitelist: ($('#wp-whitelist')?.value || '').trim(),
       // 对话侧开关：注册 8 个工具 + 2 段提示词（约 1358 tok/次调用）。
-      // 别的键不动 —— 后端 updateConfig 是 deepMerge。
+      // 别的键不动，后端 updateConfig 是 deepMerge。
       llmControl: nextLlm
     } } };
     if (btn) btn.disabled = true;
@@ -1016,7 +1009,7 @@ async function loadWallpaperPage() {
         state.config.skills = { ...(state.config.skills || {}), wallpaper: r.config.skills.wallpaper };
       }
       if (msg) {
-        // 工具注册发生在 setup（启动时），改完必须重启 —— 说清楚，别让人以为保存就生效。
+        // 工具注册发生在 setup（启动时），改完必须重启，说清楚，别让人以为保存就生效。
         msg.textContent = nextLlm !== (wpSettings?.llmControl === true)
           ? '已保存。聊天工具开关要重启应用才生效'
           : '已保存（目录下次扫描生效）';
@@ -1025,12 +1018,12 @@ async function loadWallpaperPage() {
       if (msg) msg.textContent = `保存失败：${e?.message || e}`;
     } finally { if (btn) btn.disabled = false; }
   });
-  // 「用底色遮住」：不是清掉壁纸，而是把底色不透明度（config.ui.frameAlpha）拉到 100 ——
+  // 「用底色遮住」：不是清掉壁纸，而是把底色不透明度（config.ui.frameAlpha）拉到 100，
   // 壁纸选择、模糊、压暗、取色全部原样保留，只是被一层不透明底色挡住。
-  // 复现原来那个"关掉壁纸"的观感，但不丢配置。恢复透明走设置页那条滑条（同一个键），
-  // 或者直接在下面重新点一张壁纸 —— 选壁纸会自动把底色放回透明。
-  // ⚠️ 它**不会**让 #app-bg 回来：html[data-wp='on'] 仍成立，本地背景图还是隐藏的。
-  //    要真正做到那一步，走设置里的「关闭壁纸」（清选择）。
+  // 恢复透明走设置页那条滑条（同一个键），或者直接在下面重新点一张壁纸，
+  // 选壁纸会自动把底色放回透明。
+  // 它不会让 #app-bg 回来：html[data-wp='on'] 仍成立，本地背景图还是隐藏的。
+  // 要真正做到那一步，走设置里的「关闭壁纸」（清选择）。
   $('#wp-flat')?.addEventListener('click', () => wpSetFrameAlpha(100));
   const blurR = $('#wp-blur-r');
   const dimR = $('#wp-dim-r');
@@ -1056,23 +1049,23 @@ async function loadWallpaperPage() {
   panelR?.addEventListener('input', () => {
     $('#wp-panel-v').textContent = `${panelR.value}%`;
     // 和设置页共用同一条滑条：只改一个全局变量，整界面一起重算。
-    // （旧版这里调 wpApplyPanelAlpha，那套只覆盖名单内的几块 —— 已废弃）
+    // （旧版这里调 wpApplyPanelAlpha，那套只覆盖名单内的几块，已废弃）
     if (typeof window.weSetGlassPercent === 'function') window.weSetGlassPercent(Number(panelR.value));
     else wpApplyPanelAlpha({ panel: Number(panelR.value) / 100 });   // 旧版兜底
   });
   panelR?.addEventListener('change', () => {
     const pct = Number(panelR.value);
     // 界面透明度是"整界面"偏好，落到 config.ui.panelAlpha（设置页读的是同一个键）。
-    // 即便还没选壁纸也要能存 —— 透明度跟壁纸是不是开着无关。
+    // 即便还没选壁纸也要能存，透明度跟壁纸是不是开着无关。
     try {
       if (typeof state !== 'undefined' && state.config) {
         state.config.ui = { ...(state.config.ui || {}), panelAlpha: pct };
         if (typeof api === 'function') {
-          // ⚠️ 只上报 panelAlpha 一个键，**不要**把整份 state.config.ui 发回去。
-          //   state.config.ui 是页面加载时拿到的快照，里面还带着 bgImage / bgDim /
-          //   winOpacity 等别的字段；整份回传 = 用旧快照覆盖后端的新值，
-          //   典型症状是"刚在设置页改好的背景图，拖一下透明度就退回去了"。
-          //   后端 updateConfig 是 deepMerge，只给一个键就只动这一个键。
+          // 只上报 panelAlpha 一个键，不要把整份 state.config.ui 发回去：
+          // state.config.ui 是页面加载时拿到的快照，里面还带着 bgImage / bgDim /
+          // winOpacity 等别的字段；整份回传 = 用旧快照覆盖后端的新值，
+          // 典型症状是"刚在设置页改好的背景图，拖一下透明度就退回去了"。
+          // 后端 updateConfig 是 deepMerge，只给一个键就只动这一个键。
           api('/api/config', { method: 'POST', body: JSON.stringify({ ui: { panelAlpha: pct } }) })
             .then((r) => { if (r?.config?.ui) state.config.ui = r.config.ui; })
             .catch(() => { /* 存不下就只本次生效 */ });
@@ -1126,17 +1119,17 @@ async function loadWallpaperPage() {
         text: cur.text || 'theme',
         monet: cur.monet ?? true, fit: cur.fit ?? 'smart'
       });
-      // 选壁纸 = 我要看这张 —— 底色不透明度一律放回 0（透明），
+      // 选壁纸 = 我要看这张，底色不透明度一律放回 0（透明），
       // 否则点了「用底色遮住」之后再挑壁纸，背景被不透明底色挡着，看着像"选了没反应"。
       // 放在 wpRenderBackground() 之前：先撤遮盖，新铺的壁纸层就不用"藏起来再显示"。
       wpSetFrameAlpha(0);
       wpRenderBackground();
       // 只翻转选中态 + 更新提示行，不整页重渲染：缩略图不重新请求、
-      // 滚动位置不丢、几十张图不重排 —— 点选壁纸应当是即时的。
+      // 滚动位置不丢、几十张图不重排，点选壁纸应当是即时的。
       $$('.wp-cell', box).forEach((c) => c.classList.toggle('on', c.dataset.id === it.id));
-      // ⚠️ 别用 querySelector('.wp-ctrl .muted') —— 那取到的是**第一个** .muted，
-      //   也就是「取色引擎：MD3 完整」那一行，一点壁纸它就被改写成「选中的壁纸：…」，
-      //   取色引擎提示凭空消失。按 id 取。
+      // 别用 querySelector('.wp-ctrl .muted')：那取到的是第一个 .muted，
+      // 也就是「取色引擎：MD3 完整」那一行，一点壁纸它就被改写成「选中的壁纸：…」，
+      // 取色引擎提示凭空消失。按 id 取。
       const sel = $('#wp-selected', box);
       if (sel) sel.textContent = `选中的壁纸：${it.title}`;
       const flatBtn = box.querySelector('#wp-flat');
@@ -1146,7 +1139,7 @@ async function loadWallpaperPage() {
 
   // ⚡ 转动态 / ↻ 重新录制：提交导入任务 + 轮询进度（共用 runner）。
   // span 嵌在 <button> 里，点它不能触发选壁纸（stopPropagation）。
-  // redo：先清服务端缓存再导 —— 录坏成品的重录入口（否则内容哈希命中
+  // redo：先清服务端缓存再导，录坏成品的重录入口（否则内容哈希命中
   // 缓存，永远拿回同一条坏循环，表现为"只能转一次"）。
   const runImport = async (btn, id, redo) => {
     if (btn.getAttribute('aria-disabled') === 'true') return;
@@ -1163,8 +1156,8 @@ async function loadWallpaperPage() {
       }
     }
     // 失败原因（含 ffmpeg 安装指引这类长文案）必须整段给用户看：
-    // 按钮上只放短句 + title 悬停，弹窗给全文 —— 只在按钮上 slice 截断，
-    // 用户就只能看到半句「装法：管理员/普通 Pow」（v1.3.1 在别人电脑上的实测反馈）。
+    // 按钮上只放短句 + title 悬停，弹窗给全文。只在按钮上 slice 截断的话，
+    // 用户就只能看到半句「装法：管理员/普通 Pow」。
     const wpImportFail = (btn, prefix, msg) => {
       const full = String(msg || '未知错误');
       btn.textContent = `✗ ${prefix}（点按钮重试）`;
@@ -1173,7 +1166,7 @@ async function loadWallpaperPage() {
     };
     // 缺 ffmpeg 是最常见也最容易自助解决的一类失败：与其让用户读一段
     // "去设置里下载"的说明，不如直接把人送过去并高亮那一块。
-    // 判据是后端给的结构化原因码，不是匹配文案 —— 文案改一句就断。
+    // 判据是后端给的结构化原因码，不是匹配文案，文案改一句就断。
     const isMissingFfmpeg = (code) => code === 'ffmpeg_missing';
     // 平台本身不支持（macOS / Linux 没有 ddagrab 与 Wallpaper Engine）：
     // 装 ffmpeg 也录不出来，所以不能给"去安装"的引导，只把原因说清楚。

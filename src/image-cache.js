@@ -1,15 +1,13 @@
-// 图片入库缓存（2026-10-09）
+// 图片入库缓存。
 //
-// 为什么需要：QQ(NTQQ) 的图片下载链接带 rkey 签名，**几分钟内就会失效** ——
-// 实测 2026-10-09：13:27:00 入库的图，13:27:48 模型调 get_message_images 去下
-// 就已经 HTTP 400（官方错误体：{"retcode":-5503007,"retmsg":"download url has expired"}），
-// curl 直连同样 400。模型只好老实回"这张读不出来"（这正是用户报的
-// "图片不再主动调用看图工具"的真实体验：调了、失败了、只能说看不到）。
+// QQ(NTQQ) 的图片下载链接带 rkey 签名，几分钟内就会失效：入库时还是好的，
+// 模型过几十秒去调 get_message_images 就已经 HTTP 400
+// （{"retcode":-5503007,"retmsg":"download url has expired"}），
+// 模型只好回"这张读不出来"。
 //
-// 所以：**入库时就地下载**（那时 url 是新鲜的 —— app.js 的注释里自己也写着
-// "媒体里的 url 此时是新鲜的"），落到 data/image-cache/，看图工具优先读本地缓存，
-// url 只作兜底。下载是**后台队列**（串行、不阻塞 ingest），失败就放弃（不重试，
-// 免得拿过期 url 反复打 CDN）。
+// 所以入库时就地下载（那时 url 是新鲜的），落到 data/image-cache/，看图工具
+// 优先读本地缓存，url 只作兜底。下载走后台队列（串行、不阻塞 ingest），
+// 失败就放弃，不拿过期 url 反复打 CDN。
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR, getConfig } from './config.js';
@@ -20,7 +18,7 @@ import { diskPressure } from './disk-space.js';
 const MAX_BYTES = 12 * 1024 * 1024;                 // 单图上限（与 safeFetchBinary 默认一致）
 const MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;         // 缓存留 3 天
 const PRUNE_INTERVAL_MS = 10 * 60 * 1000;           // 顺手清理的节流
-// r92：总量闸。TTL 之外的第二道防线 —— 活跃大群 3 天窗口内的入库量只受消息量
+// 总量闸。TTL 之外的第二道防线：活跃大群 3 天窗口内的入库量只受消息量
 // 约束，无字节上限时极端场景可到 GB 级。超限按 ts 最旧优先淘汰。
 const MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 
@@ -71,14 +69,14 @@ function fileNameOf(key, contentType) {
 }
 
 function enabled() {
-  // ⚠️（2026-10-16 外部审查 #9）磁盘告急时停止写入：图片缓存是"锦上添花"（本地副本，
-  //    没有它只是多看一次过期直链），而写一半的图片文件会污染缓存目录。真缺空间时
-  //    应该把写入让给会话存档这类不可再生的数据。
+  // 磁盘告急时停止写入：图片缓存是"锦上添花"（本地副本，没有它只是多看一次
+  // 过期直链），而写一半的图片文件会污染缓存目录。真缺空间时应该把写入让给
+  // 会话存档这类不可再生的数据。
   if (diskPressure() === 'critical') return false;
   return getConfig().imageCache?.enabled !== false;
 }
 
-/** 下载一张图并落盘（成功则登记进索引）。失败静默放弃 —— 过期 url 重试没有意义。 */
+/** 下载一张图并落盘（成功则登记进索引）。失败静默放弃，过期 url 重试没有意义。 */
 async function downloadOne(task) {
   const { key, url } = task;
   try {
@@ -126,7 +124,7 @@ function prune() {
       removed += 1;
     }
   }
-  // r92：总量闸（见 MAX_TOTAL_BYTES 注释）。TTL 删完仍超限就按最旧淘汰。
+  // 总量闸（见 MAX_TOTAL_BYTES 注释）。TTL 删完仍超限就按最旧淘汰。
   let total = Object.values(idx).reduce((n, v) => n + (Number(v.bytes) || 0), 0);
   if (total > MAX_TOTAL_BYTES) {
     const byAge = Object.entries(idx).sort((a, b) => Number(a[1].ts || 0) - Number(b[1].ts || 0));

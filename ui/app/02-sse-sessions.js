@@ -1,9 +1,9 @@
-// 〔SSE / 会话视图〕——M9 拆分第 3 段
+// 〔SSE / 会话视图〕
 'use strict';
 // ── SSE ──
-// R112：单例 + 自愈。长运行里若 connectSSE 被重复调用（看门狗重建窗口、
-// 热重载、切 tab 重入）会叠出多个永久 SSE 连接，逐步吃满 Chromium 对
-// 127.0.0.1 的 6 条 socket 上限，最终普通 fetch 全 "Failed to fetch"。
+// 单例 + 自愈。connectSSE 若被重复调用（看门狗重建窗口、热重载、切 tab 重入）
+// 会叠出多个永久 SSE 连接，逐步吃满 Chromium 对 127.0.0.1 的 6 条 socket 上限，
+// 最终普通 fetch 全 "Failed to fetch"。
 // 这里保证全局永远只有一个 EventSource，并提供 reconnectSSE 供网络自愈调用。
 let sseConn = null;
 function connectSSE() {
@@ -16,7 +16,7 @@ function connectSSE() {
   // 统一走这个出口，避免以后新增原生加载路径时再各拼一份。
   const eventUrl = withToken('/api/events');
   const es = new EventSource(eventUrl);
-  // R112：把连接记进单例，供 reconnectSSE 关闭重建
+  // 记进单例，供 reconnectSSE 关闭重建
   sseConn = es;
   es.addEventListener('session-start', () => {
     loadSessions();
@@ -49,12 +49,12 @@ function connectSSE() {
       startedAt: data.startedAt ?? 0
     };
     // sent/finishReason 等收尾字段：后端给了才进 patch。
-    // 不能无脑写 null —— pending 合并时 null 会把之前已有的值冲掉。
+    // 不能无脑写 null，pending 合并时 null 会把之前已有的值冲掉。
     if (Array.isArray(data.sent)) patch.sent = data.sent;
     if (data.finishReason !== undefined) patch.finishReason = data.finishReason;
     if (data.error !== undefined) patch.error = data.error;
-    // r88：「人话解释」跟着 error 一起走。undefined 时不写 —— 免得把先前拿到
-    // 的解释被后续只有 error 字符串的 patch 冲掉。
+    // 「人话解释」跟着 error 一起走。undefined 时不写，免得把先前拿到的解释
+    // 被后续只有 error 字符串的 patch 冲掉。
     if (data.errorHuman !== undefined) patch.errorHuman = data.errorHuman;
     if (data.errorRaw !== undefined) patch.errorRaw = data.errorRaw;
     if (data.endedAt !== undefined) patch.endedAt = data.endedAt;
@@ -77,7 +77,7 @@ function connectSSE() {
     if (state.tab === 'chats') loadChats({ quiet: true });
     refreshStatus();
     // ⚠️ 会话刚结束必须主动重拉一次详情：轮询只刷 running/waiting 的会话，
-    //    最终态（sent / finishReason / error）之后再也不来 —— 不重拉的话，
+    //    最终态（sent / finishReason / error）之后再也不来，不重拉的话，
     //    "已发送到 QQ"徽标和收尾状态只能等用户手动刷新才出现。
     const id = data.sessionId;
     if (id && id === state.currentSessionId) {
@@ -87,13 +87,11 @@ function connectSSE() {
   });
   es.addEventListener('chat-update', () => {
     if (state.tab === 'chats') loadChats({ quiet: true });
-    // 2026-10-16：会话设置页在场时也重渲染一次 —— 群内 @机器人 + /安静 的
-    // 指令禁言会 emit chat-update，不刷新的话「指令禁言」卡片停在"未禁言"，
-    // 用户以为指令没生效（尤其刚验证过"发了指令机器人照旧回"的修复后，
-    // 状态卡片的即时反馈是确认修复生效的直接证据）。
-    // 2026-10-23 修复：这段原先判断 typeof setupChat / renderSetupPane —— 两者都是
-    // 14-chrome.js IIFE 私有的，typeof 恒为 undefined，整段是死代码（禁言卡片从不刷新）。
-    // 改为调 14 导出的 window.refreshSetupPane（内部自己判模式，不在设置页时是空操作）。
+    // 会话设置页在场时也重渲染一次：群内 @机器人 + /安静 的指令禁言会 emit
+    // chat-update，不刷新的话「指令禁言」卡片停在"未禁言"，用户以为指令没生效。
+    // 必须走 14-chrome.js 导出的 window.refreshSetupPane：setupChat / renderSetupPane
+    // 都是该文件 IIFE 私有的，typeof 恒为 undefined。refreshSetupPane 内部自己
+    // 判模式，不在设置页时是空操作。
     try {
       if (typeof window.refreshSetupPane === 'function') window.refreshSetupPane();
     } catch { /* 设置页未就绪不阻塞 */ }
@@ -106,14 +104,14 @@ function connectSSE() {
     const chatKey = data.chatKey || '';
 
     // 状态一律记进 state（不依赖当前 DOM），这样切走页签再切回也能恢复显示。
-    // 原先只操作 DOM 且 tab 不对就 return，导致切回来完全看不出整理是否还在跑。
+    // 只操作 DOM 且 tab 不对就 return 的话，切回来完全看不出整理是否还在跑。
     if (phase === 'consolidate-start') {
       if (chatKey) state.consolidating[chatKey] = { startedAt: Date.now() };
     } else if (phase === 'consolidate-done') {
       if (chatKey) delete state.consolidating[chatKey];
       if (chatKey) {
-        // failed 数量一并记进 state：渲染时给"有失败"的整理结果加警示标记
-        //（2026-10-16：部分失败以前与"内容无需改动"长得一样，用户看不出问题）
+        // failed 数量一并记进 state：渲染时给"有失败"的整理结果加警示标记，
+        // 否则部分失败与"内容无需改动"长得一样，用户看不出问题。
         const failCount = Array.isArray(data.failed) ? data.failed.length : 0;
         state.consolidateResult[chatKey] = { note: data.note || '整理完成', at: Date.now(), failed: failCount };
       }
@@ -155,8 +153,7 @@ function connectSSE() {
     if (state.tab === 'connection') loadConnectionPage({ quiet: true });
   });
   es.addEventListener('status', () => refreshStatus());
-  // 2026-10-23：snowluma-status / snowluma-log 两个事件随内置协议端一起删除，
-  // 后端不再发射（协议端由用户自装，它的日志归它自己的控制台）。
+  // 协议端由用户自装，它的日志归它自己的控制台，后端不再发 snowluma-* 事件。
   es.addEventListener('qq-portable-status', () => { refreshStatus(); if (state.tab === 'connection') loadConnectionPage({ quiet: true }); });
   // qq-portable-log 只用于刷新连接页上的状态（日志面板已不再展示 QQ 内核输出）。
   // 仍做 500ms 防抖：协议端启动期这一串日志很密，逐行重绘纯属浪费。
@@ -174,7 +171,7 @@ function connectSSE() {
     if (d.level === 'error') console.warn('[agent 反馈]', d.message);
   });
   // 模型逐个审的进度：POST /api/doctor/triage 要逐个文件调模型（可能几分钟），
-  // 靠这个事件实时推进进度条 —— 否则用户点完只能对着"审阅中"干等。
+  // 靠这个事件实时推进进度条，否则用户点完只能对着"审阅中"干等。
   es.addEventListener('doctor-triage', (ev) => {
     if (!doctorState.triaging) return;
     let d = {};
@@ -184,12 +181,12 @@ function connectSSE() {
     const bar = $('#harness-page')?.querySelector('.doctor-triage-bar');
     if (bar) bar.outerHTML = renderTriageBar(doctorState.project?.rules || []);
   });
-  // 视觉能力扫描进度：POST /api/vision/scan 是异步的（202），完成后靠这个事件告诉前端。
-  // 此前后端会 emit 但全项目没有任何监听者，扫描结果只能在重载页面后才看得到。
+  // 视觉能力扫描进度：POST /api/vision/scan 是异步的（202），完成后靠这个事件
+  // 告诉前端；没人监听的话，扫描结果只能在重载页面后才看得到。
   es.addEventListener('vision-scan', async (ev) => {
     let d = {};
     try { d = JSON.parse(ev.data); } catch { /* ignore */ }
-    // 2026-09-19（M9 清理）：扫描入口搬到「模型配置」弹窗（mc-vision-hint 承接进度）。
+    // 扫描入口在「模型配置」弹窗，mc-vision-hint 承接进度。
     const hint = $('#mc-vision-hint');
     if (hint) {
       if (d.phase === 'start') hint.textContent = '扫描中…（会真实请求每个模型，请稍候）';
@@ -208,7 +205,7 @@ function connectSSE() {
   es.onerror = () => { /* EventSource 自带自动重连，无需手动处理 */ };
 }
 
-// R112：网络自愈入口。长运行后若渲染端 socket 池卡死（持续 "Failed to fetch"），
+// 网络自愈入口。长运行后若渲染端 socket 池卡死（持续 "Failed to fetch"），
 // 关闭旧 SSE 由浏览器释放那条半死 socket，再建一条新的；必要时 00-core 的
 // 网络看门狗会进一步触发整页重载兜底。
 function reconnectSSE() {
@@ -224,11 +221,10 @@ async function loadSessions({ quiet = false } = {}) {
     // 一次全取：后端上限 2^20（约等于不限），前端靠分页渲染（SESSION_PAGE）避免卡顿
     const data = await api('/api/sessions?limit=1048576');
     const next = data.sessions || [];
-    // BUG-13（R77 同款移植）：轮询路径（quiet=true）在数据**一字未变**时直接跳过整轮渲染。
-    // 之前每 refreshMs（默认 15s，设置页下限可调到 1s）都会把 state.sessions 重设一遍
-    // 并调 renderSessionList() —— 而那是 `box.innerHTML = …` 整体重建。几百条会话时
-    // 等于"每隔十几秒把列表整块推倒重画"：视觉闪烁、滚动位置跳动、正在悬停/拖拽的
-    // 行被抹掉、CPU 白烧。签名取完整 JSON，不会漏掉任何参与渲染的字段。
+    // 轮询路径（quiet=true）在数据一字未变时直接跳过整轮渲染。每 refreshMs 都重设
+    // state.sessions 并调 renderSessionList()（`box.innerHTML = …` 整体重建），
+    // 几百条会话时等于"每隔十几秒把列表整块推倒重画"：视觉闪烁、滚动位置跳动、
+    // 正在悬停/拖拽的行被抹掉。签名取完整 JSON，不会漏掉任何参与渲染的字段。
     const sig = JSON.stringify(next);
     if (quiet && state.sessionsSig === sig) return;
     state.sessionsSig = sig;
@@ -249,9 +245,8 @@ async function loadSessions({ quiet = false } = {}) {
   } catch (e) { if (!quiet) console.error(e); }
 }
 
-// 会话列表定时刷新：只要停在会话页，就持续更新列表（运行中会话也会轮询详情）
-// 间隔取自配置的 ui.refreshMs（设置页「界面刷新间隔」）；此前这里硬编码 4000，
-// 配置项从未被读取 —— 用户改了完全没效果。
+// 会话列表定时刷新：只要停在会话页，就持续更新列表（运行中会话也会轮询详情）。
+// 间隔取自配置的 ui.refreshMs（设置页「界面刷新间隔」），硬编码会让配置项形同虚设。
 let listPoller = null;
 function refreshIntervalMs() {
   const n = Number(state.config?.ui?.refreshMs);
@@ -261,9 +256,8 @@ function refreshIntervalMs() {
 }
 
 /**
- * 状态栏轮询。用 setTimeout 自续期而不是 setInterval：
- * 每一轮都重新读 ui.refreshMs，用户在设置页改「界面刷新间隔」后立刻生效，
- * 不必刷新页面（此前这里是 setInterval(..., 15000) 写死的，改了设置不生效）。
+ * 状态栏轮询。用 setTimeout 自续期而不是 setInterval：每一轮都重新读
+ * ui.refreshMs，用户在设置页改「界面刷新间隔」后立刻生效，不必刷新页面。
  */
 let statusPollTimer = null;
 function startStatusPoller() {
@@ -278,24 +272,21 @@ function startStatusPoller() {
  * 给滚动容器挂"滚到底部就加载更多"的监听。
  *
  * 要点：
- *   1. 节流必须带"尾随调用"：曾经是被节流的事件直接丢弃 —— 快速滚动时
- *      事件密集，"抵达底部"那一下几乎总是落在 120ms 窗口内被扔掉，
- *      用户停手后又不会再有新事件 → 加载永远不触发，表现为
- *      "滚得快会滚不下去，像撞墙"。现在窗口内的事件会留下一个尾随定时器，
- *      停手后最多 120ms 内补一次检查。
- *   2. 距底部 <400px 就触发（曾经是 100px）：快速甩滚时惯性大，
- *      100px 的提前量太小，内容还没加载出来人已经撞底了。
- *   3. 交给 onLoadMore 自己判断是否真有更多数据；没有就直接返回，避免空转重渲染
+ *   1. 节流必须带"尾随调用"：被节流的事件直接丢弃的话，快速滚动时事件密集，
+ *      "抵达底部"那一下几乎总落在 120ms 窗口内被扔掉，用户停手后又没有新事件，
+ *      加载永远不触发，表现为"滚得快会滚不下去，像撞墙"。现在窗口内的事件会
+ *      留下一个尾随定时器，停手后最多 120ms 内补一次检查。
+ *   2. 距底部 <400px 就触发：快速甩滚时惯性大，提前量太小的话内容还没加载出来
+ *      人已经撞底了。
+ *   3. 交给 onLoadMore 自己判断是否真有更多数据；没有就直接返回，避免空转重渲染。
  */
 function attachScrollLoader(elId, onLoadMore) {
   const el = document.getElementById(elId);
   if (!el) return;
 
-  // ⚠️ 防重复绑定：这个函数会被多次调用（渲染一次调一次），
-  //    曾经没做防护，结果加载 N 批就挂了 N 个监听器 ——
-  //    滚一次会同时触发 N 次 onLoadMore，一次跳好几批，
-  //    而且每个监听器各有自己的 last 变量，120ms 节流形同虚设。
-  //    这里把状态存在元素自身上，重复调用直接复用。
+  // ⚠️ 防重复绑定：这个函数渲染一次调一次，不做防护的话加载 N 批就挂 N 个监听器，
+  //    滚一次同时触发 N 次 onLoadMore、一次跳好几批，而且每个监听器各有自己的
+  //    last 变量，120ms 节流形同虚设。状态存在元素自身上，重复调用直接复用。
   if (el.__scrollLoader) {
     el.__scrollLoader.onLoadMore = onLoadMore;   // 只更新回调，不重复挂监听
     return;
@@ -318,7 +309,7 @@ function attachScrollLoader(elId, onLoadMore) {
       if (stateLoader.pending) { clearTimeout(stateLoader.pending); stateLoader.pending = null; }
       check();
     } else if (!stateLoader.pending) {
-      // 窗口内被节流的事件：不丢，留一个尾随调用 —— 停手后补做最后一次检查
+      // 窗口内被节流的事件：不丢，留一个尾随调用，停手后补做最后一次检查
       stateLoader.pending = setTimeout(() => { stateLoader.pending = null; check(); }, THROTTLE_MS - elapsed);
     }
   }, { passive: true });
@@ -337,16 +328,13 @@ function initSessionScrollLoader() {
 /**
  * 存档页消息列表：滚到底部再追加 CHAT_MSG_MORE 条。
  *
- * ⚠️ 监听目标是 #chat-detail —— 它自带 .detail-pane 类（overflow-y:auto），
- *   是真正滚动的容器。曾经在它内部又套了一层 .archive-scroll 想做内层滚动，
- *   结果内层没有高度基准、被内容撑开，滚动事件全发生在外层，
- *   导致监听挂空、"继续滚动没反应"。现在只保留一层滚动容器。
+ * ⚠️ 监听目标是 #chat-detail，它自带 .detail-pane 类（overflow-y:auto），
+ *   是真正滚动的容器。不要在它内部再套一层滚动容器：内层没有高度基准、会被
+ *   内容撑开，滚动事件全发生在外层，监听挂空，"继续滚动没反应"。
  *
- * ⚠️ 加载更多只走"追加"（appendChatMessageRows）：
- *   曾经这里调 updateChatMessagesBody(true)，每批都要全量 sort + 全量
- *   innerHTML 重建（行数越滚越多），还有 scrollTop 补偿把视口"吸"在底部
- *   → 连锁触发下一批加载 → 主线程被反复长阻塞，
- *   表现为"滑到临界线继续向下滚动反应迟钝"。
+ * ⚠️ 加载更多只走"追加"（appendChatMessageRows）。调 updateChatMessagesBody(true)
+ *   的话每批都要全量 sort + 全量 innerHTML 重建（行数越滚越多），还有 scrollTop
+ *   补偿把视口"吸"在底部，连锁触发下一批加载，主线程被反复长阻塞。
  */
 function initChatScrollLoader() {
   attachScrollLoader('chat-detail', () => {
@@ -378,9 +366,8 @@ function startListPoller() {
   }, refreshIntervalMs());
   // 从后台切回：立刻刷一次用量（刚才跳过的补上），数字不会"停在过去"。
   // ⚠️ 只挂一次：startListPoller 在每次「设置页改动保存」时都会被调用来刷新间隔
-  //    （07-settings-events.js 的 doSave），若这里每次 addEventListener，
-  //    长会话里反复改设置会往 document 上叠出一串 visibilitychange 监听 ——
-  //    每次切回前台都会把 loadUsageView 跑 N 遍（用量页要重算+重绘三张图）。
+  //    （07-settings-events.js 的 doSave），每次都 addEventListener 的话，反复改
+  //    设置会叠出一串 visibilitychange 监听，每次切回前台把 loadUsageView 跑 N 遍。
   if (!listPollerVisBound) {
     listPollerVisBound = true;
     document.addEventListener('visibilitychange', () => {
@@ -391,11 +378,11 @@ function startListPoller() {
 startListPoller();
 
 /* ── 该群的回复频率（= 人设里的「参与度」档位）──
-   口径与后端 src/config.js#personaForChat 完全一致：**分群人设优先，没单独设就跟随全局**。
-   ⚠️ 键格式必须两种都认：UI 保存时可能写 `group:123`，也可能只写 `123`
-   （后端注释里记着这个坑：只认一种 → 存了却永不生效）。所以先按 chatKey 查、再按纯 id 查。
+   口径与后端 src/config.js#personaForChat 完全一致：分群人设优先，没单独设就跟随全局。
+   ⚠️ 键格式必须两种都认：UI 保存时可能写 `group:123`，也可能只写 `123`，
+   只认一种会导致存了却永不生效。所以先按 chatKey 查、再按纯 id 查。
    展示成"标签语言"的小胶囊（淡底 + 同色字 + 无描边），跟状态徽标同一族；
-   ❌ 不要做成按钮（有描边）——它只是信息，不是控件。 */
+   不要做成按钮（有描边），它只是信息，不是控件。 */
 const REPLY_FREQ_LABEL = { low: '安静型', medium: '普通群友', high: '活跃型' };
 const REPLY_FREQ_DESC = {
   low: '很少主动搭话，只在被 @ 或明显需要时才回',
@@ -430,10 +417,9 @@ function renderSessionList() {
   const all = state.sessions || [];
   const shown = all.slice(0, state.sessionLimit);
   const rest = all.length - shown.length;
-  // ⚠️（2026-10-10 r86 修 P1）空态兜底：此前 shown 为空时 box.innerHTML = ''，
-  //    列表区**一片空白**，用户分不清是"还没有会话"「正在加载」还是"加载失败"。
-  //    存档页 / 记忆页都有空态（04-archive-usage.js、05-memory-settings.js），这里补上。
-  //    注意**不能提前 return** —— 函数末尾还要挂事件委托（bindSessionListDelegation），
+  // ⚠️ 空态兜底：shown 为空时 box.innerHTML = '' 会让列表区一片空白，用户分不清是
+  //    "还没有会话"「正在加载」还是"加载失败"。
+  //    不能提前 return：函数末尾还要挂事件委托（bindSessionListDelegation），
   //    跳过它会导致"从空变有数据"时委托没挂上、整列点不动。
   const isEmpty = !shown.length;
   box.innerHTML = isEmpty
@@ -448,7 +434,7 @@ function renderSessionList() {
       : s.status === 'error' && (s.errorHuman?.title || s.error)
         ? `<span class="session-activity">⚠️ ${esc((s.errorHuman?.title || s.error).slice(0, 60))}</span>`
         : '';
-    // 统计行（token / 缓存命中率 / 轮数 / 搜索）：**单独占一行**，不再和状态挤同一行 ——
+    // 统计行（token / 缓存命中率 / 轮数 / 搜索）：**单独占一行**，不再和状态挤同一行，
     // 之前七八个元素全塞进一行，窄侧栏下 flex 会把状态徽标压成竖排（运/行/中）、
     // 数字被断成两行，观感很臃肿。
     const cacheRate = fmtCacheRate(s.usage);   // 这一轮会话的缓存命中率（无数据时为空串）
@@ -477,7 +463,7 @@ function renderSessionList() {
     return `
       <div class="session-item ${s.id === state.currentSessionId ? 'selected' : ''} ${s.status === 'waiting' ? 'session-waiting-row' : ''} ${isNew ? 'new-item' : ''}" data-id="${s.id}">
         <div class="session-title">
-          <!-- 标题行改成固定三列后群名列变窄（~121px），长群名会被省略号截断 ——
+          <!-- 标题行改成固定三列后群名列变窄（~121px），长群名会被省略号截断，
                补 title 让鼠标悬停仍能看全名（tooltip.js 已全局接管 title，不会出黄块）。 -->
           <span class="session-chat" title="${esc(chatName)}">${esc(chatName)}</span>
           ${replyFreqChip(s.chatKey)}
@@ -506,15 +492,11 @@ function renderSessionList() {
     cnt.textContent = all.length ? `${shown.length}/${all.length}` : '';
   }
   for (const s of state.sessions) state.seenSessionIds.add(s.id);
-  // 事件委托（2026-10-10 修，P1-事件委托）：
-  // 旧实现每次渲染都对每个 .session-item / 重试 / 中止按钮**逐条 addEventListener**。
-  // 会话列表是 SSE 高频重绘的（每条会话状态一变就整表重渲），
-  // 后果有三：
-  //   ① N 条会话 × 3 个监听器，每帧创建 N×3 个闭包 → 高频重绘下 GC 压力明显；
-  //   ② 旧监听器随 innerHTML 一起被丢弃，但**绑定开销已经付了**（做功白白浪费）；
-  //   ③ 语义上脆弱：任何将来"局部替换某一行 DOM"的改动都会静默丢事件。
-  // 现在改为在容器上挂**一次性**委托监听器（本函数可能在重绘中反复调用，用
-  // 数据集标记保证只挂一次）。命中判定用 closest 上溯，因此按钮/子元素点击都能识别。
+  // 事件委托：会话列表是 SSE 高频重绘的（每条会话状态一变就整表重渲），
+  // 对每个 .session-item / 重试 / 中止按钮逐条 addEventListener 的话，
+  // 每帧创建 N×3 个闭包，GC 压力明显，而且旧监听器随 innerHTML 一起被丢弃，
+  // 绑定开销白白付掉。改成在容器上挂一次性委托监听器（本函数可能在重绘中
+  // 反复调用，用 dataset 标记保证只挂一次）。命中判定用 closest 上溯。
   bindSessionListDelegation(box);
   // 等待中会话的剩余时间按 0.1s 本地刷新（不重新拉列表）
   if ($$('.session-wait[data-until]', box).length) startWaitTicker();
@@ -524,16 +506,14 @@ function renderSessionList() {
  * 给会话列表容器挂一次性事件委托。重复调用安全（用 dataset 标记防重入）。
  * 监听器读的是"点击那一刻的 DOM"，所以列表重绘后无需重新绑定。
  *
- * ⚠️ 可达性说明（2026-10-10 核实，勿删）：当前信息架构下，**这段行点击实际走不到** ——
- *    index.html 的 #session-list（含本容器的 #session-items）在启动时被 14-chrome.js
- *    整块搬进全屏页 #bigpage；而 15-chat-chrome.js 一旦进入「会话选择」模式就给
- *    #session-items 加 .cc-hide（display:none），改用它自己的卡片左栏 W_LIST
- *    （那套本来就是委托写法）。
- *    保留这段的理由：① 它是 renderSessionList 的**正确实现**（重试/中止按钮的委托
- *    仍被真实使用 —— 只要列表被渲染出来，按钮就活）；② 一旦 IA 回退、或将来别的
- *    视图复用 #session-items，行点击必须还能用；③ 删掉反而会让"列表能渲染但点不动"
- *    成为一个更隐蔽的坑。若确认永不复用，应连同 #session-items 的渲染一起移除，
- *    而不是只摘掉监听器。
+ * ⚠️ 可达性说明（勿删）：当前信息架构下，这段行点击实际走不到。
+ *    #session-list（含 #session-items）在启动时被 14-chrome.js 整块搬进全屏页
+ *    #bigpage；而 15-chat-chrome.js 一旦进入「会话选择」模式就给 #session-items
+ *    加 .cc-hide（display:none），改用它自己的卡片左栏 W_LIST。
+ *    保留这段的理由：① 重试/中止按钮的委托仍被真实使用，只要列表被渲染出来按钮就活；
+ *    ② 一旦 IA 回退、或别的视图复用 #session-items，行点击必须还能用；
+ *    ③ 删掉会让"列表能渲染但点不动"成为一个更隐蔽的坑。
+ *    若确认永不复用，应连同 #session-items 的渲染一起移除，而不是只摘掉监听器。
  */
 function bindSessionListDelegation(box) {
   if (!box || box.dataset.delegated === '1') return;
@@ -554,7 +534,7 @@ function bindSessionListDelegation(box) {
 
 /**
  * 会话列表的三个动作实现（抽成单例，供委托回调复用）。
- * 惰性创建并缓存在模块级 —— 每次 renderSessionList 复用同一组实现，不重复造闭包。
+ * 惰性创建并缓存在模块级，每次 renderSessionList 复用同一组实现，不重复造闭包。
  */
 let sessionListHandlers = null;
 function getSessionListHandlers() {
@@ -562,7 +542,7 @@ function getSessionListHandlers() {
   // 失败会自动重试一次的 api 封装（用于"偶发 failed to fetch"的点击类操作：
   // 中止/重试等）。后端在收尾时会做同步落盘（大会话 JSON 写盘可达几百毫秒），
   // 期间其它请求会在 TCP 队列里排队；偶发的连接抖动/瞬间拒绝会以
-  // TypeError: Failed to fetch 冒出来 —— 这类瞬态失败重试一次几乎必成。
+  // TypeError: Failed to fetch 冒出来，这类瞬态失败重试一次几乎必成。
   // 只重试网络层失败（TypeError），HTTP 4xx/5xx 是服务器的明确答复，不重试。
   async function apiWithRetry(path, options = {}, retries = 1) {
     try {
@@ -602,7 +582,7 @@ function getSessionListHandlers() {
     },
 
     // 运行中/等待中的「中止」：请求后端安全收尾这条会话。
-    // 中止是"尽快别再继续"，不是立即截断 —— 后端在下一轮 LLM 请求前收尾，
+    // 中止是"尽快别再继续"，不是立即截断，后端在下一轮 LLM 请求前收尾，
     // 已发出的消息不受影响。列表刷新靠 SSE/轮询，这里立即拉一次。
     async onAbort(btn) {
       const id = btn.dataset.id;
@@ -652,16 +632,15 @@ async function selectSession(id) {
   state.sessionDetail = null;
   lastDetailFp = null;
   renderSessionList();
-  // R76：详情容器可能已被切页销毁（#session-detail 只在会话页存在）—— 直接写
-  // innerHTML 会抛 TypeError。切走时静默跳过即可。
+  // 详情容器可能已被切页销毁（#session-detail 只在会话页存在），直接写 innerHTML
+  // 会抛 TypeError，切走时静默跳过即可。
   //
-  // ⚠️ 不要在这里立刻清空（2026-10-13 修「点会话卡展开时右栏闪一下」）：
-  //   会话卡的展开走的正是这条路径（15-chat-chrome.js 的卡头点击 → selectSession）。
-  //   原先紧跟一句 innerHTML = '加载中…'，会把右栏骨架 #cc-cards（由 15 号文件托管）
-  //   整块擦掉 —— 中间至少一帧是空的，这就是用户看到的"闪一下"。
+  // ⚠️ 不要在这里立刻清空：会话卡的展开走的正是这条路径（15-chat-chrome.js 的
+  //   卡头点击 → selectSession）。紧跟一句 innerHTML = '加载中…' 会把右栏骨架
+  //   #cc-cards 整块擦掉，中间至少一帧是空的，用户看到的就是"闪一下"。
   //   本机 API 通常几十毫秒就返回，这个中间态纯属负收益。
-  //   改成**延迟占位**：只有真的慢（>200ms）才显示「加载中…」；正常情况由
-  //   renderSessionDetail 一次性替换内容（innerHTML 替换在同一帧完成，不闪）。
+  //   改成延迟占位：只有真的慢（>200ms）才显示「加载中…」；正常情况由
+  //   renderSessionDetail 一次性替换内容（同一帧完成，不闪）。
   const detail = $('#session-detail');
   let hintTimer = null;
   if (detail) {
@@ -683,27 +662,23 @@ async function selectSession(id) {
 let lastDetailFp = null;
 
 // ══════════════════════════════════════════════════════════════════════════
-// r88 · 会话报错「说人话」
+// 会话报错「说人话」
 // ---------------------------------------------------------------------------
-// 症状（2026-10-10 用户反馈）：模型报错时详情页铺一整段红字，形如
-//   模型 API HTTP 400：{"error":{"message":"The supported API model names are
-//   deepseek-flash, deepseek-v4-pro, but you passed DS v41f. (request_id:…)"…}}
-// 能读英文 JSON 的人觉得信息完整，绝大多数用户只看到"一堵墙"。原话：
-// "我不希望模型报错的时候显示这一大堆，直接告诉用户哪里有问题，因为大部分
-//  萌新看不懂这玩意"。
+// 模型报错时详情页会铺一整段红字（`模型 API HTTP 400：{"error":{…}}`），
+// 能读英文 JSON 的人觉得信息完整，绝大多数用户只看到"一堵墙"。
 //
 // 做法：后端在抛错前把解释挂在 error.human（见 src/error-l10n.js），
 //  orchestrator 接成 session.errorHuman / session.errorRaw 一路带到这儿。
-//  这个函数**只负责渲染**，不负责猜 —— 拿不到 human 就原样显示（纯增量退化）。
+// 这里只负责渲染，不负责猜：拿不到 human 就原样显示（纯增量退化）。
 //
-// 展示形态（用户选了"折叠 + 带按钮"）：
+// 展示形态：
 //   ┌ ⚠️ 模型名填错了                     ← title，一句话说清哪儿坏了
 //   │    你填的「DS v41f」这个模型服务端不认。   ← what，为什么
 //   │    改成服务商支持的其中一个：a / b。       ← fix，怎么办
 //   │    [ 去改模型名 ]                        ← target → 一键跳设置页
 //   │    ▸ 查看技术详情                        ← <details> 折叠原始报错
 //   └
-// 修复按钮的 data-target 复用 07-settings-events.js 里既有的 .hc-fix-btn 约定，
+// 修复按钮的 data-target 复用 07-settings-events.js 的 .hc-fix-btn 约定，
 // 但那套只在设置页绑定；这里的按钮在会话页，所以单独绑一次（见 bindSessionErrorFix）。
 // ══════════════════════════════════════════════════════════════════════════
 
@@ -743,9 +718,9 @@ function sessionErrorHtml(s) {
 
 /**
  * 绑定错误卡片上「去改设置」的点击。
- * 卡片是每次渲染重建的（renderSessionDetail 里 innerHTML 覆盖），所以用**事件委托**
- * 挂在 #session-detail 上绑一次即可 —— 不用在每次重渲染后再遍历按钮，
- * 也不会因为重建而重复绑定（这是会话列表早就用过的同一套做法）。
+ * 卡片是每次渲染重建的（renderSessionDetail 里 innerHTML 覆盖），所以用事件委托
+ * 挂在 #session-detail 上绑一次即可，不用在每次重渲染后再遍历按钮，
+ * 也不会因为重建而重复绑定。
  */
 function bindSessionErrorFix() {
   const box = $('#session-detail');
@@ -760,10 +735,10 @@ function bindSessionErrorFix() {
       if (target === 'skills') { switchTab('skills'); return; }
       if (target === 'plugins') { switchTab('plugins'); return; }
       if (target === 'settings-api' || target === 'settings-tools' || target === 'settings-allow') {
-        // 设置页的三个分区都要先进设置页、再切分区 —— 直接改 state.settingsSection
+        // 设置页的三个分区都要先进设置页、再切分区，直接改 state.settingsSection
         // 不会重渲染，必须调既有的两个 render（与 07-settings-events.js 同一路径）。
         switchTab('settings');
-        // ⚠️ 2026-10-20：换分区前先把挂起的自动保存落盘 —— state.settingsSection 一变，
+        // ⚠️ 换分区前先把挂起的自动保存落盘：state.settingsSection 一变，
         //    doSave 就只收集新分区的字段，旧分区 600ms 窗口内的改动会被漏掉。
         if (typeof flushSettingsSaves === 'function') flushSettingsSaves();
         state.settingsSection = target.replace('settings-', '');
@@ -796,8 +771,8 @@ async function loadSessionDetail(id, { quiet = false } = {}) {
 function renderSessionDetail(s) {
   const detail = $('#session-detail');
   if (!detail) return;
-  // 内容没变（轮询/SSE 重复推送）→ 完全不动 DOM，保住滚动位置和展开状态
-  // json 模式切换也要触发重渲染
+  // 内容没变（轮询/SSE 重复推送）→ 完全不动 DOM，保住滚动位置和展开状态。
+  // json 模式切换也要触发重渲染，所以它进指纹。
   const fp = `${s.id}|${s.status}|${s.rounds || 0}|${(s.messages || []).length}|${(s.sent || []).length}|${s.error ? 1 : 0}|${s.activity || ''}|${state.sessionJsonMode === s.id ? 'json' : 'ui'}`;
   if (lastDetailFp === fp) return;
   const firstRender = lastDetailFp === null;
@@ -809,7 +784,7 @@ function renderSessionDetail(s) {
   const chatName = formatChatTitle(s.chatKey, chatNameOf(s.chatKey));
   const statusBadge = `<span class="status-badge status-${s.status}">${STATUS_LABEL[s.status] || s.status}</span>`;
   const usage = s.usage || {};
-  // 这一轮会话的缓存命中率（显示在总 token 后面 —— 用户要求）
+  // 这一轮会话的缓存命中率（显示在总 token 后面，用户要求）
   const cacheRate = fmtCacheRate(usage);
 
   const html = [];
@@ -921,7 +896,7 @@ function renderSessionDetail(s) {
   detail.querySelectorAll('details.collapsible').forEach((d, i) => openStates.set(i, d.open));
   detail.innerHTML = html.join('');
   detail.querySelectorAll('details.collapsible').forEach((d, i) => { if (openStates.has(i)) d.open = openStates.get(i); });
-  bindSessionErrorFix();   // r88：错误卡片上的「去改设置」按钮（委托，幂等）
+  bindSessionErrorFix();   // 错误卡片上的「去改设置」按钮（委托，幂等）
   const jsonBtn = $('#json-mode-btn');
   if (jsonBtn) jsonBtn.addEventListener('click', () => {
     state.sessionJsonMode = state.sessionJsonMode === s.id ? null : s.id;
@@ -931,8 +906,7 @@ function renderSessionDetail(s) {
   // 删除这条会话记录
   const delBtn = $('#session-delete-btn');
   if (delBtn) delBtn.addEventListener('click', async () => {
-    // ⚠️（2026-10-10 r86 修 P2）破坏性操作补 danger:true → 主按钮走危险色，
-    //    与「取消」在视觉上区分开（此前全项目 0 处使用，09-dialogs 白支持了这个参数）。
+    // 破坏性操作带 danger:true，主按钮走危险色，与「取消」在视觉上区分开。
     if (!await qaConfirm({
       danger: true,
       confirmText: '删除',
@@ -954,9 +928,7 @@ function renderSessionDetail(s) {
   } else {
     detail.scrollTop = keepScroll;               // 保留阅读位置
   }
-  // 说明：此处原先有一段"运行中每 2s 自递归拉详情"的兜底轮询，已移除。
-  // 原因：renderSessionDetail 会被 SSE 事件和 4s 主轮询反复调用，每次都新起一个
-  // setTimeout 且从不取消旧的，切换/高频刷新时 timer 会不断累积；
-  // 而下面的 4s 主轮询（loadSessions）已经会对 running/waiting 的会话刷新详情，
-  // 功能完全覆盖，2s 递归属于纯重复请求。
+  // 这里不要再加"运行中每 2s 自递归拉详情"的轮询：renderSessionDetail 会被 SSE
+  // 事件和主轮询反复调用，每次都新起 setTimeout 且从不取消旧的，timer 会不断累积。
+  // loadSessions 已经会对 running/waiting 的会话刷新详情，功能完全覆盖。
 }

@@ -1,4 +1,4 @@
-// 〔harness 页签〕——self-doctor 插件的前端（自检系统 + 对话审查两个模块）
+// 〔harness 页签〕，自检 / 对话审查 / 自动修复 / 自创扩展 / 升级 / 打包接收 / 开发工单
 'use strict';
 /*
  * 这一页是「谁在提供 doctor.report 能力」的纯前端：
@@ -8,15 +8,13 @@
  *   - POST /api/doctor/triage   模型逐个审：把扫描候选交给模型判真伪（花 token）
  *   - POST /api/doctor/ask      把问题 + 体检单交给模型，做只读归因
  *
- * 关键设计：插件关掉时后端返回 { ok:false, available:false }，
- * 这一页要展示"未启用 + 去哪开"，而不是空白或报错 —— 否则用户会以为
- * 是页面坏了，而不是插件被关了（这正是 self-doctor 自己爱抓的那类问题）。
+ * 插件关掉时后端返回 { ok:false, available:false }，
+ * 这一页要展示"未启用 + 去哪开"，而不是空白或报错，否则用户会以为
+ * 是页面坏了，而不是插件被关了。
  *
- * ── 为什么两个模块并在一页、而不是拆成两个顶层页签 ──
- *   两者共用同一份体检数据（report）与同一套模型配置（doctorApi），
- *   且"先跑自检 → 看到某条警告 → 想深入问"是最常见的动线。
- *   拆成两个顶层页签就要各自维护一份 report 与配置状态，
- *   还得处理"从自检跳到对话"时把上下文带过去的问题 —— 得不偿失。
+ * 多个模块并在一页，是因为它们共用同一份体检数据（report）与同一套模型配置，
+ * 且"先跑自检 → 看到某条警告 → 想深入问"是最常见的动线。拆成多个顶层页签
+ * 就要各自维护一份 report 与配置状态，还得处理跳转时把上下文带过去。
  */
 
 // 页面状态放模块级：切换子模块不重建 DOM 时也能记住对话历史
@@ -41,15 +39,15 @@ const doctorState = {
 
   // ── 前缀缓存哨兵（自检页的量表 + 主动分析）──
   //
-  // 两件事分开：拉数据（免费，本地读盘）与让模型解读（花 token）。
-  // 按钮也分开，因为大多数人只想看数，不想为一次解读付钱。
+  // 拉数据（免费，本地读盘）与让模型解读（花 token）是两件事，按钮也分开：
+  // 大多数人只想看数，不想为一次解读付钱。
   sentinel: null,        // 最近一次快照 { at, rounds, statics, prefix, headline }
   sentinelText: '',      // 后端给的纯文本版（喂给模型的那一份）
   sentinelLoading: false,
   sentinelAnalyzing: false,
   sentinelVerdict: '',   // 模型解读结果（原文）
-  // 解析成 {problem, plan, benefit, cost, structured} —— 用户要判断的是
-  // "值不值得改"，四块并排摆比一整段自由文本好读得多。解析失败时
+  // 解析成 {problem, plan, benefit, cost, structured}，用户要判断的是
+  // "值不值得改"，四块并排摆比一整段自由文本好读。解析失败时
   // structured=false，UI 退回原文，不丢信息。
   sentinelVerdictParsed: null,
   sentinelError: '',
@@ -58,7 +56,7 @@ const doctorState = {
   //
   // 状态机：proposed(待闸①) → applied(已入暂存区) → verifying → verified(待闸②)
   //          → committed(已落地) / discarded / failed
-  // 界面上「闸①」与「闸②」是**两个独立的人工动作**，中间夹着协议闸与沙箱自验。
+  // 「闸①」与「闸②」是两个独立的人工动作，中间夹着协议闸与沙箱自验。
   fix: {
     available: null,      // null=未探测 true/false=插件是否启用
     enabled: false,       // fixEnabled 总开关
@@ -74,7 +72,7 @@ const doctorState = {
     error: '',
 
     // 新建修复
-    seed: null,           // { question, answer, target } —— 从对话审查带过来
+    seed: null,           // { question, answer, target }，从对话审查带过来
     question: '',         // 输入框即存，防重绘丢字
     answer: '',
     targetFile: '',
@@ -113,7 +111,7 @@ const doctorState = {
     imported: null,   // { zipName, files, skipped }
     adapting: false,
     adaptNote: '',    // 适配的补充说明（input 事件即存，防重绘丢字）
-    reviseNote: '',   // 「继续修改」的补充说明 —— 与 requirement 分开存，防止污染原始需求
+    reviseNote: '',   // 「继续修改」的补充说明，与 requirement 分开存，防止污染原始需求
     diff: null,       // 适配前后的差异
     gateBefore: null, // 修改/适配前的闸门结论（用来对照"修好了没"）
     revising: false   // 正在"继续修改"已有草稿（区别于从零起草；只影响等待文案）
@@ -137,8 +135,8 @@ const doctorState = {
 
   // ── 打包 / 接收（整包：扩展 + 数据）──
   //
-  // 数据落地由 migrate.js 的 applyImport 负责；这里负责收发一个 zip。
-  // 接收侧**不直接安装**扩展 —— 先登台（进锻造台暂存区 + 过闸），再由一次确认批量落地。
+  // 数据落地由 migrate.js 的 applyImport 负责，这里负责收发一个 zip。
+  // 接收侧不直接安装扩展：先登台（进锻造台暂存区 + 过闸），再由一次确认批量落地。
   bundle: {
     tab: 'export',        // 'export' | 'import'
     options: null,        // { modules, data, exportsDir }（只拉一次，点刷新才更新）
@@ -179,7 +177,7 @@ const doctorState = {
     busy: '',         // 正在执行的动作（'start:dev-1' 之类）
     note: '',         // 操作反馈（一句话）
     pollTimer: null,   // 当前那次轮询的定时器句柄
-    polling: false,    // 「有没有一个轮询在跑」——**单实例守卫用这个布尔量，不要用 pollTimer**
+    polling: false,    // 「有没有一个轮询在跑」，**单实例守卫用这个布尔量，不要用 pollTimer**
     pollInFlight: false, // 上一次 tick 还没跑完（防叠加）
     renderError: '',     // 最近一次页面渲染异常（只记录不杀链，侧栏横幅提示；空=正常）
     watchdogTimer: null, // 看门狗定时器句柄（轮询链停摆自愈，见 startOrdersWatchdog）
@@ -187,7 +185,7 @@ const doctorState = {
     lastRenderedSelected: null, // 上一次渲染时选中的会话（用来判断"是不是刚切换了会话"）
     selected: '',     // 当前选中的工单 id
     draft: '',        // 对话框输入（输入即存，防重绘丢字）
-    detail: null,     // { id, lines, nextFrom, hasMore } —— 对话视图的数据（nextFrom 是不透明字节游标）
+    detail: null,     // { id, lines, nextFrom, hasMore }，对话视图的数据（nextFrom 是不透明字节游标）
     detailError: '',
     expanded: new Set() // 展开的工具卡（键=行号；append-only 所以行号稳定）
   }
@@ -212,7 +210,7 @@ function doctorFmtTime(ts) {
 }
 
 /** 极简 Markdown → HTML：只处理换行、粗体、行内代码、无序列表。
- *  不引三方库：诊断回答是模型产出的**纯文本**，只想要可读，不需要富格式，
+ *  不引三方库：诊断回答是模型产出的纯文本，只要可读，不需要富格式，
  *  少一层依赖就少一处 CDN/离线失效点。所有文本都先 esc() 再替换，防注入。 */
 function doctorMiniMd(text) {
   const lines = esc(text).split(/\r?\n/);
@@ -243,8 +241,8 @@ function doctorInline(s) {
 // ── 体检单渲染 ────────────────────────────────────────────────────────────
 
 /**
- * 体检单 issue 标题的人话映射（2026-10-23 萌新化）。
- * 后端标题形如「扩展清单损坏：xxx」（固定前缀 + 动态名字），所以按**前缀**匹配；
+ * 体检单 issue 标题的人话映射。
+ * 后端标题形如「扩展清单损坏：xxx」（固定前缀 + 动态名字），所以按前缀匹配；
  * 命中 → 显示「人话（原标题）」，未命中 → 原标题原样。
  * key 与 src/harness/doctor/index.js 里 issue() 的标题前缀一一对应。
  */
@@ -302,8 +300,8 @@ function renderDoctorReport(report) {
 
   const issues = Array.isArray(report.issues) ? report.issues : [];
   // acked：用户自查后确认无妨、显式忽略的条目（后端 acked.json，跨重启生效）。
-  // 它们不计入 counts/警告位，但要在界面上留痕 —— 否则用户会以为"消失了"，
-  // 也想不起来恢复（2026-10-23：忽略机制缺失导致误报恒在）。
+  // 它们不计入 counts/警告位，但要在界面上留痕，否则用户会以为"消失了"，
+  // 也想不起来恢复。
   const acked = Array.isArray(report.acked) ? report.acked : [];
   let issuesHtml;
   if (!issues.length) {
@@ -314,8 +312,7 @@ function renderDoctorReport(report) {
     const sorted = issues.slice().sort((a, b) => (order[a.severity] ?? 3) - (order[b.severity] ?? 3));
     issuesHtml = sorted.map((i) => {
       const s = DOCTOR_SEV[i.severity] || DOCTOR_SEV.info;
-      // 萌新化（2026-10-23）：标题命中术语表 → 「人话（原标题）」；原文标题缩进
-      // 括号弱化，不再满屏开发者术语。
+      // 标题命中术语表 → 「人话（原标题）」，原文标题缩进括号弱化，不再满屏开发者术语。
       const plain = doctorPlainTitle(i.title);
       const titleHtml = plain ? `${esc(plain)}（${esc(i.title)}）` : esc(i.title);
       // detail/hint 是给开发者看的原文（skill.json / BOM / registerTool 之类），
@@ -351,14 +348,11 @@ function renderDoctorReport(report) {
     ? `<div class="doctor-errs">⚠️ 检查过程本身出错：${esc(report.errors.join('；'))}</div>`
     : '';
 
-  /* ── 忽略清单（doctor.ack，2026-10-24 补回）─────────────────────────────
+  /* ── 忽略清单（doctor.ack）──
      后端 applyAckToReport 把被忽略的条目从 issues 挪进 report.acked，并按可见项
-     重算 counts / verdict —— 所以"已忽略"必须单独渲染一块：否则用户忽略过的条目
+     重算 counts / verdict，所以"已忽略"必须单独渲染一块：否则用户忽略过的条目
      既不在问题列表里、也没有任何地方能看见和恢复，"忽略"就成了一个黑洞。
-     ⚠️（2026-10-24）这两个变量曾被合并 0.4.9 的补丁连带声明一起删掉，只剩模板里的
-        两处引用 → 一进自检页就 ReferenceError: ackMsgHtml is not defined，
-        整页体检单都渲染不出来。按上游 0.4.9 原版补回（条目取 report.acked，
-        key 用 `${area}|${id}`，与 ackIssue / 后端 ackKeyOf 一致）。 */
+     条目取 report.acked，key 用 `${area}|${id}`，与 ackIssue / 后端 ackKeyOf 一致。 */
   const ackedHtml = acked.length ? `
     <div class="doctor-acked">
       <div class="doctor-acked-head">已忽略 <b>${acked.length}</b> 项 —— 你自查后确认无妨，不再计入警告：</div>
@@ -371,7 +365,7 @@ function renderDoctorReport(report) {
       <button class="doctor-acked-restore-all" type="button" data-ack-restore-all="1">全部恢复</button>
     </div>` : '';
 
-  // 忽略/恢复操作的局部反馈（失败时）—— 不用 doctorState.error，那会炸掉整页
+  // 忽略/恢复操作的局部反馈（失败时），不用 doctorState.error，那会炸掉整页
   const ackMsgHtml = doctorState.ackMsg
     ? `<div class="doctor-ack-msg">⚠️ ${esc(doctorState.ackMsg)}</div>` : '';
 
@@ -397,15 +391,12 @@ function renderDoctorReport(report) {
     ${ucHtml}
     ${errHtml}
     <!-- 「复制诊断信息」：监听器一直挂在下面（#doctor-copy-btn），但按钮本体曾被
-         合并 0.4.9 的补丁连同 doctorReportText 一起删掉 —— 结果这个功能在界面上
+         合并 0.4.9 的补丁连同 doctorReportText 一起删掉，结果这个功能在界面上
          凭空消失，只剩一段永远点不到的监听器。按钮与函数一起补回。 -->
     <div style="margin-top:12px"><button class="btn btn-small" id="doctor-copy-btn">📋 复制诊断信息</button></div>`;
 }
 
-/** 把当前体检单拼成纯文本 —— 「复制诊断信息」按钮用它，小白拿去问人时贴一份就够。
- *  ⚠️（2026-10-24 修）这个函数曾被合并 0.4.9 的补丁整块删掉，而按钮的监听器
- *    还在调它 → 点「复制诊断信息」必抛 ReferenceError（连复制都没发生）。
- *    补回来：依赖的 doctorFmtTime / doctorVerdictMeta 都还在。 */
+/** 把当前体检单拼成纯文本，供「复制诊断信息」按钮使用，小白拿去问人时贴一份就够。 */
 function doctorReportText(report) {
   if (!report) return '（还没有体检数据，点「重新扫描」跑一次）';
   const c = report.counts || {};
@@ -551,7 +542,7 @@ function renderDoctorProject() {
 
 /**
  * "模型逐个审"控制条 + 审阅结果汇总。
- * 只在有 warning 及以上候选时才出现 —— info 级（console.log/TODO）不值得花 token。
+ * 只在有 warning 及以上候选时才出现，info 级（console.log/TODO）不值得花 token。
  */
 function renderTriageBar(rules) {
   const p = doctorState.project || {};
@@ -582,7 +573,7 @@ function renderTriageBar(rules) {
         点这里让<b>模型读真实源码逐条判真伪</b>（要花 token，只审警告及以上）。
       </span>
       <!-- ⚠️ id=doctor-triage-btn 在本函数里出现两次（此处 / 下面"再审一次"）。
-           两者在**互斥分支**里，同一时刻只会有一个在 DOM 中，所以安全 ——
+           两者在**互斥分支**里，同一时刻只会有一个在 DOM 中，所以安全，
            bindProjectEvents() 用 $('#doctor-triage-btn') 取，取到的就是当前那个。
            将来若再加分支，别让两个同时渲染：同 id 的元素 $() 只会命中第一个，
            第二个会变成点不动的死按钮（且没有任何报错）。 -->
@@ -634,12 +625,12 @@ function renderDoctorTurns() {
     if (t.role === 'user') {
       return `<div class="doctor-turn is-user"><div class="doctor-bubble">${esc(t.text)}</div></div>`;
     }
-    // 取证轨迹：模型自己读了哪些文件/日志。放在气泡**上面**（先取证后结论，
-    // 与真实发生顺序一致），默认折叠 —— 不折叠的话长轨迹会淹没真正的答案。
+    // 取证轨迹：模型自己读了哪些文件/日志。放在气泡上面（先取证后结论，
+    // 与真实发生顺序一致），默认折叠，否则长轨迹会淹没答案。
     const traceHtml = renderDoctorTrace(t.trace);
     const meta = t.model ? `<div class="doctor-turn-meta">${esc(t.model)}</div>` : '';
     // 「生成修复提案」：把这条结论直接交给「自动修复」模块（诊断 → 提案 的自然动线）。
-    // 只对"已出结论"的回答显示（pending 占位气泡、以及空回答不给按钮）。
+    // 只对已出结论的回答显示（pending 占位气泡、空回答不给按钮）。
     const canFix = !t.pending && String(t.text || '').trim().length > 0;
     const fixBtn = canFix
       ? `<div class="doctor-turn-actions"><button class="btn btn-small" data-fix-from="${i}">🛠 生成修复提案</button></div>`
@@ -707,11 +698,10 @@ function switchDoctorSub(id) {
   renderDoctorPage();
   // 切到对话审查时把光标放进输入框（最常见的下一步动作就是打字）
   if (id === 'chat') $('#doctor-q')?.focus();
-  // 切到自创扩展时要拉一次状态（那是另一个插件的，不能靠体检单的数据）
-  // ⚠️ 2026-10-22 修：原来只在 available === null（从没探测过）时才拉 —— 于是
-  //    "第一次进来"之后每次进来都停在旧快照上。从市场装完跳过来、或手动切过来看
-  //    新下载的包，列表里根本没有它（用户报"看不到新拓展"就是这个）。
-  //    草稿列表是易变数据，每次进子页都重拉；/api/forge 很轻。
+  // 切到自创扩展时要拉一次状态（那是另一个插件的数据）。
+  // 草稿列表是易变数据，每次进子页都重拉：只在 available === null 时拉的话，
+  // "第一次进来"之后每次进来都停在旧快照上，从市场装完跳过来也看不到新包。
+  // /api/forge 很轻。
   if (id === 'forge') {
     refreshForgeStatusInBackground();
   }
@@ -724,18 +714,18 @@ function switchDoctorSub(id) {
     refreshInBackground(loadFixList, 'fix', '修复工单列表');
   }
   // 切到打包/接收：拉一次可打包项（扩展清单 + 各类数据体积）。
-  // 只在没拉过时拉 —— 体积统计要遍历目录，不是每次切页都值得付这个开销。
+  // 只在没拉过时拉，体积统计要遍历目录，不是每次切页都值得付这个开销。
   if (id === 'bundle') {
     if (!doctorState.bundle.options && !doctorState.bundle.loading) {
       refreshInBackground(loadBundleOptions, 'bundle', '可打包项');
     }
-    // 备份列表很轻（一次 readdir + 读几个 manifest），每次进页都刷新 ——
+    // 备份列表很轻（一次 readdir + 读几个 manifest），每次进页都刷新，
     // 刚导入完就切走再回来，列表必须包含刚才那一次，否则用户以为没备份。
     refreshInBackground(loadBundleBackups, 'bundle', '导入备份');
   }
-  // 切到开发工单：拉一次快照并**开始轮询**（轮询自持，离开子页自己停）。
-  // ⚠️（搬运自上游 0.4.7）原实现只在这里做"首次"加载、且轮询只由"从页面发消息"启动 ——
-  //    于是「从 QQ 发起」「刷新页面后再进来」这些路径下页面停在旧数据上不动（用户报"不实时"）。
+  // 切到开发工单：拉一次快照并开始轮询（轮询自持，离开子页自己停）。
+  // 只在进入时做"首次"加载、轮询又只由"从页面发消息"启动的话，
+  // 「从 QQ 发起」「刷新页面后再进来」这些路径下页面会停在旧数据上不动。
   if (id === 'orders') {
     refreshInBackground(loadDevOrdersSnapshot, 'orders', '开发工单');
     startDevPolling();
@@ -748,18 +738,14 @@ function switchDoctorSub(id) {
 /**
  * 后台拉一次锻造台状态并重绘。
  *
- * 为什么单独抽一个函数，而不是就地 `loadForgeStatus().then(...)`：
- *   ① `loadForgeStatus` 自身有 try/catch，但它**不覆盖** `.then` 回调里的
- *      `renderDoctorPage()` —— 渲染若抛错就会变成未捕获的 Promise 拒绝
- *      （静态扫描抓到过这一处：`.then() 没有配对的 .catch()`）。
- *      界面还会**静默失败**：用户看到的是一片没更新的旧内容，控制台里才有线索。
- *   ② 这段"只在还停在 forge 时才重绘"的判断原本在两个调用点各写了一遍 ——
- *      分开写迟早会有一处忘了加守卫。抽成一个函数就没这个问题。
+ * loadForgeStatus 自身有 try/catch，但不覆盖 `.then` 回调里的 renderDoctorPage()，
+ * 渲染抛错就会变成未捕获的 Promise 拒绝，界面还会静默停在旧内容。
+ * 另外"只在还停在 forge 时才重绘"的判断原本在两个调用点各写一遍，抽出来免得漏。
  */
 async function refreshForgeStatusInBackground() {
   try {
     await loadForgeStatus();
-    // 异步回来时用户可能已经切走了 —— 只在还停在 forge 时才重绘
+    // 异步回来时用户可能已经切走了，只在还停在 forge 时才重绘
     if (doctorState.sub === 'forge') renderDoctorPage();
   } catch (e) {
     // 这是次要数据：拉不到就保持"未探测"状态，不值得把异常抛到 window
@@ -768,19 +754,13 @@ async function refreshForgeStatusInBackground() {
 }
 
 /**
- * 后台拉数据 + 重绘，**全链路兜底**（2026-10-07 补）。
+ * 后台拉数据 + 重绘，全链路兜底。
  *
- * 背景：全文件有 9 处 `loadXxx().then(() => renderDoctorPage())` 没有配对的 .catch()。
- * 这个模式的危险在于：**`loadXxx` 自己有 try/catch，但它不覆盖 `.then` 回调**。
- * 于是抛错点其实是回调里的 `renderDoctorPage()` —— 那才是没人接的部分，
- * 会变成 unhandledRejection。而且失败是**静默**的：用户看到的是一片没更新的
- * 旧内容，控制台里才有线索（harness 页尤其明显，它整体就是靠 render 刷新的）。
+ * 本文件有 9 处 `loadXxx().then(() => renderDoctorPage())` 没有配对 .catch()。
+ * loadXxx 自己有 try/catch，但不覆盖 `.then` 回调，抛错点其实是回调里的
+ * renderDoctorPage()，会变成 unhandledRejection，且失败是静默的：用户看到一片
+ * 没更新的旧内容。逐处补 .catch() 是 9 处重复，将来新增子页签还会再犯，所以抽成函数。
  *
- * 为什么不用 `loadXxx().then(...).catch(...)` 逐处补：
- *   那是9 处重复，且将来新增子页签还会再犯（这是本文件已经犯过一次的错，
- *   见上面 refreshForgeStatusInBackground 的注释）。抽成函数就没这个问题。
- *
- * 用法：refreshInBackground(loadXxx, '子页签id')   —— 子页签id 用于"还在这一页才重绘"
  * @param {() => Promise<any>} loader
  * @param {string} [sub] 传了则只在仍停留该子页时重绘（异步回来时用户可能已切走）
  * @param {string} [label] 日志里用的名字
@@ -788,17 +768,17 @@ async function refreshForgeStatusInBackground() {
 async function refreshInBackground(loader, sub = '', label = '') {
   try {
     await loader();
-    // 异步回来时用户可能已经切走 —— 只在还停在原页面时才重绘（详见上面注释②）
+    // 异步回来时用户可能已经切走，只在还停在原页面时才重绘（详见上面注释②）
     if (!sub || doctorState.sub === sub) renderDoctorPage();
   } catch (e) {
     // 这些都是次要数据：拉不到就保持原状态，不值得把异常抛到 window。
-    // 但必须打日志 —— 否则界面"没更新"这件事完全无从追查。
+    // 但必须打日志，否则界面"没更新"这件事完全无从追查。
     console.warn(`[harness] ${label || '数据'}刷新失败：`, e?.message || e);
   }
 }
 
 /**
- * 在 harness 各模块的"插件未启用"占位里，提供一个当场启用的按钮（r107）。
+ * 在 harness 各模块的"插件未启用"占位里，提供一个当场启用的按钮。
  *
  * 用法：
  *   $('#xxx-enable-btn')?.addEventListener('click', () =>
@@ -809,17 +789,14 @@ async function refreshInBackground(loader, sub = '', label = '') {
  *     })
  *   );
  *
- * 为什么不在 settings 里做完所有事，非要 harness 再造一遍开关：
- *   harness 里这几个插件恰好都是"为了用某个具体能力才会去开"，绝大多数用户
- *   都是"进了这页才发现没开" → 当场一键开是最自然的动线。
- *   去了设置再开回来要切两个顶 tab、还要记着是哪个 id，体验差。
- *   settings 那边仍然是**唯一**的可视管理入口（这里只是快捷方式），所有启停
- *   都走同一条 `POST /api/skills/<id> { enabled }` 通道，状态保持一致。
+ * harness 里这几个插件都是"为了用某个具体能力才会去开"，绝大多数用户
+ * 进了这页才发现没开，当场一键开是最自然的动线。settings 那边仍是唯一的
+ * 可视管理入口，这里只是快捷方式，启停都走同一条 `POST /api/skills/<id>` 通道。
  *
  * 错误处理：
  *   - 插件未安装 → 后端 404，api() 抛 Error，弹 qaAlert 提示去市场安装
  *   - 后端瞬时失败 → 按钮文字恢复原状（orig），用户可重试
- *   - 后端 enable 后 activate 回调可能异步完成 —— 交由调用方的 afterEnable 重探
+ *   - 后端 enable 后 activate 回调可能异步完成，交由调用方的 afterEnable 重探
  */
 async function enablePluginInline(pluginId, btn, afterEnable) {
   if (!btn) return;
@@ -856,13 +833,12 @@ function renderDoctorPage() {
 
   const sub = DOCTOR_SUBS.find((s) => s.id === doctorState.sub) || DOCTOR_SUBS[0];
 
-  // ⚠️ 页面外壳（标题 + 子页签）**必须无条件渲染**。
+  // 页面外壳（标题 + 子页签）必须无条件渲染。
   //
-  // harness 现在是**多插件工作台**：自检系统 / 对话审查 靠 self-doctor，
-  // 自创扩展 靠 extension-forge。曾经这里在"self-doctor 未启用"时提前 return，
-  // 整页只剩一句"插件未启用"、子页签全没了 —— 后果是**关掉 self-doctor 就连
-  // 自创扩展也进不去**，哪怕它好好开着。一个模块的依赖不该锁死另一个模块。
-  // 现在改成：外壳always 渲染，每个模块自己处理"我的依赖没开"。
+  // harness 是多插件工作台：自检系统 / 对话审查 靠 self-doctor，自创扩展
+  // 靠 extension-forge。曾经在"self-doctor 未启用"时提前 return，整页只剩
+  // 一句"插件未启用"、子页签全没了，结果是关掉 self-doctor 就连自创扩展也进不去。
+  // 现在每个模块自己处理"我的依赖没开"。
   box.innerHTML = `
     <div class="usage-wrap${doctorState.sub === 'fix' ? ' is-fix' : ''}">
       <div class="usage-head">
@@ -890,8 +866,7 @@ function renderDoctorPage() {
   // ── 公共事件 ──
   $('#doctor-rescan-btn')?.addEventListener('click', () => loadHarnessPage({ force: true }));
   $('#doctor-model-btn')?.addEventListener('click', () => openDoctorModelDialog());
-  // 「复制诊断信息」（2026-10-23 萌新化）：把当前体检单拼成纯文本，
-  // 小白拿去问人 / 反馈时贴这一份就够了。写法照 03-connection.js 的复制按钮。
+  // 「复制诊断信息」：把当前体检单拼成纯文本，小白拿去问人 / 反馈时贴这一份就够。
   $('#doctor-copy-btn')?.addEventListener('click', async () => {
     const btn = $('#doctor-copy-btn');
     if (!btn) return;
@@ -915,7 +890,7 @@ function renderDoctorPage() {
     ]);
     renderDoctorPage();
   });
-  // r107：当场启用按钮（互斥于 doctor-retry-btn，同一时刻只渲染一个，见 renderDoctorSubBody）
+  // 当场启用按钮（与 doctor-retry-btn 互斥，同一时刻只渲染一个，见 renderDoctorSubBody）
   $('#doctor-enable-btn')?.addEventListener('click', () => enablePluginInline('self-doctor', $('#doctor-enable-btn'), async () => {
     // 启用了 self-doctor 之后重探一次（覆盖自检系统 + 对话审查两个模块的依赖）
     doctorState.available = null;
@@ -930,13 +905,11 @@ function renderDoctorPage() {
     el.addEventListener('click', () => switchDoctorSub(el.dataset.sub));
   });
 
-  /* ── 忽略 / 恢复体检单条目（2026-10-24 补回）─────────────────────────────
+  /* ── 忽略 / 恢复体检单条目 ──
      后端：POST /api/doctor/ack {action, items} → {ok, acked}；
      落盘 data/plugin-data/self-doctor/acked.json（重启后仍生效）。
-     ⚠️ 逐个绑、不挂委托到 box：box 本身不重建（每次渲染只换 innerHTML），
-        委托监听会跨渲染叠加，一次忽略能触发 N 次请求。
-     ⚠️ 这三颗按钮与被删的 ackMsgHtml / ackedHtml 是同一处合并损失 —— 少了它们，
-        ackIssue() 是个没人调的函数，用户在体检单上找不到任何"我知道了"的入口。 */
+     逐个绑、不挂委托到 box：box 本身不重建（每次渲染只换 innerHTML），
+     委托监听会跨渲染叠加，一次忽略能触发 N 次请求。 */
   $$('[data-ack-ignore]', box).forEach((el) => {
     el.addEventListener('click', () => ackIssue(el.getAttribute('data-ack-ignore') || ''));
   });
@@ -958,17 +931,14 @@ function renderDoctorPage() {
 /**
  * 按当前子模块渲染内容区。
  *
- * **每个模块自己处理"我的依赖插件没开"** —— 这是 harness 变成多插件工作台之后
- * 必须守住的一条：外壳统一渲染，模块各自负责自己的可用性，
- * 免得"某个插件关掉"把整页（包括不依赖它的模块）一起锁死。
+ * 每个模块自己处理"我的依赖插件没开"：外壳统一渲染，模块各自负责可用性，
+ * 免得某个插件关掉把整页（包括不依赖它的模块）一起锁死。
  */
 function renderDoctorSubBody() {
   // 自检系统 与 对话审查 都依赖 self-doctor。
-  // ⚠️ 「orders（开发工单）」和「forge / upgrade / bundle / fix」一样，**自己有独立依赖**
-  //    （dev-orders），必须排除在这个分支之外 —— 曾经漏掉 'orders'，于是 sub==='orders'
-  //    时落到这里、再走进 `sub === 'chat' ? … : renderCheckupModule()` 的 else 分支，
-  //    把**自检系统的画面**渲染进了开发工单页（用户反馈的"开发工单里出现系统自检画面"）。
-  //    新增依赖独立插件的子模块时，务必同步把它的 id 加进这个排除列表。
+  // 「orders」和「forge / upgrade / bundle / fix」一样有独立依赖（dev-orders），
+  // 必须排除在这个分支之外：漏掉 'orders' 时它会落到下面的 else 分支，
+  // 把自检系统的画面渲染进开发工单页。新增依赖独立插件的子模块时，记得加进这个列表。
   const SELF_DOCTOR_SUBS = ['checkup', 'chat'];
   if (SELF_DOCTOR_SUBS.includes(doctorState.sub)) {
     if (doctorState.available === false) return renderSelfDoctorOff();
@@ -991,7 +961,7 @@ function renderSelfDoctorOff() {
     <div style="display:flex;gap:8px;margin-top:12px">
       <!-- r107：harness 各模块的"插件未启用"占位里加一个当场启用的按钮，避免
            用户跑去设置里找半天再切回来。doctor-enable-btn 与 doctor-retry-btn
-           互斥 —— 见 renderDoctorSubBody 的分发顺序（同一时刻只渲染这一组）。 -->
+           互斥，见 renderDoctorSubBody 的分发顺序（同一时刻只渲染这一组）。 -->
       <button class="btn btn-small btn-primary" id="doctor-enable-btn">立即启用 self-doctor</button>
       <button class="btn btn-small" id="doctor-retry-btn">已启用，重新检测</button>
     </div>`;
@@ -1003,7 +973,7 @@ function renderSelfDoctorError() {
     <button class="btn btn-small" id="doctor-retry-btn" style="margin-top:12px">重试</button>`;
 }
 
-/** 子模块一：自检系统 —— 体检单 + 全项目扫描（+ 模型逐个审的进度条）。 */
+/** 子模块一：自检系统，体检单 + 全项目扫描（+ 模型逐个审的进度条）。 */
 function renderCheckupModule() {
   return `
     <div class="doctor-report">${renderDoctorReport(doctorState.report)}</div>
@@ -1013,13 +983,13 @@ function renderCheckupModule() {
 
 // ── 前缀缓存哨兵 ──────────────────────────────────────────────────────────
 //
-// 为什么量表要放在这一页：命中率是"系统健康"里唯一**每天在变、且直接等于钱**
-// 的指标。放在插件页的深层报告里没人看，放在自检第一屏才会被看见。
+// 量表放在这一页：命中率是"系统健康"里唯一每天在变、且直接等于钱的指标。
+// 放在插件页的深层报告里没人看，放在自检第一屏才会被看见。
 //
 // 两条动线刻意分开：
-//   · 「刷新量表」—— 只读盘，免费，随时点
-//   · 「哨兵分析」—— 把量表 + 静态体检交给模型解读，花 token
-// 合成一个按钮会让人因为"怕花钱"而不看数据，那是本末倒置。
+//   · 「刷新量表」只读盘，免费，随时点
+//   · 「哨兵分析」把量表 + 静态体检交给模型解读，花 token
+// 合成一个按钮会让人因为"怕花钱"而不看数据。
 
 function sentinelBar(row, maxPrompt) {
   const wHit = Math.max(0, Math.min(100, (row.cached / maxPrompt) * 100));
@@ -1046,16 +1016,16 @@ function sentinelBar(row, maxPrompt) {
 // ── 击穿归因（"谁干的"）────────────────────────────────────────────────
 //
 // 算法在 src/harness/doctor/cache-attribution.js，两个互补的数据源：
-//   · 会话间 diff —— 相邻两轮存档的 systemPrompt 按「▸ 标题」切段比 hash，
+//   · 会话间 diff，相邻两轮存档的 systemPrompt 按「▸ 标题」切段比 hash，
 //     第一个变了的段就是断点（字节级，带改前/改后原文）；
-//   · cache-guard 漂移记录 —— 按调用指纹抓会话**内部**翻字（段名级）。
+//   · cache-guard 漂移记录，按调用指纹抓会话**内部**翻字（段名级）。
 //     本机两次「表情包」翻字两种都记到了（判重后保留字节级那份）；会话内
 //     翻字又翻回的情况相邻存档一模一样，只有漂移记录看得到。
 //
 // 这里只负责把结论说清楚。三条线各有各的位置：
-//   · 量表      —— 掉了多少（每轮命中/未命中）
-//   · 归因      —— 谁干的（哪一段、属于哪个模块、断点在哪、换了什么字）
-//   · 静态体检  —— 还有谁可能会干（会变的段但没标 volatile）
+//   · 量表，掉了多少（每轮命中/未命中）
+//   · 归因，谁干的（哪一段、属于哪个模块、断点在哪、换了什么字）
+//   · 静态体检，还有谁可能会干（会变的段但没标 volatile）
 function renderAttributionTail(a) {
   const t = a.tail || {};
   if (!t.rounds) return '';
@@ -1065,7 +1035,7 @@ function renderAttributionTail(a) {
     <div class="sentinel-note">工具集变化不在本归因范围内 —— tools 段不进 session 存档，需看 <code>[req-fp]</code> 与 <code>tools-watch</code> 日志。</div>`;
 }
 
-// 模块清单："哪个模块带来了什么" —— 最新存档里每一段的归属、体量、稳定性。
+// 模块清单："哪个模块带来了什么"，最新存档里每一段的归属、体量、稳定性。
 // 与上面的 break 时间线互补：时间线说"哪次击穿是谁"，清单说"每个模块
 // 长期占着多大一块、稳不稳"。
 function renderModuleInventory(a) {
@@ -1114,8 +1084,8 @@ function renderAttribution() {
   const rows = a.breaks.slice(-6).reverse().map((b) => {
     const t = b.at ? new Date(b.at).toLocaleTimeString('zh-CN', { hour12: false }).slice(0, 5) : '--:--';
     const who = b.module ? esc(b.module) : `未识别来源`;
-    // "断点 4513/5507" 比 "断点 82%" 更符合"详细到断点"的诉求；
-    // 后面的损失率才是后果 —— 两者别混：断点说的是位置，损失率说的是代价。
+    // "断点 4513/5507" 比 "断点 82%" 更符合"详细到断点"的诉求，
+    // 后面的损失率才是后果：断点说的是位置，损失率说的是代价。
     const lossPct = b.prompt ? Math.round((b.miss / b.prompt) * 100) : 0;
     // 改前/改后原文：字节级那半来自会话间 diff；drift 事件只有段名，
     // 原文取翻字前后的最近存档（来源徽标已经标明精度，不混为一谈）。
@@ -1158,11 +1128,10 @@ function renderAttribution() {
 /**
  * 渲染模型解读。
  *
- * 四块并排的理由：用户真正要判断的是"值不值得改"，那需要一个**成本收益对照**。
- * 自由文本会把四件事揉成一段，读者得自己在脑子里拆；拆开摆好，
- * 收益和代价左右对齐，判断成本直接降一半。
+ * 四块并排是因为用户真正要判断的是"值不值得改"，那需要成本收益对照。
+ * 自由文本会把四件事揉成一段，读者得自己拆；拆开摆好，收益和代价左右对齐。
  *
- * 收益/代价即使模型没写也要占位显示"（模型未给出）" —— 缺失本身就是信息：
+ * 收益/代价即使模型没写也要占位显示"（模型未给出）"：缺失本身就是信息，
  * 说明这次分析没考虑代价，不该就这么动手。
  */
 function renderVerdict() {
@@ -1197,7 +1166,7 @@ function renderVerdict() {
 function renderCacheSentinel() {
   const s = doctorState.sentinel;
   const busy = doctorState.sentinelLoading || doctorState.sentinelAnalyzing;
-  // 「送去修复」只在**分析真的产出了结论**之后可用 —— 这条动线的前提是
+  // 「送去修复」只在分析真的产出了结论之后可用：这条动线的前提是
   // "有诊断结论可作修复依据"，光有量表没有结论，模型只能瞎猜。
   // 失败提示（⚠️ 开头）不算结论，别让它带着一句报错去写代码。
   const verdictReady = !!doctorState.sentinelVerdict
@@ -1227,7 +1196,7 @@ function renderCacheSentinel() {
   const lvl = s.headline?.level || 'unknown';
   const levelText = { good: '健康', warn: '偏低', bad: '异常', unknown: '未知' }[lvl] || '未知';
 
-  // 未命中按 token 只占几个百分点，但按价常占一半以上的输入成本 ——
+  // 未命中按 token 只占几个百分点，但按价常占一半以上的输入成本，
   // 这两个数必须同时出现，否则用户会以为"未命中很少，不用管"。
   const suspect = (s.statics?.sections || []).filter((x) => x.verdict === 'suspect');
   const suspectHtml = suspect.length
@@ -1296,8 +1265,8 @@ async function runSentinel() {
 /**
  * 把量表交给模型解读。
  *
- * ⚠️ 提问方式很重要：直接把原始数据丢过去，模型会复述数据；
- *    要它"只回答判断"，输出才会短而有用（也省钱）。
+ * 提问方式很重要：直接把原始数据丢过去，模型会复述数据；
+ * 要它"只回答判断"，输出才会短而有用（也省钱）。
  */
 async function analyzeSentinel() {
   if (doctorState.sentinelAnalyzing) return;
@@ -1306,10 +1275,10 @@ async function analyzeSentinel() {
   doctorState.sentinelAnalyzing = true;
   doctorState.sentinelVerdict = '';
   repaintSentinel();
-  // ⚠️ 快照走 context 字段，不塞进 question。
-  //    question 有 2000 字上限（那是给"人手打字提问"设的防呆），而整份快照
-  //    两三千字起步，塞进去会被后端直接打回 ——「哨兵分析」点了没反应就是这么来的。
-  //    现在数据在前、指令在后，模型对末尾指令更敏感。
+  // 快照走 context 字段，不塞进 question：
+  // question 有 2000 字上限（给"人手打字提问"设的防呆），而整份快照
+  // 两三千字起步，塞进去会被后端直接打回，表现就是点了没反应。
+  // 数据在前、指令在后，模型对末尾指令更敏感。
   const question = [
     '上面是刚采集的前缀缓存哨兵数据（最近几轮的命中/未命中/输出、跨轮击穿归因、静态前缀体检、模块清单）。',
     '',
@@ -1328,9 +1297,9 @@ async function analyzeSentinel() {
     '每个小标题下不超过 80 字。宁可短，不要凑字数。'
   ].join('\n');
 
-  // 上下文超过后端限额（12000）时**保头保尾**地截断：头部是总量与趋势、
+  // 上下文超过后端限额（12000）时保头保尾地截断：头部是总量与趋势、
   // 尾部是归因与边界说明，中间那段逐轮明细信息密度最低。
-  // 直接 slice(0, N) 会把归因砍掉 —— 那正是模型最需要的那段。
+  // 直接 slice(0, N) 会把归因砍掉，那正是模型最需要的那段。
   let contextText = String(doctorState.sentinelText || '');
   if (contextText.length > 11000) {
     const cut = contextText.length - 11000;
@@ -1346,7 +1315,7 @@ async function analyzeSentinel() {
     doctorState.sentinelVerdict = d.ok && d.answer
       ? String(d.answer)
       : `⚠️ ${d.error || '没有得到回答'}`;
-    // 解析成四段（问题 / 方案 / 收益 / 代价）。解析失败不报错 ——
+    // 解析成四段（问题 / 方案 / 收益 / 代价）。解析失败不报错，
     // UI 会退回整段展示，送去修复时也退回用归因生成的描述。
     doctorState.sentinelVerdictParsed = parseVerdict(doctorState.sentinelVerdict);
   } catch (e) {
@@ -1360,13 +1329,12 @@ async function analyzeSentinel() {
 
 // ── 解读结果的结构化解析 ─────────────────────────────────────────────────
 //
-// 为什么要解析而不是直接显示整段：用户要判断的是"值不值得改"，
-// 而模型的自由文本会把"问题/方案/收益/代价"揉成一段，读者得自己拆。
-// 拆成四块并排摆，收益与代价**左右对照**，判断成本立刻降下来。
+// 解析而不是直接显示整段：模型的自由文本会把"问题/方案/收益/代价"揉成一段，
+// 拆成四块并排摆，收益与代价左右对照，判断成本更低。
 //
 // 容错优先于精确：模型可能用【问题】、## 问题、**问题**、问题：四种写法，
-// 都会认；一段都认不出来就返回 structured=false，交给 UI 退回原文展示 ——
-// 绝不能因为格式没守就把结论整段丢掉。
+// 都会认；一段都认不出来就返回 structured=false，交给 UI 退回原文展示，
+// 不能因为格式没守就把结论整段丢掉。
 const VERDICT_LABELS = {
   问题: 'problem', 问题是什么: 'problem', 症结: 'problem',
   方案: 'plan', 要做什么: 'plan', 改动: 'plan', 修复方案: 'plan',
@@ -1412,14 +1380,13 @@ function bindSentinelEvents() {
 /**
  * 把哨兵的诊断结论送进「自动修复」。
  *
- * 带上三样东西，缺一不可：
- *   · 问题   —— 从归因结果**结构化生成**，不是把界面文字抄一遍
- *               （模型需要"哪个模块、哪一段、断点在哪"才能直接定位）
- *   · 结论   —— 刚才模型的解读原文，作为修复依据
- *   · 来源   —— seed.source 标 'sentinel'，修复页的来源行才不会写成
- *               "对话审查的提问"（照抄旧文案会让人找不到这次是从哪来的）
+ * 带上三样东西：
+ *   · 问题  从归因结果结构化生成，不是把界面文字抄一遍
+ *           （模型需要"哪个模块、哪一段、断点在哪"才能直接定位）
+ *   · 结论  刚才模型的解读原文，作为修复依据
+ *   · 来源  seed.source 标 'sentinel'，修复页的来源行才不会写成"对话审查的提问"
  *
- * 只填空、只跳转，**不自动生成提案** —— 生成提案要花一次模型调用，
+ * 只填空、只跳转，不自动生成提案：生成提案要花一次模型调用，
  * 该由用户在修复页看清楚问题描述后再点。
  */
 function sendSentinelToFix() {
@@ -1432,8 +1399,8 @@ function sendSentinelToFix() {
   let answer;
   if (p?.structured) {
     // 结构化回答优先：模型的"问题"更贴近根因，"方案"是它自己给的动手方向。
-    // 但量化数字仍要补进去 —— 模型常只说"反复翻字"，不说"断在第几字节、
-    // 花了多少 token"，而后者才是修复时判断改动是否值得的依据。
+    // 但量化数字仍要补进去：模型常只说"反复翻字"，不说"断在第几字节、
+    // 花了多少 token"，而后者才是判断改动是否值得的依据。
     question = digest ? `${p.problem}\n\n（量化：${digest}）` : p.problem;
     answer = [
       `方案：${p.plan || '（模型未给出具体方案）'}`,
@@ -1502,14 +1469,13 @@ function buildSentinelFixQuestion(sentinel) {
 
 /**
  * 全项目扫描区（标题 + 本区专属按钮 + 结果）。
- * ⚠️ 凡是"只重画项目区"的地方都必须用这个函数，不能用
- *    `<div class="doctor-chat-head">全项目扫描</div>${renderDoctorProject()}` 硬拼 ——
- *    那样会把模块操作条（扫描项目 / 让模型自检两个按钮）一起冲掉，
- *    按钮消失且事件绑定丢失。抽成一个函数就是要让这两处不可能分叉。
+ * 凡是"只重画项目区"的地方都必须用这个函数，不能硬拼标题 + renderDoctorProject()，
+ * 那样会把模块操作条（扫描项目 / 让模型自检两个按钮）一起冲掉，
+ * 按钮消失且事件绑定丢失。
  */
 function renderProjectSection() {
-  // 「扫描项目 / 让模型自检」是本模块专属的操作，不放在顶部公共区 ——
-  // 顶部只留"模型设置 / 重新扫描"这类两个模块共用的。
+  // 「扫描项目 / 让模型自检」是本模块专属的操作，不放在顶部公共区，
+  // 顶部只留"模型设置 / 重新扫描"这类共用按钮。
   const busy = doctorState.scanning || doctorState.triaging;
   return `
     <div class="doctor-module-bar">
@@ -1520,7 +1486,7 @@ function renderProjectSection() {
     ${renderDoctorProject()}`;
 }
 
-/** 子模块二：对话审查 —— 自由问答 + 取证轨迹。 */
+/** 子模块二：对话审查，自由问答 + 取证轨迹。 */
 function renderChatModule() {
   return `
     <div class="doctor-chat-wrap">
@@ -1534,16 +1500,16 @@ function renderChatModule() {
 
 function bindCheckupEvents(box) {
   $('#doctor-scan-btn')?.addEventListener('click', async () => {
-    // 萌新化（2026-10-23）：代码检查对普通用户没有意义，点下去先拦一道确认。
-    // ⚠️ 确认放在点击处、不放 runProjectScan 里 —— 后者还被 runTriage 的
-    //    autoScan 链路复用（顶栏「让模型自检」一键链路不该被弹窗打断）。
+    // 代码检查对普通用户没有意义，点下去先拦一道确认。
+    // 确认放在点击处、不放 runProjectScan 里，后者还被 runTriage 的
+    // autoScan 链路复用，顶栏「让模型自检」一键链路不该被弹窗打断。
     if (!(await qaConfirm('这是给会写代码的人看的代码检查，普通用户不用扫。确定继续？'))) return;
     runProjectScan();
   });
   // 「让模型自检」在自检模块内（它审的是本模块扫出来的候选，放这里最顺手）
   $('#doctor-triage-top-btn')?.addEventListener('click', () => runTriage({ autoScan: true }));
   // 规则过滤：只重绘项目区（不重建整页，避免滚动位置丢失）。
-  // 用 renderProjectSection() 而不是硬拼标题 —— 否则操作条会被冲掉（见该函数注释）。
+  // 用 renderProjectSection() 而不是硬拼标题，否则操作条会被冲掉（见该函数注释）。
   $('#doctor-proj-filter')?.addEventListener('change', (e) => {
     doctorState.projectRule = e.target.value || '';
     const wrap = $('#harness-page')?.querySelector('.doctor-proj-wrap');
@@ -1579,7 +1545,7 @@ function bindChatEvents(box) {
   });
 
   // 把某条结论直接送进「自动修复」：带上"这一问 + 这一答"作为修复依据。
-  // 不自动开始跑模型 —— 只把上下文搬过去，让用户在修复页确认后再点「生成提案」。
+  // 不自动开始跑模型，只把上下文搬过去，让用户在修复页确认后再点「生成提案」。
   $$('[data-fix-from]', box).forEach((el) => {
     el.addEventListener('click', () => {
       const i = Number(el.getAttribute('data-fix-from'));
@@ -1609,21 +1575,20 @@ function bindChatEvents(box) {
 
 // ── 子模块 2.5：自动修复（self-fix）────────────────────────────────────────
 //
-// ⚠️ 定位（2026-10-23 萌新化）：本模块会改动软件代码，仅供进阶用户；
-//    普通用户遇到问题请用「对话审查」或找群管。
+// 本模块会改动软件代码，仅供进阶用户；普通用户遇到问题请用「对话审查」或找群管。
 //
-// ⚠️ 这一页的**核心不是"让模型改代码"，而是两道人工闸**：
+// 这一页的核心不是"让模型改代码"，而是两道人工闸：
 //
-//   闸①  proposed 状态：模型只产出一份**提案**（改哪个文件、怎么改、风险、怎么验），
-//        界面上你点「批准并应用」才继续。这个动作会把一次性 approvalToken 回传后端 ——
+//   闸①  proposed 状态：模型只产出一份提案（改哪个文件、怎么改、风险、怎么验），
+//        界面上你点「批准并应用」才继续。这个动作会把一次性 approvalToken 回传后端，
 //        后端校验令牌不匹配就什么都不做。所以"批准"不是界面装饰，是代码层的门。
 //
-//   闸②  verified 状态：改动已在**沙箱里真跑过**。页面要展示的是**原始产物**
-//        （stdout / 用例级结果 / 冒烟输出），不是模型的自述 —— 因为模型有"报喜不报忧"
+//   闸②  verified 状态：改动已在沙箱里真跑过。页面展示原始产物
+//        （stdout / 用例级结果 / 冒烟输出），不是模型的自述，因为模型有"报喜不报忧"
 //        的倾向，闸②的价值就是让你绕过它的转述直接看事实。
 //        你的四个动作：通过（落地）/ 重跑（同版本再跑，限次）/ 再改一句 / 丢弃。
 //
-// 为什么"重跑"要限次：真跑有抖动是事实，但不限次就会退化成"刷到通过为止"，
+// "重跑"要限次：真跑有抖动是事实，但不限次就会退化成"刷到通过为止"，
 // 那等于把闸②废掉。所以 backend 侧硬限 maxReruns，并把已重跑次数显示出来。
 
 const FIX_STATUS = {
@@ -1653,9 +1618,8 @@ function renderFixModule() {
   const f = doctorState.fix;
 
   if (f.available === false) {
-    // r64：空态标题（.empty-hint 自带 text-align:center）居中，而下面这对
-    //   说明文字 + 按钮原来各自左对齐 —— 同一块里两种对齐，看着像没排好。
-    //   统一按标题的居中口径（hint 居中、按钮 block+auto 居中），不新增类。
+    // 空态标题（.empty-hint 自带 text-align:center）居中，下面的说明文字与按钮
+    // 也要跟着居中，否则同一块里两种对齐看着像没排好。不新增类。
     return `<div class="empty-hint">「自动修复」模块当前不可用。</div>
       <div class="hint" style="margin-top:10px;text-align:center">
         它现在是<b>软件自带功能</b>（内置工具链，不再走插件列表）。<br />
@@ -1671,9 +1635,9 @@ function renderFixModule() {
       <div class="hint" style="margin-top:10px">${f.loading ? '正在读取自动修复状态…' : '正在探测「自动修复」插件…'}</div>`;
   }
   if (!f.enabled) {
-    // 2026-10-21 内置化后：self-fix 已从插件列表消失（kind='core' 不再出现在
-    // 「下载 → 已安装」），老文案指的路已经不存在 → 用户被卡死在"开关够不着"。
-    // 开关（config.skills['self-fix'].fixEnabled）直接在本页给一个开启按钮，
+    // self-fix 内置化后已从插件列表消失（kind='core' 不再出现在「下载 → 已安装」），
+    // 老文案指的路不存在了，用户会卡在"开关够不着"。开关
+    // （config.skills['self-fix'].fixEnabled）直接在本页给一个开启按钮，
     // 走 POST /api/config 即时生效（cfg() 每次读活配置，无需重启）。
     return `<div class="empty-hint"><b>自动修复开关是关的</b>。</div>
       <div class="hint" style="margin-top:10px;text-align:center">
@@ -1811,8 +1775,8 @@ function renderFixProposal(rec) {
   const preview = f.detail?.preview || [];
   const plan = rec.proposal?.verifyPlan || [];
   const isProposed = rec.status === 'proposed';
-  // 无改动提案（模型判定"配置/使用问题、无需改代码"）：闸① 的按钮组必须分流 ——
-  // 「批准并应用」对它是必然失败的（后端按设计拒绝空应用），2026-10-16 修。
+  // 无改动提案（模型判定"配置/使用问题、无需改代码"）：闸① 的按钮组必须分流，
+  // 「批准并应用」对它是必然失败的（后端按设计拒绝空应用）。
   const noChange = rec.noChange === true || !(rec.proposal?.changes || []).length;
   const vById = new Map((f.verifiers || []).map((v) => [v.id, v]));
 
@@ -2032,14 +1996,14 @@ function escapeFixTime(ts) {
 function bindFixEvents(box) {
   const f = doctorState.fix;
 
-  // （2026-10-21 内置化后 self-fix 不再走"插件未启用"态，enablePluginInline 通道
-  //   对 core 模块无意义 —— 开关直连走下面的 fix-switch-btn。）
+  // self-fix 内置化后不再走"插件未启用"态，enablePluginInline 通道对 core 模块无意义，
+  // 开关直连走下面的 fix-switch-btn。
   $('#fix-retry-btn')?.addEventListener('click', () => {
     f.available = null;
     refreshInBackground(loadFixList, '', '修复工单列表');
   });
-  // 2026-10-21 内置化后开关的直接入口：模块启用（/api/skills）与功能总开关
-  // （fixEnabled，属于模块设置）是两回事 —— 后者原本只能去插件设置面板改，
+  // 内置化后开关的直接入口：模块启用（/api/skills）与功能总开关
+  // （fixEnabled，属于模块设置）是两回事，后者原本只能去插件设置面板改，
   // 而内置模块不再有那个面板，所以这里直连 POST /api/config。
   $('#fix-switch-btn')?.addEventListener('click', async () => {
     const btn = $('#fix-switch-btn');
@@ -2155,7 +2119,7 @@ async function loadFixDetail(fixId) {
   try {
     const d = await api(`/api/fix/detail?fixId=${encodeURIComponent(fixId)}`, { timeoutMs: 20000 });
     f.detail = d;
-    // 待批准的工单带一份一次性票据 —— 刷新页面后仍能批准同一份提案（否则它会永远卡在闸①）。
+    // 待批准的工单带一份一次性票据，刷新页面后仍能批准同一份提案（否则它会永远卡在闸①）。
     if (d?.approvalTicket) f.proposalToken = d.approvalTicket;
   } catch (e) {
     f.detail = { ok: false, error: e?.message || String(e) };
@@ -2211,9 +2175,9 @@ async function runFixApply() {
       body: JSON.stringify({ fixId: f.selected, approvalToken: f.proposalToken, extraNote: f.note || '' }),
       timeoutMs: 60000
     });
-    // ⚠️ 失败必须"就地返回"（2026-10-16 修）：原实现继续走 loadFixList →
-    //    loadFixStatus 会把刚写入的 f.error 清空，用户点"批准"后看不到任何反馈，
-    //    表现为"点了没反应"（同族动作一并按此处理）。
+    // 失败必须就地返回：继续走 loadFixList → loadFixStatus 会把刚写入的
+    // f.error 清空，用户点"批准"后看不到任何反馈，表现为"点了没反应"。
+    // 同族动作一并按此处理。
     if (!d.ok) { f.error = d.error || '应用失败'; return; }
     await loadFixList({ force: true });
     await loadFixDetail(f.selected);
@@ -2338,10 +2302,10 @@ async function runFixDiscard() {
 
 /**
  * 无改动提案的"结单"动作：一键归档（= 以默认理由丢弃）。
- * 为什么单独一个函数而不是复用 runFixDiscard：丢弃要求人工写理由（那是对"有改动
- * 提案"的正确约束）；无改动提案的"不采纳"理由只有一种——判定为无需代码修复。
- * 预填它，让这类场景有一个明确的终态出口（2026-10-16 修：此前点"批准"会撞上
- * "无需应用"的拒绝，且提示被列表刷新吞掉，表现为"点了没反应"）。
+ * 不复用 runFixDiscard：丢弃要求人工写理由（那是对"有改动提案"的正确约束）；
+ * 无改动提案的"不采纳"理由只有一种，判定为无需代码修复。预填它，
+ * 让这类场景有一个明确的终态出口，否则点"批准"会撞上"无需应用"的拒绝，
+ * 且提示被列表刷新吞掉，表现为"点了没反应"。
  */
 async function runFixArchive() {
   const f = doctorState.fix;
@@ -2368,7 +2332,7 @@ async function runFixArchive() {
 
 /**
  * "再改一句"：带着上一轮的失败明细，让模型重新出一份提案（**回到闸①**）。
- * 为什么回到闸①而不是直接改：改法变了就必须重新被人批准一次 ——
+ * 为什么回到闸①而不是直接改：改法变了就必须重新被人批准一次，
  * 否则人批准的是 A 方案，落地的却可能变成 B 方案。
  */
 async function runFixRework() {
@@ -2392,7 +2356,7 @@ async function runFixRework() {
   await runFixPropose();
 }
 
-// 下载 .docx：必须自己 fetch 成 blob —— api() 会把响应当 JSON 解析，二进制会炸。
+// 下载 .docx：必须自己 fetch 成 blob，api() 会把响应当 JSON 解析，二进制会炸。
 async function runFixExport(format) {
   const f = doctorState.fix;
   if (!f.selected || f.exporting) return;
@@ -2437,10 +2401,10 @@ async function runFixDelete() {
   const f = doctorState.fix;
   const rec = f.detail?.record;
   if (!rec) return;
-  // 有快照时必须单独确认 —— 删掉就永久失去回滚能力，这是不可逆动作
-  // ⚠️（2026-10-10 r86 修 P1）原生 window.confirm 在 frame:false + transparent
-  //    的无边框窗里会**阻塞渲染进程**，拖长主进程看门狗心跳（可能被判 hung 重建窗口），
-  //    且样式脱离主题。统一改用非阻塞的 qaConfirm（本文件他处早已在用）。
+  // 有快照时必须单独确认：删掉就永久失去回滚能力，这是不可逆动作。
+  // 不用原生 window.confirm：它在 frame:false + transparent 的无边框窗里会阻塞
+  // 渲染进程，拖长主进程看门狗心跳（可能被判 hung 重建窗口），且样式脱离主题。
+  // 统一用非阻塞的 qaConfirm。
   let deleteSnapshot = false;
   if (f.detail?.backupExists) {
     deleteSnapshot = await qaConfirm({
@@ -2489,9 +2453,9 @@ async function runFixDelete() {
 //
 // 流程：描述需求 → 起草（模型写进暂存区）→ 看闸门结论 + 生成代码 → 确认安装。
 //
-// ⚠️ 界面上必须有"你确认后才安装"这道关。原因见 src/harness/forge/index.js：
-//    进程内 Node 模块无法被真沙箱，生成的代码装上去就有完整权限。
-//    闸门是"让确认这个动作有据可依"，真正的防线是这个按钮由人来点。
+// 界面上必须有"你确认后才安装"这道关。原因见 src/harness/forge/index.js：
+// 进程内 Node 模块无法被真沙箱，生成的代码装上去就有完整权限。
+// 闸门是"让确认这个动作有据可依"，真正的防线是这个按钮由人来点。
 
 /** 闸门问题等级 → 展示元数据。 */
 const FORGE_LEVEL = {
@@ -2524,7 +2488,7 @@ function renderForgeModule() {
   if (f.installed) {
     const it = f.installed;
     const kindLabel = it.kind === 'plugin' ? '插件' : '技能';
-    // 「装好了但没开」必须说清楚 —— 否则用户会以为功能坏了：
+    // 「装好了但没开」必须说清楚，否则用户会以为功能坏了：
     // 扩展已装载（列表里能看到），但按设计**没有自动启用**，工具也不会发给模型。
     const offHint = it.autoDisabled
       ? `<div class="fd-off">
@@ -2580,8 +2544,8 @@ function renderForgeModule() {
 /** 「自己造」：需求输入框。 */
 function renderForgeCreateArea() {
   const f = doctorState.forge;
-  // 「继续修改」模式：当前展示的草稿存在且闸门未通过 —— 起草输入框就地变成修改入口。
-  // （openForgeDraft 打开暂存区老草稿时同样成立 —— 那些没装完的失败草稿由此获得"救回来"的入口。）
+  // 「继续修改」模式：当前展示的草稿存在且闸门未通过，起草输入框就地变成修改入口。
+  // （openForgeDraft 打开暂存区老草稿时同样成立，那些没装完的失败草稿由此获得"救回来"的入口。）
   const revise = !!(f.draftId && f.gate && f.gate.ok === false && !f.installed);
   return `
     <div class="forge-lead">
@@ -2702,7 +2666,7 @@ function renderForgeResult() {
   const notice = g.notice || 0;
 
   // 闸门结论横幅
-  // 修改/适配过的话额外给出"改前 → 改后"的对照 —— 用户最想知道的是"模型到底修好了没"
+  // 修改/适配过的话额外给出"改前 → 改后"的对照，用户最想知道的是"模型到底修好了没"
   const before = f.gateBefore;
   const delta = (before && before.blocking !== undefined && before.blocking !== blocking)
     ? `<div class="fv-delta">改前：阻断 ${before.blocking} / 需确认 ${before.confirm || 0} &nbsp;→&nbsp; 现在：阻断 ${blocking} / 需确认 ${confirm}</div>`
@@ -2730,7 +2694,7 @@ function renderForgeResult() {
   }
 
   // 问题明细
-  // 起草计划卡片：plan-then-write 让模型动笔前先定方向，这里把计划亮出来 ——
+  // 起草计划卡片：plan-then-write 让模型动笔前先定方向，这里把计划亮出来，
   // 用户能第一时间核对"做的是不是我想的"，不对就点"继续修改"纠偏，成本最低的时刻。
   const planHtml = f.plan ? `
     <div class="forge-summary">
@@ -2849,7 +2813,7 @@ function renderForgeDraftsList() {
 // 两条升级路径，同一个安全底座（暂存区副本 → 闸门 → diff → 确认 → 备份+覆盖 → 可回滚）：
 //   A. 对话升级：从列表选已装扩展 → 起草升级（复制进暂存区）→ 一句话告诉模型怎么改
 //   B. zip 升级：拖入升级包 → 按 manifest.id 匹配已装扩展 → 自动对比"更新了什么"
-// 升级永远不原地改 —— 覆盖安装由后端强制"备份原版 + id 一致 + 闸门通过"三关。
+// 升级永远不原地改，覆盖安装由后端强制"备份原版 + id 一致 + 闸门通过"三关。
 
 /** 升级模块的统一忙判定（模块内部互斥，避免两个请求同时改同一草稿）。 */
 function upgradeBusy() {
@@ -2859,7 +2823,7 @@ function upgradeBusy() {
 
 function renderUpgradeModule() {
   const u = doctorState.upgrade;
-  // 依赖 extension-forge（能力提供方）—— 未启用时给"去哪开"
+  // 依赖 extension-forge（能力提供方），未启用时给"去哪开"
   if (doctorState.forge.available === false) {
     return `<div class="usage-wrap" style="padding:0">
       <div class="empty-hint">「扩展锻造台」插件当前未启用 —— 升级扩展由它提供能力。</div>
@@ -2987,7 +2951,7 @@ function renderUpgradeResult() {
       }).join('')}
     </div>` : '';
 
-  // "更新了什么" —— 升级场景下最重要的透明度保障
+  // "更新了什么"，升级场景下最重要的透明度保障
   const diff = u.result.diff;
   let diffHtml = '';
   if (diff?.files) {
@@ -3180,7 +3144,7 @@ async function runUpgradeChat() {
   renderDoctorPage();
 }
 
-/** 方式二：zip 升级包 —— 解包 → 按 manifest.id 匹配已装扩展 → 对比"更新了什么"。 */
+/** 方式二：zip 升级包，解包 → 按 manifest.id 匹配已装扩展 → 对比"更新了什么"。 */
 async function runUpgradeZip(file) {
   const u = doctorState.upgrade;
   if (upgradeBusy() || !file) return;
@@ -3270,7 +3234,7 @@ async function runUpgradeInstall() {
   renderDoctorPage();
 }
 
-/** 放弃升级草稿（复用 forge 的 discard —— 草稿、快照、meta 一起清）。 */
+/** 放弃升级草稿（复用 forge 的 discard，草稿、快照、meta 一起清）。 */
 async function runUpgradeDiscard() {
   const u = doctorState.upgrade;
   if (upgradeBusy() || !u.draft) return;
@@ -3348,7 +3312,7 @@ function bindForgeEvents(box) {
   const ta = $('#forge-req');
   ta?.addEventListener('input', () => {
     const f2 = doctorState.forge;
-    // 「继续修改」模式下这个输入框装的是补充说明，必须与原始需求分开存 ——
+    // 「继续修改」模式下这个输入框装的是补充说明，必须与原始需求分开存，
     // 否则补充说明会覆盖 requirement（回填与后端兜底都会带上错误内容）
     if (f2.draftId && f2.gate && f2.gate.ok === false) f2.reviseNote = ta.value;
     else f2.requirement = ta.value;
@@ -3378,7 +3342,7 @@ function bindForgeEvents(box) {
     });
   }
   $('#forge-adapt-btn')?.addEventListener('click', () => runForgeAdapt());
-  // 补充说明边打边存 —— 适配过程中状态重绘会重建输入框，只靠 value 回填会丢字
+  // 补充说明边打边存，适配过程中状态重绘会重建输入框，只靠 value 回填会丢字
   $('#forge-adapt-note')?.addEventListener('input', (e) => { doctorState.forge.adaptNote = e.target.value; });
 
   $('#forge-allow-confirm')?.addEventListener('change', (e) => {
@@ -3416,11 +3380,10 @@ async function loadForgeStatus() {
 /**
  * 锻造台是否正忙（起草 / 导入 / 适配 / 安装任一在跑）。
  *
- * 为什么要**统一**判而不是各守各的标志：这四个动作都会写 f.draftId / f.files / f.gate，
- * 原来的守卫只看自己那一个标志（`if (f.drafting)`），于是"起草中还去点导入"
- * 会让两个请求同时在飞 —— 谁后返回谁说了算，界面出现"文件和草稿对不上"。
- * 它们本该是**互斥**的：同时只该有一个在改草稿。
- * （安装也纳入：安装期间草稿被改会让闸门结论与落地内容不一致。）
+ * 必须统一判而不是各守各的标志：这四个动作都会写 f.draftId / f.files / f.gate，
+ * 只看自己那一个标志的话，"起草中还去点导入"会让两个请求同时在飞，
+ * 谁后返回谁说了算，界面出现"文件和草稿对不上"。它们本该互斥。
+ * 安装也纳入：安装期间草稿被改会让闸门结论与落地内容不一致。
  */
 function forgeBusy() {
   const f = doctorState.forge;
@@ -3442,7 +3405,7 @@ async function runForgeDraft() {
   // 小白保护（软提示，不阻断）：需求太短 = 模型只能靠猜，猜错的返工成本比多写一句高。
   // 仍然允许直接起草（有些需求一句话就够清楚，比如"做个掷骰子工具"）。
   if (!revise && req.length < 15) {
-    // ⚠️（2026-10-10 r86 修 P1）原生 confirm → 非阻塞 qaConfirm（理由见 runFixDelete）
+    // 原生 confirm 会阻塞渲染进程，理由见 runFixDelete
     const go = await qaConfirm({
       title: '需求是不是太短了？',
       confirmText: '仍然起草',
@@ -3453,7 +3416,7 @@ async function runForgeDraft() {
   }
 
   const prevGate = f.gate;
-  if (!revise) f.requirement = req;   // 修改轮不动原始需求 —— 输入框里装的是补充说明
+  if (!revise) f.requirement = req;   // 修改轮不动原始需求，输入框里装的是补充说明
   f.drafting = true; f.revising = revise; f.error = ''; f.gate = null; f.files = []; f.trace = [];
   f.summary = ''; f.installed = null; f.allowConfirm = false; f.autoFix = 0; f.plan = '';
   f.imported = null; f.diff = null;
@@ -3480,7 +3443,7 @@ async function runForgeDraft() {
       f.plan = typeof d.plan === 'string' ? d.plan : '';
       f.trace = Array.isArray(d.trace) ? d.trace : [];
       f.gate = d.gate || null;
-      // 拉一次代码内容（起草接口只回结论，代码单独取 —— 避免响应体过大）
+      // 拉一次代码内容（起草接口只回结论，代码单独取，避免响应体过大）
       if (f.draftId) {
         try {
           const rd = await api('/api/forge/read', {
@@ -3508,7 +3471,7 @@ async function runForgeInstall() {
     // ① 先签人工确认票据。
     //    闸门通过 ≠ 可以装：静态扫描是启发式的，它回答"这份东西看着安全吗"，
     //    回答不了"有人同意装它吗"。票据由后端签发，只认控制台发起的请求
-    //    （渲染进程私有凭据），并且绑死"界面上这一刻"的内容摘要 ——
+    //    （渲染进程私有凭据），并且绑死"界面上这一刻"的内容摘要，
     //    确认期间草稿若被改过，签名会直接失败，让你重新核对而不是悄悄装新版。
     const ticket = await api('/api/forge/confirm', {
       method: 'POST',
@@ -3568,7 +3531,7 @@ async function discardForgeDraft(draftId) {
 
 /**
  * 导入第三方 zip：读成 base64 → 后端解到暂存区 → 展示清单与闸门结论。
- * ⚠️ 这里**只导入，不安装** —— 安装是用户看过代码之后的独立动作。
+ * 这里只导入，不安装：安装是用户看过代码之后的独立动作。
  */
 async function runForgeImport(file) {
   const f = doctorState.forge;
@@ -3582,7 +3545,7 @@ async function runForgeImport(file) {
 
   try {
     // 复用「本地导入」那套取内容的方式（桌面端反查真实路径，浏览器退化为 base64）。
-    // 这里只要 base64 —— 后端走的是"字节进暂存区"，不是"按路径读盘"，
+    // 这里只要 base64，后端走的是"字节进暂存区"，不是"按路径读盘"，
     // 所以刻意不用 paths 分支：第三方文件的来源路径不该被消费。
     const payload = await forgeFileToBase64(file);
     const d = await api('/api/forge/import', {
@@ -3594,7 +3557,7 @@ async function runForgeImport(file) {
 
     if (!d.ok) {
       f.error = d.error || '导入失败';
-      // 安全拒绝与"读不了"要给不同的话 —— 前者是包的问题，后者是文件的问题
+      // 安全拒绝与"读不了"要给不同的话，前者是包的问题，后者是文件的问题
       if (d.rejected) f.error = `⛔ 这个包被安全校验拒绝：${d.error}`;
     } else {
       f.draftId = d.draftId || '';
@@ -3655,8 +3618,8 @@ async function runForgeAdapt(noteOverride = null) {
     const d = await api('/api/forge/adapt', {
       method: 'POST',
       body: JSON.stringify({ draftId: f.draftId, note }),
-      // 预算配套（2026-10-16）：后端适配 = 前置闸门 + 最多 2 段 × 240s + 后置闸门/diff + 余量。
-      // ⚠️ 改动 routes.js 的 ADAPT_SEGMENT_MS / ADAPT_MAX_SEGMENTS 时必须同步这里，别让两层再漂移。
+      // 预算配套：后端适配 = 前置闸门 + 最多 2 段 × 240s + 后置闸门/diff + 余量。
+      // 改动 routes.js 的 ADAPT_SEGMENT_MS / ADAPT_MAX_SEGMENTS 时必须同步这里，别让两层漂移。
       timeoutMs: 560000
     });
     f.adapting = false;
@@ -3676,8 +3639,8 @@ async function runForgeAdapt(noteOverride = null) {
       f.trace = Array.isArray(d.trace) ? d.trace : [];
       f.diff = d.diff || null;
     }
-    // ⚠️ 失败也要刷新文件列表：草稿可能已被改了一部分（写工具是即时落盘的），
-    //    不给用户看现场，他会以为"什么都没发生"（2026-10-16 修）。
+    // 失败也要刷新文件列表：草稿可能已被改了一部分（写工具是即时落盘的），
+    // 不给用户看现场，他会以为"什么都没发生"。
     await refreshForgeFiles();
     await loadForgeStatus();
   } catch (e) {
@@ -3700,10 +3663,10 @@ async function openForgeDraft(draftId) {
       api('/api/forge/read', { method: 'POST', body: JSON.stringify({ draftId }), timeoutMs: 15000 }),
       api('/api/forge/gate', { method: 'POST', body: JSON.stringify({ draftId }), timeoutMs: 20000 })
     ]);
-    // ⚠️ 丢弃过期响应：两个请求各要几秒，用户完全可能在等待期间点开另一个草稿。
-    //    没有这道判断的话，先发的响应后到就会把界面刷成**另一个草稿的内容**，
-    //    而顶部的 draftId 已经是新的 —— 文件和草稿对不上，比"没反应"更难排查。
-    //    （这类"慢响应盖掉新状态"的竞态，靠禁用按钮治不了：按钮在 await 期间是活的。）
+    // 丢弃过期响应：两个请求各要几秒，用户完全可能在等待期间点开另一个草稿。
+    // 没有这道判断，先发的响应后到就会把界面刷成另一个草稿的内容，
+    // 而顶部 draftId 已经是新的，文件和草稿对不上，比"没反应"更难排查。
+    // 这类竞态靠禁用按钮治不了：按钮在 await 期间是活的。
     if (f.draftId !== draftId) return;
     f.files = Array.isArray(rd.files) ? rd.files : [];
     f.gate = gd.gate || null;
@@ -3719,10 +3682,9 @@ async function openForgeDraft(draftId) {
 /**
  * 从别处（市场安装 / 批量口令）一步进到锻造台：切页 → 打开草稿 → 直接开始适配。
  *
- * 为什么要有它：用户点的是「安装」，心里想的是"装好就能用"。中间那几步
- * （记住草稿 id → 切到 harness → 在草稿堆里找到它 → 点查看 → 点适配）全是
- * **系统视角的步骤**，不是人的步骤。能省的都省掉，只留真正需要人的那一步：
- * 看闸门结论、点确认安装。
+ * 用户点的是「安装」，心里想的是"装好就能用"。中间那几步（记住草稿 id →
+ * 切到 harness → 在草稿堆里找到它 → 点查看 → 点适配）全是系统视角的步骤，
+ * 能省的都省掉，只留真正需要人的那一步：看闸门结论、点确认安装。
  *
  * 自动开始适配不构成"未经确认就安装"：适配只写暂存区，碰不到 skills/ 与 plugins/，
  * 落地仍然必须由人签票（见 /api/forge/confirm）。
@@ -3731,7 +3693,7 @@ async function forgeOpenAndAdapt(draftId, { adapt = true } = {}) {
   if (!draftId) return;
   const f = doctorState.forge;
   // 有任务在跑就不抢：两个适配同时写同一份草稿会互相覆盖，比"没自动开始"糟得多。
-  // 但仍然把人送到锻造台 —— 他要看的是"现在在忙什么"，而不是回到原页面什么都不知道。
+  // 但仍然把人送到锻造台，他要看的是"现在在忙什么"，而不是回到原页面什么都不知道。
   if (forgeBusy()) {
     doctorState.sub = 'forge';
     switchTab('harness');
@@ -3742,9 +3704,9 @@ async function forgeOpenAndAdapt(draftId, { adapt = true } = {}) {
   await loadForgeStatus();
   await openForgeDraft(draftId);
   if (!adapt) return;
-  // 打开失败（草稿被删 / 接口报错）就别硬跑适配 —— 那只会拿一个空草稿去烧 token
+  // 打开失败（草稿被删 / 接口报错）就别硬跑适配，那只会拿一个空草稿去烧 token
   if (f.draftId !== draftId || f.error || !f.files?.length) return;
-  // 自动跑的这一轮要**收着改**：它没有输入框可写补充说明，默认话术把范围钉死在
+  // 自动跑的这一轮要收着改：它没有输入框可写补充说明，默认话术把范围钉死在
   // "装得上、跑得起来"，避免对本来就好用的包做无谓重写（那种改动最容易被用户当成"改坏了"）。
   await runForgeAdapt(
     '（自动适配）这是刚从市场下载的第三方扩展包。只做让它在本机装得上、装完能工作所必需的'
@@ -3771,7 +3733,7 @@ function repaintDoctorProject() {
 /**
  * 同步顶栏「让模型自检」按钮的文案/禁用态。
  * 顶栏在项目区之外，repaintDoctorProject 换不到它，所以单独同步一次。
- * 也顺带禁用「扫描项目」——审阅期间再点扫描会把候选集换掉，结论就对不上了。
+ * 也顺带禁用「扫描项目」，审阅期间再点扫描会把候选集换掉，结论就对不上了。
  */
 function syncTriageTopButton() {
   const b = $('#doctor-triage-top-btn');
@@ -3865,7 +3827,7 @@ async function runProjectScan() {
   if (doctorState.scanning) return;
   doctorState.scanning = true;
   // 禁用态一律交给 syncTriageTopButton()（repaintDoctorProject 里会调），
-  // 这里不再手动改按钮 —— 两处都写会互相覆盖。
+  // 这里不再手动改按钮，两处都写会互相覆盖。
   repaintDoctorProject();
 
   try {
@@ -3902,12 +3864,12 @@ function repaintDoctorChat() {
 // ── 模型设置弹窗 ──────────────────────────────────────────────────────────
 /*
  * 「自检专用模型」：默认关闭 = 跟随全局（和群聊同一套）。
- * 打开 = 这一页的「对话排查」走独立端点/模型/密钥 —— 例如用小模型省钱，
+ * 打开 = 这一页的「对话排查」走独立端点/模型/密钥，例如用小模型省钱，
  * 或诊断流量导到另一个网关避开群聊限流。
  *
- * ⚠️ 密钥是"只写不读"的：sanitizeConfig 把 doctorApi.apiKey 脱敏成 hasApiKey 布尔，
- *    前端拿不到明文，所以输入框初始**必须留空**，placeholder 提示"留空=不修改"。
- *    用户点眼睛时才走 /api/doctor/config-key 取明文（该端点有来源校验）。
+ * 密钥是"只写不读"的：sanitizeConfig 把 doctorApi.apiKey 脱敏成 hasApiKey 布尔，
+ * 前端拿不到明文，所以输入框初始必须留空，placeholder 提示"留空=不修改"。
+ * 用户点眼睛时才走 /api/doctor/config-key 取明文（该端点有来源校验）。
  */
 async function openDoctorModelDialog() {
   let data;
@@ -4032,9 +3994,9 @@ async function openDoctorModelDialog() {
       closeModelModal(overlay);
       // 配置变了，把当前模型提示同步给对话区。
       //
-      // ⚠️ 这条提示写在**对话**里，所以必须确保用户在对话模块上才看得见 ——
-      //    否则（比如在「自检系统」里改配置）弹窗一关就什么反馈都没有，
-      //    用户会怀疑到底存没存上。这里直接切过去，而不是另造一套 toast。
+      // 这条提示写在对话里，所以必须确保用户在对话模块上才看得见，
+      // 否则（比如在「自检系统」里改配置）弹窗一关就什么反馈都没有。
+      // 这里直接切过去，而不是另造一套 toast。
       if (doctorState.sub !== 'chat') switchDoctorSub('chat');
       doctorState.turns.push({
         role: 'assistant',
@@ -4057,8 +4019,8 @@ async function openDoctorModelDialog() {
  * 忽略 / 恢复体检单上的一条问题。
  *
  * key = `${area}|${id}`（与后端 ackKeyOf 一致）；restore-all 时 key 传空串。
- * 为什么要这条路：体检单的问题都是从磁盘现状推导的，用户自查后确认某条无妨，
- * 原先没有任何地方能表达"我知道了"—— 下次体检原样回来，一直挂在警告位上。
+ * 体检单的问题都是从磁盘现状推导的，用户自查后确认某条无妨，原先没有任何地方
+ * 能表达"我知道了"，下次体检原样回来，一直挂在警告位上。
  * 忽略清单落盘在后端（data/plugin-data/self-doctor/acked.json），重启后仍生效。
  */
 async function ackIssue(key, action = 'ignore') {
@@ -4073,8 +4035,8 @@ async function ackIssue(key, action = 'ignore') {
     if (!d.ok) { doctorState.ackMsg = d.error || '忽略操作失败'; renderDoctorPage(); return; }
     doctorState.ackMsg = '';
   } catch (e) {
-    // 不用 doctorState.error —— 那会把整个自检模块替换成出错占位，
-    // 一次忽略失败不该炸掉整页体检单。用只在报告顶部显示一行的局部消息。
+    // 不用 doctorState.error，那会把整个自检模块替换成出错占位，
+    // 一次忽略失败不该炸掉整页体检单。只在报告顶部显示一行。
     doctorState.ackMsg = e?.message || '忽略操作失败';
     renderDoctorPage();
     return;
@@ -4120,7 +4082,7 @@ async function loadHarnessPage({ quiet = false, force = false } = {}) {
   }
   renderDoctorPage();
 
-  // 停在「自创扩展」子模块时，顺带拉一次锻造台状态 ——
+  // 停在「自创扩展」子模块时，顺带拉一次锻造台状态，
   // 那是另一个插件的数据，体检接口不会带回来（表现会是"永远显示未探测"）。
   if (doctorState.sub === 'forge' && doctorState.forge.available === null) {
     refreshForgeStatusInBackground();
@@ -4128,8 +4090,8 @@ async function loadHarnessPage({ quiet = false, force = false } = {}) {
 
   // 首次进「自检系统」时自动取一次哨兵量表：量表是这一页的主信息，
   // 让用户先看到一个空框再自己去点按钮，等于白做。
-  // ⚠️ 只在哨兵为空时拉，且不挂进定时刷新 —— 每取一次要读 24 个 session
-  //    文件（实测约 300ms），秒级变化也没有，轮询纯属浪费。
+  // 只在哨兵为空时拉，且不挂进定时刷新：每取一次要读 24 个 session
+  // 文件（实测约 300ms），秒级变化也没有，轮询纯属浪费。
   if (doctorState.sub === 'checkup' && doctorState.available !== false
       && !doctorState.sentinel && !doctorState.sentinelLoading) {
     runSentinel();
@@ -4151,8 +4113,8 @@ async function askDoctor() {
   if (ta) ta.value = '';
   doctorState.asking = true;
   // 占位气泡：告诉用户"在想"，而不是界面卡住。
-  // 现在模型会自己去读日志/源码（可能要跑好几轮），所以文案要预先说明"会去看文件"，
-  // 否则用户等 30 秒会以为卡死 —— 这也是"可解释等待"的最低要求。
+  // 模型会自己去读日志/源码（可能要跑好几轮），文案要预先说明"会去看文件"，
+  // 否则用户等 30 秒会以为卡死。
   doctorState.turns.push({
     role: 'assistant',
     text: '_正在分析…（模型会自己去读相关的源码与日志，可能需要十几秒到一分钟）_',
@@ -4209,8 +4171,8 @@ function fmtShortTs(ts) {
 //
 // 链路：群友（白名单）在群里发「开发 xxxx」→ 插件钩子自动登记工单 →
 // 主人在这个页面点【开工】→ 模型在 dev-sandbox/ 沙箱里执行 → 跑完【发布回群】。
-// 页面只负责三件事：看快照 / 点动作 / 管白名单 —— 重活全在插件里。
-// ⚠️ 「开工」与「发布」是两个独立的人工闸：写完不等于发出去，发出去收不回来。
+// 页面只负责三件事：看快照 / 点动作 / 管白名单，重活全在插件里。
+// 「开工」与「发布」是两个独立的人工闸：写完不等于发出去，发出去收不回来。
 
 const DEV_ORDER_STATUS = {
   // 新模型（开发模式）：会话只有 开/档 两态；"正在干活"由 snapshot.running 叠加显示
@@ -4265,11 +4227,10 @@ async function loadDevOrdersSnapshot() {
 
 // 对话流最多保留 / 一次最多渲染多少行。
 //
-// ⚠️ 2026-10-15 加（用户报「随着调用次数的增加，自动刷新暴毙了，看不到他在做」）：
-//   每次重绘都是把**整个** lines 数组拼成一个 HTML 字符串再塞进 innerHTML，
-//   而工具卡里带的是最多 8k 字的命令输出 / 文件内容。跑单时**每秒**重绘一次 ——
-//   行数不封顶的话，几百个工具轮之后每秒要拼几十 MB 字符串 + 重建上万个节点，
-//   标签页直接卡死。行数封顶后，重绘开销是常数。
+// 每次重绘都是把整个 lines 数组拼成一个 HTML 字符串再塞进 innerHTML，
+// 而工具卡里带的是最多 8k 字的命令输出 / 文件内容。跑单时每秒重绘一次，
+// 行数不封顶的话，几百个工具轮之后每秒要拼几十 MB 字符串 + 重建上万个节点，
+// 标签页直接卡死。行数封顶后，重绘开销是常数。
 const DEV_DETAIL_KEEP_LINES = 1200;    // 常态（跟着最新）内存里最多留多少行
 const DEV_DETAIL_HARD_LINES = 4000;    // 翻过历史之后允许留到多少行（用户明确要看更早的）
 const DEV_DETAIL_RENDER_LINES = 400;   // 一次最多渲染多少行（渲染窗口，可前后移动）
@@ -4312,7 +4273,7 @@ async function loadDevOrderDetail({ append = false, before = 0 } = {}) {
         dropped = lines.length - DEV_DETAIL_HARD_LINES;
         lines = lines.slice(dropped);
       }
-      // 渲染窗口整体后退一屏 —— 正好落在刚载入的那一页上
+      // 渲染窗口整体后退一屏，正好落在刚载入的那一页上
       const winEnd = Math.max(DEV_DETAIL_RENDER_LINES, Math.min(
         (cur.winEnd ?? (cur.lines || []).length) + add.length - DEV_DETAIL_RENDER_LINES - dropped,
         lines.length
@@ -4338,8 +4299,8 @@ async function loadDevOrderDetail({ append = false, before = 0 } = {}) {
     if (d.available === false) throw new Error(d.error || '「开发工单」插件未启用');
     if (!d.ok) throw new Error(d.error || '读取失败');
     if (o.selected !== id) return;   // 期间用户切走了单子
-    // 游标幂等：若期间已有别的请求把 nextFrom 推进了，这次的增量就是**重复的** → 丢掉。
-    // （并发的 append 是 2026-10-09「记录里冒出大量重复行」的直接原因。）
+    // 游标幂等：若期间已有别的请求把 nextFrom 推进了，这次的增量就是重复的，丢掉。
+    // （并发的 append 是「记录里冒出大量重复行」的直接原因。）
     if (append && same && (cur.nextFrom || 0) !== from) return;
 
     const add = Array.isArray(d.lines) ? d.lines : [];
@@ -4426,8 +4387,7 @@ function renderOrdersModule() {
 }
 
 /** 右栏：选中工单的对话流（需求 → 执行过程 → 收尾）。 */
-/** 底部对话框：描述需求 → 开工新单；选中单是「待验收/失败」时，可追加说明重跑。 */
-/** 底部对话框：直接说话 —— 发给选中的会话；没选会话时开一个新的（本机）。 */
+/** 底部对话框：直接说话，发给选中的会话；没选会话时开一个新的（本机）。 */
 function renderOrdersComposer(hasSelected) {
   const o = doctorState.orders;
   return `
@@ -4453,7 +4413,7 @@ const DEV_USAGE_HINT = '输入=prompt_tokens；输出=completion_tokens；命中
 
 /**
  * 用量条公共骨架：token 用量 + 缓存命中率（口径与项目其它地方一致：cached/prompt）。
- * title 区分「本会话 / 全部会话」（2026-10-15：跨会话累计口径原本在架构上就不存在）。
+ * title 区分「本会话 / 全部会话」。
  */
 function usageBarHtml(title, u, hint) {
   if (!u || !u.calls) return '';
@@ -4487,14 +4447,14 @@ function renderOrdersDetail() {
   const st = DEV_ORDER_STATUS[it.status] || { label: String(it.status || ''), cls: '' };
   const runningNow = s.running === it.id;
   const acts = [];
-  // 「中止」：一轮最长能跑 1 小时，而调度是全局单飞 —— 不结束的话所有会话都排队、
-  // 界面只显示"模型正在干活…"，用户会以为卡死了（2026-10-08 报障）。
+  // 「中止」：一轮最长能跑 1 小时，而调度是全局单飞，不结束的话所有会话都排队、
+  // 界面只显示"模型正在干活…"，用户会以为卡死了。
   if (runningNow) {
     const since = Number(s.runningSince) || 0;
     const mins = since ? Math.max(0, Math.round((Date.now() - since) / 60000)) : 0;
     acts.push(`<button class="btn btn-small btn-primary" data-dev-act="abort" data-dev-id="${esc(it.id)}" title="打断这一轮（模型调用与工具执行都会停下，会话保留）">中止${since ? `（已跑 ${mins} 分）` : ''}</button>`);
   }
-  // 「重开」：归档的工单回到 active —— 追加式上下文还在，能接着上次的工作现场继续干
+  // 「重开」：归档的工单回到 active，追加式上下文还在，能接着上次的工作现场继续干
   if (it.status !== 'active') {
     acts.push(`<button class="btn btn-small btn-primary" data-dev-act="reopen" data-dev-id="${esc(it.id)}" title="回到这个工单继续干（上下文都在）">重开</button>`);
   }
@@ -4678,8 +4638,8 @@ function bindOrdersEvents(box) {
       const full = el.querySelector('.devorder-tool-full');
       const tog = el.querySelector('.devorder-tool-toggle');
       if (full) {
-        // 内容是**按需填**的：收起时 DOM 里不放（否则每次重绘都要给每张卡拼一份最多 8k 的文本，
-        // 这正是"行数一多、每秒重绘就卡死"的主因）。展开时才从 lines 里取。
+        // 内容是按需填的：收起时 DOM 里不放，否则每次重绘都要给每张卡拼一份最多 8k
+        // 的文本，这正是"行数一多、每秒重绘就卡死"的主因。展开时才从 lines 里取。
         full.textContent = open ? String((o.detail?.lines || [])[idx]?.full || '') : '';
         full.hidden = !open;
       }
@@ -4704,12 +4664,12 @@ function bindOrdersEvents(box) {
     else if (pend) chat.scrollTop = pend.top;   // 原本没贴底 → 原地不动（别把回看历史的用户弹走）
   }
 
-  // 页面渲染出来了就保证轮询在跑（幂等）—— 解决"从 QQ 发起 / 刷新页面后不刷新"
+  // 页面渲染出来了就保证轮询在跑（幂等），解决"从 QQ 发起 / 刷新页面后不刷新"
   startDevPolling();
 }
 
 /** 「开发工单」专用模型设置：devApi 优先级最高（本页 > 自检专用 > 全局聊天模型）。
- *  开发模式要改文件、跑命令，对模型能力要求最高 —— 想提命中率就把这里指到更强的模型。 */
+ *  开发模式要改文件、跑命令，对模型能力要求最高，想提命中率就把这里指到更强的模型。 */
 async function openDevModelDialog() {
   const oo = doctorState.orders;
   let data;
@@ -4844,7 +4804,7 @@ async function openDevModelDialog() {
   });
 }
 
-/** 对话框：发送 —— 有选中会话就发给它；没有就开一个新会话（本机）。 */
+/** 对话框：发送，有选中会话就发给它；没有就开一个新会话（本机）。 */
 async function devOrderSend() {
   const o = doctorState.orders;
   const text = String(o.draft || '').trim();
@@ -5003,11 +4963,9 @@ function readOrdersScroll() {
 /**
  * 重绘后该把对话滚到哪（纯函数，便于测试）。
  *
- * 为什么需要它（2026-10-09 用户报"工作结束会跳回最顶部"）：
- *   原来只在"正在跑"时 `scrollTop = scrollHeight`；一旦跑完，那次重绘
- *   会让**新 DOM 的 scrollTop 归零** → 视窗弹回顶部。而且跑着的时候
- *   用户往上翻看历史，也会被硬拽回底部。
- *   现在：重绘前捕获位置 → 原本贴着底就继续跟到底，否则原地不动。
+ * 原来只在"正在跑"时 `scrollTop = scrollHeight`，一旦跑完，那次重绘
+ * 会让新 DOM 的 scrollTop 归零，视窗弹回顶部；跑着的时候用户往上翻看历史，
+ * 也会被硬拽回底部。现在：重绘前捕获位置，原本贴着底就继续跟到底，否则原地不动。
  * @param {{pending?: {atBottom:boolean,top:number}|null, switched?:boolean, running?:boolean}} o
  * @returns {'bottom'|'keep'}
  */
@@ -5020,19 +4978,17 @@ function decideOrdersScroll({ pending = null, switched = false, running = false 
 /**
  * 开发工单轮询：快照 + 选中会话的增量记录。
  *
- * ⚠️⚠️ 2026-10-09 事故（务必读完再改）：
- *   上一版把间隔改成 1 秒时，重入守卫写的是 `if (o.pollTimer) return;` ——
- *   而 tick **一开头**就把 `o.pollTimer = null`。链路是：
- *     tick → renderDoctorPage() → 第 716 行 bindOrdersEvents() → startDevPolling()
- *   此刻守卫看到的句柄是空的 → **又起一个定时器**并把句柄写进 o.pollTimer；
- *   紧接着**原来那次 tick** 末尾的 schedule() 再把 o.pollTimer 覆盖成自己的 ——
- *   于是前一个定时器**永远没人清**。结果每秒多一路轮询：
- *   几十路并发拉快照 + 拉记录 + **全量重绘**，UI 直接卡死到被迫重启，
- *   记录还被并发 append 出大量重复行。
- *   现在：① 单实例守卫用**布尔** `o.polling`（不受句柄影响）；
- *         ② `o.pollInFlight` 防叠加；③ 数据没变就**不重绘**；
- *         ④ 记录 append 侧另有游标幂等校验（见 loadDevOrderDetail）。
- *   节奏：干活中 1 秒（实时感），空闲 5 秒（群里发起的会话也要能看见）；离开子页自动停。
+ * 上一版把间隔改成 1 秒时，重入守卫写的是 `if (o.pollTimer) return;`，
+ * 而 tick 一开头就把 `o.pollTimer = null`。链路是：
+ *   tick → renderDoctorPage() → bindOrdersEvents() → startDevPolling()
+ * 此刻守卫看到的句柄是空的，于是又起一个定时器并把句柄写进 o.pollTimer；
+ * 紧接着原来那次 tick 末尾的 schedule() 再把 o.pollTimer 覆盖成自己的，
+ * 前一个定时器永远没人清。结果每秒多一路轮询：几十路并发拉快照 + 拉记录 +
+ * 全量重绘，UI 卡死到被迫重启，记录还被并发 append 出大量重复行。
+ * 现在：① 单实例守卫用布尔 o.polling（不受句柄影响）；
+ *       ② o.pollInFlight 防叠加；③ 数据没变就不重绘；
+ *       ④ 记录 append 侧另有游标幂等校验（见 loadDevOrderDetail）。
+ * 节奏：干活中 1 秒（实时感），空闲 5 秒（群里发起的会话也要能看见）；离开子页自动停。
  */
 const DEV_POLL_RUNNING_MS = 1000;
 const DEV_POLL_IDLE_MS = 5000;
@@ -5047,10 +5003,9 @@ function stopDevPolling() {
 /**
  * 看门狗：轮询链停摆自愈。
  *
- * ⚠️ 背景（2026-10-15 报障「自动刷新暴毙」）：tick 里任何未捕获的异常都可能让
- * schedule() 不被调用 → 没有新定时器 → 链断；而 o.polling 仍为 true，
+ * tick 里任何未捕获的异常都可能让 schedule() 不被调用，链断了而 o.polling 仍为 true，
  * startDevPolling() 的单实例守卫会把任何重启挡在门外，用户只能手动刷页面。
- * 现在 tick 的 finally 已保证"无论成败链必续"，这里是**第二道保险**：
+ * tick 的 finally 已保证"无论成败链必续"，这里是第二道保险：
  * 每 20 秒检查一次，polling 为真却既无在途请求也无待跑定时器 = 链停摆 → 重启。
  */
 function startOrdersWatchdog() {
@@ -5086,7 +5041,7 @@ function startDevPolling() {
   const o = doctorState.orders;
   if (o.polling) return;               // ← 单实例守卫（布尔，不受句柄置空影响）
   o.polling = true;
-  startOrdersWatchdog();               // ← 看门狗：链停摆自愈（2026-10-15「暴毙」报障的第二道保险）
+  startOrdersWatchdog();               // 看门狗：链停摆自愈
   let ticks = 0;
   let fails = 0;
   const schedule = (ms) => {
@@ -5110,8 +5065,8 @@ function startDevPolling() {
       if (runningId && o.selected === runningId) {
         try { await loadDevOrderDetail({ append: true }); } catch { failed = true; }
       }
-      // 数据没变就不重绘 —— 全会重绘是上一版把 UI 拖死的直接原因之一
-      // 用户正在输入框里打字时也不重绘（重绘会重建 DOM、把焦点和光标弄丢）
+      // 数据没变就不重绘，全量重绘是上一版把 UI 拖死的直接原因之一。
+      // 用户正在输入框里打字时也不重绘（重绘会重建 DOM、把焦点和光标弄丢）。
       const typing = typeof document !== 'undefined'
         && document.activeElement && document.activeElement.id === 'devorder-input';
       if (devOrdersSignature() !== before && !typing && doctorState.sub === 'orders' && !o.busy) {
@@ -5120,8 +5075,8 @@ function startDevPolling() {
           renderDoctorPage();
           o.renderError = '';
         } catch (e) {
-          // ⚠️ 2026-10-15 报障根因：渲染异常曾经把 schedule() 跳掉 → 轮询链永久死亡
-          // （o.polling 仍为 true，单实例守卫把重启挡在门外，用户只能手动刷页面）。
+          // 渲染异常曾经把 schedule() 跳掉，轮询链永久死亡（o.polling 仍为 true，
+          // 单实例守卫把重启挡在门外，用户只能手动刷页面）。
           // 现在只记录、不杀链；侧栏横幅提示，看门狗兜底自愈。
           o.renderError = String(e?.message || e);
         }
@@ -5211,16 +5166,16 @@ async function openDevWhitelistDialog() {
   }
 }
 
-// 供 00-core.js 的 switchTab 调用：命名与其它页一致（loadXxxPage）
+// 供 00-core.js 的 switchTab 调用：命名与其它页一致（loadXxxPage）。
 // 函数已改名为 loadHarnessPage（页签从「系统自检」升级为 harness），
-// 这里保留旧名做兼容导出 —— 万一有旧书签/其它脚本还在调它不至于直接报错。
+// 旧名保留做兼容导出，万一有旧书签/其它脚本还在调它不至于直接报错。
 window.loadHarnessPage = loadHarnessPage;
 window.loadDoctorPage = loadHarnessPage;
 
 // ── 子模块七：打包 / 接收（整包：扩展 + 数据）────────────────────────────────
 //
-// 数据落地复用 migrate.applyImport；这里只负责收/发一个 zip。
-// 接收侧的安全立场：**解包 ≠ 安装**。包只解到 data/import-bundles/<id>/ 临时区，
+// 数据落地复用 migrate.applyImport，这里只负责收/发一个 zip。
+// 接收侧的安全立场：解包 ≠ 安装。包只解到 data/import-bundles/<id>/ 临时区，
 // 扩展必须逐个进锻造台过闸，最后由一次确认批量落地（每个草稿仍各签一张票）。
 
 function bundleBusy() {
@@ -5714,8 +5669,8 @@ function bindBundleEvents(box) {
 }
 
 /* ── 导入备份与回滚 ───────────────────────────────────────────────────────
- * 这一块从原「数据移植」页搬过来。删页面时最容易漏的就是它：
- * 数据导入前的备份如果界面上没有入口，等于把"可回滚"变成"要手工去 data/import-backups 里翻"。
+ * 这一块从原「数据移植」页搬过来。数据导入前的备份如果界面上没有入口，
+ * "可回滚"就等于要手工去 data/import-backups 里翻。
  * 数据入口现在只有「接收整包」一个，回滚就必须跟着它。
  */
 

@@ -1,8 +1,8 @@
 // 本地导入：把用户拖进来 / 选中的 zip 包或文件夹装进 skills/ 或 plugins/。
 //
-// 与市场安装（src/market.js）的区别：那个走网络下载，这个走本机路径或前端上传的
-// 字节。**安全边界与市场安装同等严格** —— 两者最终都是"往会被 require() 的目录里
-// 写可执行 JS"，所以路径穿越、可执行后缀、zip 炸弹这些检查一处都不能少。
+// 与市场安装（src/market.js）的区别：那个走网络下载，这个走本机路径或前端
+// 上传的字节。安全边界与市场安装同等严格，两者最终都是"往会被 require()
+// 的目录里写可执行 JS"，所以路径穿越、可执行后缀、zip 炸弹这些检查一处都不能少。
 //
 // 目录名冲突一律递增（_1/_2）而不覆盖：正在运行的插件目录被覆盖写一半，
 // 热重载会加载出半截代码；而且覆盖会静默吞掉用户自己改过的文件。
@@ -57,12 +57,8 @@ const dirOf = (kind) => (kind === 'plugin' ? PLUGINS_DIR : SKILLS_DIR);
  * @returns {Promise<{ kind, id, dir, files }>}
  */
 export async function importZip(buffer, { kind = 'skill', preferId = '' } = {}) {
-  // 2026-10-07：这里原先调 parseZip（**不**做体积/数量校验），注释却写着
-  // "内含路径穿越/后缀/数量/体积校验" —— 注释是错的：体积与数量上限当时只在
-  // validateZipStructure 里，而本地导入路径不经过它 →任意体积的 zip
-  // 会先被完整解压进内存。现在 parseZip 内部已下沉这些限制（边解析边限额），
-  // 注释才成立。注意下面 unzipToModuleDir 会再解一次，这是既有行为，
-  // 因为它要的是"落地"而不是"探测"。
+  // 这里调 parseZip 做的是"探测"（不落盘）。它内部边解析边限额，
+  // 体积与数量上限都在里面；下面的 unzipToModuleDir 会再解一次，因为它要的是"落地"。
   const entries = parseZip(buffer);
   const detected = detectKind(entries.map((e) => e.name), kind);
   const baseDir = dirOf(detected);
@@ -121,8 +117,8 @@ export function importPath(src, { kind = 'skill' } = {}) {
   const baseDir = dirOf(detected);
   fs.mkdirSync(baseDir, { recursive: true });
 
-  // ── 以清单为锚点定位模块根（与 zip-install.js 同口径，2026-10-16）──
-  // 用户可能选的是**父文件夹**（里面才是一个或多个模块目录），整棵复制会把
+  // 以清单为锚点定位模块根（与 zip-install.js 同口径）。
+  // 用户可能选的是父文件夹（里面才是一个或多个模块目录），整棵复制会把
   // 模块套进一层子目录 → loader 在模块根找不到 plugin.json/skill.json
   // → 报"缺少 skill.json / plugin.json"。这里取最浅的清单所在目录为模块根，
   // 剥掉它上面的层级、丢掉根外的杂物（README/LICENSE 之类）。

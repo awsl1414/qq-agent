@@ -1,16 +1,16 @@
 // 视频读取：探测视频元信息（时长/分辨率/大小/格式），并按配置决定怎么让模型"看"到画面。
 //
-// ── 两条路线（互斥，由 config.api.videoMode 决定）──────────────────────
+// 两条路线（互斥，由 config.api.videoMode 决定）：
 //   native 全模态模型直接读视频：把视频地址作为 video 部分发给模型。
 //          由设置页的「视频输入专用模型」声明"我有这种模型"，核心不猜。
 //   frames 抽帧：把视频变成若干张图片，任何视觉模型都能用。
 //          实现放在 `skills/video-frames`（capability `video.frames`），
-//          本模块通过能力名取用 —— 关掉 Skill 就自动退回"只给元信息"。
+//          本模块通过能力名取用，关掉 Skill 就自动退回"只给元信息"。
 //
-// 为什么不两条一起喂：同一段内容重复计费，而且视频部分和图片部分混在一起
+// 不两条一起喂：同一段内容重复计费，而且视频部分和图片部分混在一起
 // 多数网关会因格式冲突直接 400。二选一是刻意的设计，不是偷懒。
 //
-// 探测元信息本身是**尽力而为**的：NapCat/SnowLuma 的视频缓存不一定在，
+// 探测元信息本身是尽力而为的：NapCat/SnowLuma 的视频缓存不一定在，
 // ffprobe/ffmpeg 也不一定装了。每一步失败都降级，绝不抛出让模型看到一串技术错误。
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,7 +31,7 @@ function videoCacheDir() {
 }
 
 /**
- * 决定这次视频走哪条路。**纯函数**，方便测试与在 UI 里预览判定结果。
+ * 决定这次视频走哪条路。纯函数，方便测试与在 UI 里预览判定结果。
  *
  * @param {object} o
  *   mode       config.api.videoMode
@@ -65,13 +65,13 @@ export function resolveVideoRoute({ mode = 'auto', videoModel = '', framesOk = f
 }
 
 /**
- * stdout 累计上限（报告3 L5，2026-10-17）。
+ * stdout 累计上限。
  *
  * 当前 run() 只跑 `#ffprobe` 的 `-show_format -show_streams`（JSON 输出，
  * 实测几 KB ~ 上百 KB，理论上无上限）。
- * 原实现 `out += d` 有两个问题：① 无上限，异常输入（或将来换成更啰嗦的探针命令）
+ * 逐块 `out += d` 有两个问题：① 无上限，异常输入（或将来换成更啰嗦的探针命令）
  * 能把内存吃满；② 字符串反复重拼接是 O(n²)，长输出时代价陡增。
- * 8MB 定得很宽松 —— 明显高于任何真实 ffprobe 输出，只为把"无界"变成"有界"；
+ * 8MB 定得很宽松，明显高于任何真实 ffprobe 输出，只为把"无界"变成"有界"；
  * 真触到上限说明输入异常，截断后 JSON.parse 会失败并静默返回空元信息
  * （#ffprobe 的 catch 分支），不会把半截数据当正常结果用。
  */
@@ -81,7 +81,7 @@ const MAX_STDOUT_BYTES = 8 * 1024 * 1024;
 function run(cmd, args, timeoutMs = 15000) {
   return new Promise((resolve) => {
     // 分块收集，最后只 join 一次（见 MAX_STDOUT_BYTES 注释的 O(n²) 说明）。
-    // 另一个附带修正：原实现逐块 `out += d` 会按 **chunk 边界**各自解码 UTF-8，
+    // 另一个附带修正：逐块 `out += d` 会按 chunk 边界各自解码 UTF-8，
     // 一个多字节汉字正好被切成两半时会变成 U+FFFD；先拼 Buffer 再整体解码不会。
     const chunks = [];
     let total = 0;
@@ -133,10 +133,9 @@ function runExitOk(cmd, args, timeoutMs = 60000) {
 
 /** 探测 ffprobe / ffmpeg 是否可用。
  *
- * 2026-11-03：路径解析统一交给 ffmpeg-resolve.js。本模块原先**只查 PATH**，
- * 看不见随包那份、也看不见设置页下载的那份 —— 于是同一个安装包里
- * 「图片压缩能用、视频元信息读不出」。缓存与重探口径也一并交给它
- * （命中长期缓存、未命中 60 秒后重探）。
+ * 路径解析统一交给 ffmpeg-resolve.js。只查 PATH 的话，看不见随包那份、
+ * 也看不见设置页下载的那份，于是同一个安装包里「图片压缩能用、视频元信息读不出」。
+ * 缓存与重探口径也一并交给它（命中长期缓存、未命中 60 秒后重探）。
  */
 async function ensureFf() {
   const r = await resolveFfmpeg();
@@ -151,10 +150,10 @@ export class VideoReader {
   /** 抽帧能力是否可用（Skill 生效 + ffmpeg 存在）。 */
   async framesAvailable() {
     // 统一问 video-frames 能力"这条路现在走得通吗"。
-    // 不要在这里再探测一遍 ffmpeg —— 技能里已有一份判断，两份实现迟早不一致
+    // 不要在这里再探测一遍 ffmpeg：技能里已有一份判断，两份实现迟早不一致
     // （例如技能支持自定义 ffmpeg 路径，这里却不知道，于是界面说不可用、实际能用）。
     const providers = skillManager.getCapabilityProviders('video.frames.available', {});
-    if (!providers.length) return false;   // 技能被关或没装 → 这条路不通
+    if (!providers.length) return false;   // 技能被关或没装，这条路不通
     for (const p of providers) {
       try {
         const r = await p.fn({});
@@ -220,10 +219,10 @@ export class VideoReader {
 
     // 4. 按路线取画面
     if (routeInfo.route === 'native') {
-      // 用户定稿规则 5（2026-09-19）：视频输入开启时，所有视频转码成
-      // 最高 480p/24fps 的 mp4 再发给模型 —— 原始视频可能是 1080p/60fps 的
-      // 几十 MB 文件，直接喂会把 token 预算炸穿（甚至被网关拒收）。
-      // 转码失败（没 ffmpeg / 超时 / 产出异常）回退原 URL，不阻塞看视频。
+      // 用户定稿规则：视频输入开启时，所有视频转码成最高 480p/24fps 的 mp4
+      // 再发给模型。原始视频可能是 1080p/60fps 的几十 MB 文件，直接喂会把
+      // token 预算炸穿（甚至被网关拒收）。转码失败（没 ffmpeg / 超时 / 产出异常）
+      // 回退原 URL，不阻塞看视频。
       if (cfg.api?.video === true) {
         const transcoded = hasFile ? await this.#transcodeToMax480(filePath).catch(() => null) : null;
         if (transcoded) {
@@ -334,10 +333,10 @@ export class VideoReader {
   /** 把视频落地为本地文件路径（OneBot 缓存 → 下载 url）。 */
   async #localize(media) {
     // 路径 0：消息里直接给了本地 path
-    // ⚠️（2026-10-16 外部审查 #15）media.path 是**消息段转述**的字段，原实现
-    //    `existsSync 成立就采用` —— 等于"消息里写什么路径就读什么文件"。现在只放行
-    //    我们自己写下的视频缓存（归属 + realpath + 命名规则，见 media-path.js）；
-    //    协议端缓存走下面的路径 1（get_video/get_file 的返回值），那条不是消息可控的。
+    // media.path 是消息段转述的字段，`existsSync 成立就采用` 等于"消息里写什么路径
+    // 就读什么文件"。现在只放行我们自己写下的视频缓存（归属 + realpath + 命名规则，
+    // 见 media-path.js）；协议端缓存走下面的路径 1（get_video/get_file 的返回值），
+    // 那条不是消息可控的。
     if (media.path) {
       const gate = resolveCachedMediaPath(media.path, { kind: 'video' });
       if (gate.ok) return gate.path;
@@ -365,10 +364,10 @@ export class VideoReader {
   }
 
   /**
-   * video-cache 清理（2026-10-12 r92，修 🔴 磁盘无界增长）。
+   * video-cache 清理（修磁盘无界增长）。
    *
-   * 原实现只写不清：`#download` 每次落地一个带随机后缀的新文件（同 URL 重复
-   * probe = 多份副本），全 src 没有任何 unlink/prune 路径 → data/video-cache
+   * 只写不清的后果：`#download` 每次落地一个带随机后缀的新文件（同 URL 重复
+   * probe = 多份副本），全 src 没有任何 unlink/prune 路径，data/video-cache
    * 单调增，单文件上限 200MB，用户形态是"data 目录几天几个 GB"。
    *
    * 现在三道闸：
@@ -407,12 +406,12 @@ export class VideoReader {
     try {
       // 走 safe-fetch：url 来自 OneBot 媒体段（发送方可影响），裸 fetch 会变成 SSRF 通道。
       // 流式落盘（safeFetchBinaryToFile）：整读 200MB 进内存再写盘，多视频并发
-      // 时进程直接被顶爆；边收边写盘后内存占用与视频大小无关（2026-09-19 M8）。
+      // 时进程直接被顶爆；边收边写盘后内存占用与视频大小无关。
       const maxBytes = 200 * 1024 * 1024;   // 视频上限 200MB
       fs.mkdirSync(videoCacheDir(), { recursive: true });
       this.#pruneVideoCache();
-      // 文件名按 URL 哈希：同一视频重复 probe 复用同一副本（r92 修无界增长），
-      // 先写 .part 再 rename —— 并发 probe 同一 URL 时不会互相写半截
+      // 文件名按 URL 哈希：同一视频重复 probe 复用同一副本，
+      // 先写 .part 再 rename，并发 probe 同一 URL 时不会互相写半截
       // （safeFetchBinaryToFile 失败时自己删半截文件，这里兜底 rename 前的残留）。
       const key = crypto.createHash('sha1').update(String(url)).digest('hex').slice(0, 16);
       const dest = path.join(videoCacheDir(), `v_${key}.mp4`);

@@ -20,7 +20,7 @@
 `pnpm run server` 跑的是 `src/server.js`，**完全不加载 Electron**，所以不需要 Electron 二进制，也不需要桌面环境。
 
 - **浏览器打开 `http://127.0.0.1:3210`**（端口见第 5 节）。控制台界面与桌面端是同一份：`src/app.js` 的静态分支把整个 `ui/` 目录服务出去，`/` 就是 `ui/index.html`，脚本在 `/app/*.js`，插件自带页面在 `/plugin-panel/<id>/…`。桌面端独有的能力（`window.qqaDesktop` 桥）不存在时，页面自己降级：窗口按钮只剩返回键、「浏览…」按钮隐藏、背景图选择给出明确提示。
-- **只监听回环**：`src/app.js` 的 `listenOn` 里是 `server.listen(port, '127.0.0.1')`。局域网、远程都访问不到。想从别的设备看，得自己在前面架 nginx 之类的反向代理 —— 那等于把控制台暴露到网络上，风险（控制台里有明文 API Key、协议端凭据）由你自己承担。
+- **只监听回环**：`src/app.js` 的 `listenOn` 里是 `server.listen(port, '127.0.0.1')`。局域网、远程都访问不到。想从别的设备看，得自己在前面架 nginx 之类的反向代理，那等于把控制台暴露到网络上，风险（控制台里有明文 API Key、协议端凭据）由你自己承担。
 - **端口让位**：从 `config.server.port`（默认 3210）起逐个 +1 试听，最多试到 +9；实际端口写进 `<数据目录>/console-port`（一行数字，每次启动覆盖，退出不删）。
 - **鉴权**：
   - `server.token` 为空（默认）→ `/api/*` 直接放行，浏览器打开即用。
@@ -29,7 +29,7 @@
   - 「显示 API Key」「协议端控制台密码」这类明文密钥端点，在浏览器里默认读不到（`keyEndpointAllowed` 只认 Electron 主进程注入的渲染凭据或你自配的 `server.token`）。需要时配 token，而不是去打开 `server.allowBrowserKeyRead`。
 - **网页模式没有的功能**：托盘常驻、开机自启、桌宠（`desktopPetHost` 为 `null`，桌宠页会提示「需要 QQ Agent 桌面程序」）、桌面悬浮小窗、选背景图 / 选文件夹这类原生对话框。壁纸控制（Wallpaper Engine）走系统命令，网页模式下照常可用。
 - **怎么停**：`Ctrl+C`。`src/server.js` 注册了 SIGINT，会先 `app.stop()`（落盘、释放单实例锁、断开 OneBot）再退出。直接关终端窗口属于强杀，锁文件靠下次启动时的残留检测自动接管。
-- **启动日志**：同时写两处 —— 终端（stdout，`[模块] 消息`）和 `<数据目录>/logs/qq-agent-<日期>.log`（带时间戳与级别）。启动完成时会打一行 `控制台已就绪：http://127.0.0.1:<端口>`，这就是实际端口；`<数据目录>/console-port` 里也有同一份数字。启动失败走 stderr 打 `[启动失败] …` 并退出。
+- **启动日志**：同时写两处，终端（stdout，`[模块] 消息`）和 `<数据目录>/logs/qq-agent-<日期>.log`（带时间戳与级别）。启动完成时会打一行 `控制台已就绪：http://127.0.0.1:<端口>`，这就是实际端口；`<数据目录>/console-port` 里也有同一份数字。启动失败走 stderr 打 `[启动失败] …` 并退出。
 
 ### 1.2 桌面端
 
@@ -59,7 +59,7 @@ pnpm run verify:version # 校验 VERSION / package.json / CHANGELOG 顶部版本
 
 ## 2. 环境变量
 
-所有环境变量都在**进程启动时**读取一次，改完要重启。Windows 下 `$env:NAME="值"`，bash 下 `export NAME=值`。
+所有环境变量都在进程启动时读取一次，改完要重启。Windows 下 `$env:NAME="值"`，bash 下 `export NAME=值`。
 
 ### 2.1 运行与路径
 
@@ -67,9 +67,9 @@ pnpm run verify:version # 校验 VERSION / package.json / CHANGELOG 顶部版本
 |---|---|---|---|
 | `QQ_AGENT_DATA_DIR` | 数据目录，覆盖一切推导 | 任意绝对路径；不设时按 profile 推导 | `src/config.js` 的 `DATA_DIR`；桌面端见 `electron/main.js` 的 `resolveDataDir` |
 | `QQ_AGENT_PROFILE` | 多实例编号 | 纯数字；非数字视为未设 | `src/profile.js` 的 `PROFILE_ID` / `portOffset` |
-| `QQ_AGENT_PORT` | 控制台端口 | 数字；**只在 `config.json` 里还没有 `server.port` 时生效** | `src/config.js` 的 `DEFAULT_CONFIG.server.port` |
+| `QQ_AGENT_PORT` | 控制台端口 | 数字；只在 `config.json` 里还没有 `server.port` 时生效 | `src/config.js` 的 `DEFAULT_CONFIG.server.port` |
 | `QQ_AGENT_DEV` | 强制打开扩展热重载 | `1` = 强制开（不能强制关） | `src/app.js` 的 `hotReloadOn` |
-| `QQ_AGENT_DEV_SANDBOX` | 开发工单沙箱根目录 | 绝对路径；默认在应用根外两级 | `src/harness/dev/index.js` 的 `SANDBOX_ENV` |
+| `QQ_AGENT_DEV_SANDBOX` | 开发工单沙箱根目录 | 绝对路径；默认在应用根外两级的 `dev-sandbox/` | `src/harness/dev/index.js` 的 `SANDBOX_ENV` |
 | `QQ_AGENT_DEV_CTX_BUDGET` | 开发工单的单轮上下文字符预算 | 数字；默认 400K 字符 | `src/harness/dev/executor.js` 的 `DEV_CTX_CHAR_BUDGET_DEFAULT` |
 | `QQ_AGENT_FFMPEG` | 指定 ffmpeg 路径（优先于自动探测） | 可执行文件绝对路径 | `src/ffmpeg-resolve.js` 的 `buildCandidatesByGroup` |
 | `QQ_AGENT_COMMUNITY_KEY` | 云端屏蔽名单写密钥（仅管理员） | 字符串；显式设为空 = 不用 | `src/community.js` 的 `communityWriteKey` |
@@ -129,7 +129,7 @@ Bing 网页解析不需要 Key，是默认搜索源。
 | `messages/` | 群聊与私聊消息存档（每条带时间与已读状态） |
 | `memory/` | 群友印象（控制台「记忆」页） |
 | `memory-v2/` | 内置分层记忆的派生索引（历史数据，保留不删） |
-| `memory-v3/` | `mem-layered` 插件的数据根 |
+| `memory-v3/` | `mem-layered` 插件的分层记忆数据根 |
 | `sessions/` | 每次处理的会话卡片留档（提示词、思考、工具调用、实际发出的消息） |
 | `logs/` | 按天日志 `qq-agent-<日期>.log`，保留 7 天 |
 | `plugin-data/<id>/` | 各插件/技能自己的数据（自检报告、修复工单、锻造台暂存、开发工单等） |
@@ -166,21 +166,21 @@ Bing 网页解析不需要 Key，是默认搜索源。
 | `2` | `data-2/` | 3410 | 3201 / 3200 |
 | `N` | `data-N/` | 3210 + N×100 | 3001 + N×100 / 3000 + N×100 |
 
-偏移是恒定的 N×100，不是固定 +100 —— 否则 #2 和 #3 会互撞。
+偏移是恒定的 N×100，不是固定 +100，否则 #2 和 #3 会互撞。
 
-> ⚠️ **偏移只写进「默认值」，不覆盖已存的配置。** `src/config.js` 的 `loadConfig` 把磁盘上的 `config.json` 深合并到 `DEFAULT_CONFIG` 之上，所以只要 `data-N/config.json` 里已有 `server.port` / `protocol.wsUrl` / `protocol.httpUrl`，就以文件里的值为准，profile 只决定数据目录名。`data-N/` 一旦落过配置，端口就固定下来了（首次按偏移值落盘，自洽）。
+> ⚠️ 偏移只写进「默认值」，不覆盖已存的配置。`src/config.js` 的 `loadConfig` 把磁盘上的 `config.json` 深合并到 `DEFAULT_CONFIG` 之上，所以只要 `data-N/config.json` 里已有 `server.port` / `protocol.wsUrl` / `protocol.httpUrl`，就以文件里的值为准，profile 只决定数据目录名。`data-N/` 一旦落过配置，端口就固定下来了（首次按偏移值落盘，自洽）。
 >
-> 由此得出两条实操规则：**不要从 `data/` 复制 `config.json` 到 `data-2/`**（端口与协议端地址会一起复制过去，两个实例撞同一套端口）；复制过的话，进控制台把「工具 → 连接」的地址和 `server.port` 改到偏移值。
+> 由此得出两条实操规则：不要从 `data/` 复制 `config.json` 到 `data-2/`（端口与协议端地址会一起复制过去，两个实例撞同一套端口）；复制过的话，进控制台把「工具 → 连接」的地址和 `server.port` 改到偏移值。
 
 正确姿势：
 
 1. 每个实例设一个不同的 `QQ_AGENT_PROFILE`，各自用 `pnpm run server` 起。
-2. 每个实例在协议端里登录**不同的 QQ 号**，并且协议端的 OneBot 端口要各自对齐（协议端默认只开 3001/3000，第二套需要在协议端里另建一组端口，再在控制台「工具 → 连接」页改成偏移后的地址）。
+2. 每个实例在协议端里登录不同的 QQ 号，并且协议端的 OneBot 端口要各自对齐（协议端默认只开 3001/3000，第二套需要在协议端里另建一组端口，再在控制台「工具 → 连接」页改成偏移后的地址）。
 3. 白名单、模型 Key、人设按实例各自配一遍（数据目录独立，配置不共享）。
 
-> **不设 profile 会双份回复。** 两个实例连同一个协议端、处理同一个 QQ 号的消息，群里就会收到两遍同样的回复。同一数据目录本身会被核心的单实例锁（`qq-agent.lock`）拦住，所以更常见的形态是"数据目录分开了，但端口没分开、连的还是同一个协议端"。
+> 不设 profile 会双份回复。两个实例连同一个协议端、处理同一个 QQ 号的消息，群里就会收到两遍同样的回复。同一数据目录本身会被核心的单实例锁（`qq-agent.lock`）拦住，所以更常见的形态是"数据目录分开了，但端口没分开、连的还是同一个协议端"。
 >
-> **桌面端不能靠 profile 多开。** Electron 的单实例锁按用户数据目录生效（实测：同一 `userData` 下第二个实例拿到锁失败，换 `userData` 或传 `--user-data-dir` 则两边都能拿到），而 `electron/main.js` 没有按 profile 切换 `userData`，所以第二个桌面实例会直接弹「已经在运行了」并退出。要多开请用网页模式；桌面端（`data/`）与若干 headless 实例（`data-2/`、`data-3/`…）可以并存，互不干扰。给桌面端传 `--user-data-dir` 理论上能绕过这条锁，但本项目没有适配、也没有验证过这种组合，不列为支持路径。
+> 桌面端不能靠 profile 多开。Electron 的单实例锁按用户数据目录生效（实测：同一 `userData` 下第二个实例拿到锁失败，换 `userData` 或传 `--user-data-dir` 则两边都能拿到），而 `electron/main.js` 没有按 profile 切换 `userData`，所以第二个桌面实例会直接弹「已经在运行了」并退出。要多开请用网页模式；桌面端（`data/`）与若干 headless 实例（`data-2/`、`data-3/`…）可以并存，互不干扰。给桌面端传 `--user-data-dir` 理论上能绕过这条锁，但本项目没有适配、也没有验证过这种组合，不列为支持路径。
 
 ---
 
@@ -194,7 +194,7 @@ Bing 网页解析不需要 Key，是默认搜索源。
 
 **端口让位**：`src/app.js` 的 `start()` 从基准端口起逐个 +1 试听，共试 10 个（基准 … 基准 +9）。实际端口写进 `<数据目录>/console-port`，每次启动覆盖、退出时故意不删（脚本在应用没起时还能读到上次的端口）。10 个全被占则启动失败，退出码 1，stderr 打印 `[启动失败] Error: listen EADDRINUSE …`。
 
-叠加顺序是**先 profile 偏移、再让位**：`PROFILE=2` 从 3410 开始试，3410 被占就用 3411。
+叠加顺序是先 profile 偏移、再让位：`PROFILE=2` 从 3410 开始试，3410 被占就用 3411。
 
 ### 5.1 网页模式的完整使用流程
 
@@ -209,8 +209,8 @@ Bing 网页解析不需要 Key，是默认搜索源。
 
 ## 6. 前置条件
 
-- **Node.js ≥ 22.12.0**、**pnpm ≥ 12.0.0**（`package.json` 的 `engines`，`packageManager` 锁到 `pnpm@12.14.0`）。
-- **协议端二选一**：SnowLuma 或 NapCat，两者默认都开 OneBot v11 的 WS 3001 / HTTP 3000，装好即连。本项目不分发、不启动协议端。安装与登录步骤见 [README](../README.md) 的「安装与使用」第 1 步。
+- Node.js ≥ 22.12.0、pnpm ≥ 12.0.0（`package.json` 的 `engines`，`packageManager` 锁到 `pnpm@12.14.0`）。
+- 协议端二选一：SnowLuma 或 NapCat，两者默认都开 OneBot v11 的 WS 3001 / HTTP 3000，装好即连。本项目不分发、不启动协议端。安装与登录步骤见 [README](../README.md) 的「安装与使用」第 1 步。
 - 首次 `pnpm install` 会下载 Electron 二进制（约 238 MB）；国内网络慢可先设 `ELECTRON_MIRROR`，写法见 README。
 
 ---
@@ -226,7 +226,7 @@ Bing 网页解析不需要 Key，是默认搜索源。
 | 控制台打不开，日志里是 `EADDRINUSE` | 基准端口起连续 10 个端口都被占 | 改 `config.json` 的 `server.port`，或换 profile（第 4 节）。实际端口始终看 `console-port` |
 | 「机器人工作中」一直不亮 | 协议端没起、端口对不上、或访问令牌不一致。`/api/status` 的 `onebot.diagnosis` 会直接说缺什么 | 先确认协议端在跑且开了 WS 3001；再核对「工具 → 连接」页的地址与令牌，改完「保存并重连」即可生效，不用重启 |
 | headless 跑完发现仓库根多出 `plugin-data/`，自检报告在界面上看不到 | 旧版本的数据目录在 env 为空时回落到进程 cwd。现已统一走 `src/config.js` 的 `DATA_DIR`（按模块位置锚定，不看 cwd，profile 也一并正确） | 升级到含该修复的版本；确认 `data/plugin-data/` 才是界面读的那份 |
-| 网页模式终端里什么都没有 | 0.5.0.0 及更早版本的 `createApp` 把日志监听器闭包与形参 `log` 共享绑定，改指 `appLog` 后形成自指、被 logger 重入防护静默丢弃 —— 终端与 Electron console 都收不到，只有日志文件有 | 升级到含该修复的版本；期间临时看 `<数据目录>/logs/qq-agent-<日期>.log` 或控制台「工具 → 连接 → 应用日志」 |
+| 网页模式终端里什么都没有 | 0.5.0.0 及更早版本的 `createApp` 把日志监听器闭包与形参 `log` 共享绑定，改指 `appLog` 后形成自指、被 logger 重入防护静默丢弃，终端与 Electron console 都收不到，只有日志文件有 | 升级到含该修复的版本；期间临时看 `<数据目录>/logs/qq-agent-<日期>.log` 或控制台「工具 → 连接 → 应用日志」 |
 | 浏览器里「显示 API Key」「协议端控制台密码」读不出来 | 明文密钥端点只认 Electron 注入的渲染凭据或自配的 `server.token`；`server.allowBrowserKeyRead` 默认关 | 配 `server.token` 并用 `?token=` 打开（第 1.1 节），不要为了省事去打开 `allowBrowserKeyRead` |
 
 ---

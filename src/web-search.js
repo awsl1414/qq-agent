@@ -1,10 +1,10 @@
 // 联网搜索（移植自原版 bingSearch）：Bing 中文搜索，无需 API key。
 // 搜索请求本身用普通 fetch（搜索 URL 是管理端配置的可信地址，只需清洗查询词）；
 // 对外抓取网页正文一律走 safe-fetch（web_fetch 工具）。
-// ⚠️ L15 备注（2026-09-19）：主搜索的裸 fetch 属"管理员自伤面"而非远程可利用面
-//    （URL 来自本机配置，不经模型/群友控制）。这里维持普通 fetch 的原因：
-//    safe-fetch 会拒绝解析到内网的地址，而"搜索接口部署在自家内网/反代后"是
-//    合法配置。真正的远程输入（模型传进来的 query）已由 sanitizeQuery 清洗。
+// 主搜索的裸 fetch 属"管理员自伤面"而非远程可利用面（URL 来自本机配置，
+// 不经模型/群友控制）。这里维持普通 fetch 的原因：safe-fetch 会拒绝解析到内网的地址，
+// 而"搜索接口部署在自家内网/反代后"是合法配置。真正的远程输入（模型传进来的 query）
+// 已由 sanitizeQuery 清洗。
 import { getConfig } from './config.js';
 import { safeFetch } from './safe-fetch.js';
 
@@ -59,8 +59,8 @@ function decodeHtml(s) {
 
 /**
  * Bing 结果页解析（b_algo 结果块）。
- * bingSearch（主搜索）与自定义 bing 类型共用这一份 —— 之前两处各写一遍，
- * 单边改解析规则另一边悄悄漂移（原 bingSearchWithUrl 的注释甚至已与实现脱节）。
+ * bingSearch（主搜索）与自定义 bing 类型共用这一份。两处各写一遍的话，
+ * 单边改解析规则另一边悄悄漂移。
  * 返回 [{ title, url, snippet }]，失败抛错（页面改版/非 200）。
  */
 async function fetchBingoResults(searchUrl, query, maxResults) {
@@ -128,7 +128,7 @@ export async function webSearch(query) {
  * 文档：https://api-docs.deepseek.com/zh-cn/guides/responses_api
  * 说明：搜索在 DeepSeek 服务端完成并注入上下文，客户端能拿到的是模型基于
  * 搜索结果生成的最终回答；URL/标题/摘要为黑盒，拿不到结构化来源。适合
- * “只要能搜到并总结”的场景；需要引用列表时请用 Bing / 其他搜索 API。
+ * "只要能搜到并总结"的场景；需要引用列表时请用 Bing / 其他搜索 API。
  */
 export async function deepSeekSearch(query) {
   const cfg = getConfig().webSearch?.deepseek ?? {};
@@ -168,13 +168,13 @@ export async function deepSeekSearch(query) {
 }
 
 /** 抓取网页正文（走 safe-fetch 的 SSRF 全防护）。
- * browseLocked：浏览锁定开启时必须传 true —— safeFetch 会逐跳校验
+ * browseLocked：浏览锁定开启时必须传 true，safeFetch 会逐跳校验
  * （含重定向目标）是否在白名单内。web_fetch 工具曾经漏传这个参数，
  * 锁定开启时模型照样能抓任意站点，白名单形同虚设。 */
 export async function webFetch(url, { browseLocked = false } = {}) {
-  // ⚠️ 显式提高读取上限（2026-10-08）：safeFetch 的默认文本上限是 50KB，
-  //   很多正常页面光 HTML 就 >50KB → 正文/图片会被无声截掉。
-  //   工具的**输出**另有 2 万字符的硬截断，所以放宽抓取上限只是"让截断发生在该发生的地方"。
+  // 显式提高读取上限：safeFetch 的默认文本上限是 50KB，
+  // 很多正常页面光 HTML 就 >50KB，正文/图片会被无声截掉。
+  // 工具的输出另有 2 万字符的硬截断，所以放宽抓取上限只是"让截断发生在该发生的地方"。
   const result = await safeFetch(url, { browseLocked, maxBytes: WEB_FETCH_MAX_BYTES });
   return result;
 }
@@ -426,16 +426,14 @@ async function bingSearchWithUrl(query, searchUrl) {
   return { query, results };
 }
 
-// ══════════════════════════════════════════════════════════════════════════
-// 图片搜索与站内搜索（供 send_image / search_images 工具使用）
-// ══════════════════════════════════════════════════════════════════════════
+// ── 图片搜索与站内搜索（供 send_image / search_images 工具使用）──────────
 //
 // 为什么单独一组函数，而不是复用 webSearch：
-//   webSearch 返回的是**网页链接**，模型拿到后往往"再抓一次页面、再从中挑图"，
-//   多两轮工具调用。发图场景需要的是**图片直链**，直接给它，省一轮。
+//   webSearch 返回的是网页链接，模型拿到后往往"再抓一次页面、再从中挑图"，
+//   多两轮工具调用。发图场景需要的是图片直链，直接给它，省一轮。
 //
-// 注意：这两个解析器依赖搜索引擎的 HTML 结构，**页面改版就会失效**。
-// 所以失败时抛错而不是返回空数组 —— 让调用方知道"是解析坏了"而不是"没结果"。
+// 这两个解析器依赖搜索引擎的 HTML 结构，页面改版就会失效。
+// 所以失败时抛错而不是返回空数组，让调用方知道"是解析坏了"而不是"没结果"。
 
 /**
  * 站内搜索：把 `{query}` 模板替换成 URL 编码的关键词。
@@ -523,13 +521,13 @@ export function extractPageDigest(html, _baseUrl = '', { maxChars = 6000, maxLin
 
 // ── 图片搜索 ──────────────────────────────────────────────────────────────
 //
-// 2026-10-08 重写（用户报障「联网搜图经常搜不了」）。原实现有两处致命伤：
-//   ① 抓的是**完整搜索页 HTML**，而 safe-fetch 的文本上限当时被硬编码成 50KB →
-//      页面在结果数据之前就被截断 → 两个源都报"没解析到结果"。实测当时**两家 100% 全挂**。
-//   ② 百度那条路已经彻底死了：`image.baidu.com/search/index` 现在只回一个 469 字节的
-//      桩页（0 个直链字段），AJAX 接口 `acjson` 直接回 `{"antiFlag":1,"message":"Forbid spider access"}`；
-//      搜狗的 `napi` 也回 `{"status":1,"info":"forbid"}`。所以百度源已删除。
-// 现在：**360 图搜 JSON 接口**（主）+ **Bing images/async 片段**（备）。
+// 原实现有两处致命伤：① 抓的是完整搜索页 HTML，而 safe-fetch 的文本上限当时
+// 被硬编码成 50KB，页面在结果数据之前就被截断，两个源都报"没解析到结果"，
+// 实测当时两家 100% 全挂；② 百度那条路已经彻底死了：`image.baidu.com/search/index`
+// 现在只回一个 469 字节的桩页（0 个直链字段），AJAX 接口 `acjson` 直接回
+// `{"antiFlag":1,"message":"Forbid spider access"}`，搜狗的 `napi` 也回
+// `{"status":1,"info":"forbid"}`，所以百度源已删除。
+// 现在：360 图搜 JSON 接口（主）+ Bing images/async 片段（备）。
 // 解析抽成纯函数，可被测试直接驱动。
 const IMG_FETCH_MAX_BYTES = 1024 * 1024;   // 实测图搜响应 ~90KB，给到 1MB 足够
 const WEB_FETCH_MAX_BYTES = 512 * 1024;    // 抓网页正文：50KB 太小（页面光 HTML 就常超）
@@ -538,7 +536,7 @@ const WEB_FETCH_MAX_BYTES = 512 * 1024;    // 抓网页正文：50KB 太小（�
  * 解析 Bing `images/async` 片段里的图片直链（纯函数）。
  *
  * Bing 把结果塞在 `m="{&quot;murl&quot;:&quot;...&quot;}"` 这样的属性里（HTML 实体编码）。
- * 解析不出来就返回空数组，不抛错 —— 由调用方决定"这一源没结果 → 换源"。
+ * 解析不出来就返回空数组，不抛错，由调用方决定"这一源没结果 → 换源"。
  * @returns {string[]}
  */
 export function parseBingImageUrls(html, limit = 8) {
@@ -608,7 +606,7 @@ export async function soImageSearch(query, { limit = 8, browseLocked = false } =
 /**
  * Bing 图搜（备源）。
  *
- * 用 `images/async` **片段**而不是完整搜索页：完整页 >200KB 且结果埋得很深，
+ * 用 `images/async` 片段而不是完整搜索页：完整页 >200KB 且结果埋得很深，
  * 这个接口专供懒加载，体积小、结果集中。
  */
 export async function bingImageSearch(query, { limit = 8, browseLocked = false } = {}) {
@@ -628,7 +626,7 @@ export async function bingImageSearch(query, { limit = 8, browseLocked = false }
 /**
  * 图片搜索入口：按顺序试多个源，任一有结果就用。
  *
- * 为什么必须多源：这几家的接口都随时可能改版 / 封爬（2026-10-08 实测百度、搜狗都已封）。
+ * 为什么必须多源：这几家的接口都随时可能改版 / 封爬（实测百度、搜狗都已封）。
  * 只押一个源的话，封掉当天功能就整个不可用。
  */
 export async function searchImages(query, { limit = 8, browseLocked = false } = {}) {

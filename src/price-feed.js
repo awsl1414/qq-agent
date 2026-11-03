@@ -4,20 +4,20 @@
 //   1. 本地永远有一张表可用：内置表（代码里）+ 拉到的表落盘缓存，
 //      服务器挂了、重启了、断网了都不影响查价
 //   2. 定期拉取：启动时拉一次，之后每 24 小时重拉；失败过 3 小时再试
-//   3. 对正常使用**零影响**：拉取全异步（不阻塞启动/请求），所有错误
+//   3. 对正常使用零影响：拉取全异步（不阻塞启动/请求），所有错误
 //      都被吞进状态字段，这个模块的任何函数都不允许把异常抛给调用方
 //
 // 工作方式：
 //   1. 启动时先应用磁盘缓存（上次拉到的表），再联网拉新
 //   2. 之后每小时检查一次：成功表超过 24h 就重拉；上次失败超过 3h 就重试
-//   3. 拉取失败不清表 —— 远程缓存 > 内置表，总有一张表可用
+//   3. 拉取失败不清表，远程缓存 > 内置表，总有一张表可用
 //
 // 远程 JSON 格式（兼容四种外形，方便直接复用各种导出物）：
 //   { "deepseek-v4-flash": { "in": 1.5, "out": 4.5, "cached": 0.05 } }   // 裸 map
 //   { "prices": { ...同上... } }                                          // 带包裹
 //   { "prices": [ { "id": "...", "in": 1.5, ... } ] }                     // 数组（listOfficialPrices 的产物）
 //   [ { "id": "...", ... } ]                                              // 裸数组
-// 条目字段：in/out 必填数字（元/百万 token），cached 可 null，
+// 条目字段：in/out 至少一个是数字（元/百万 token），cached 可 null，
 //           peak/image/note/src 可选，与内置表条目同构。
 import fs from 'node:fs';
 import path from 'node:path';
@@ -172,17 +172,16 @@ export async function refreshPriceFeed(_url) {
  * 初始化远程价格表：吃缓存 → 立即拉 → 起定时检查。
  * 幂等：URL 没变就什么都不做（配置保存时会再次调这里）。
  *
- * ⚠️ 所有不带 await 的调用都挂 .catch(() => {})：
- *    refreshPriceFeed 内部已全 catch，这里是第二道保险 ——
- *    这个模块绝不允许以任何方式影响主程序（未捕获的 rejection 也算）。
+ * 所有不带 await 的调用都挂 .catch(() => {})：refreshPriceFeed 内部已全 catch，
+ * 这里是第二道保险。这个模块绝不允许以任何方式影响主程序（未捕获的 rejection 也算）。
  */
 export function initPriceFeed(_url) {
   // 价格表地址固定为官网公开地址；内部测试 override 不由 UI/配置传入。
   const url = testOverrideUrl || FIXED_PRICE_FEED_URL;
-  // ⚠️（2026-10-12 r92 修）幂等判定必须**先于**清理：原实现先无条件
-  //   clearInterval 再判"同 URL 已初始化"，命中幂等时定时器已被清掉且不重建
-  //   → 用户在设置页点任何一次保存（POST /api/config 会调到这里）就永久停掉
-  //   价格表轮询，24h 重拉/3h 失败重试全部停摆直到重启进程，且完全静默。
+  // 幂等判定必须先于清理。先无条件 clearInterval 再判"同 URL 已初始化"的话，
+  // 命中幂等时定时器已被清掉且不重建，用户在设置页点任何一次保存
+  // （POST /api/config 会调到这里）就永久停掉价格表轮询，
+  // 24h 重拉/3h 失败重试全部停摆直到重启进程，且完全静默。
   if (status.url === url && status.enabled && timer) return;   // 同 URL 已初始化过
   if (timer) { clearInterval(timer); timer = null; }
   if (!url) {

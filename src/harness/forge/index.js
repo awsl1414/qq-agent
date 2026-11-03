@@ -1,14 +1,14 @@
-// 扩展锻造台（extension-forge）—— 让模型自己写插件 / 技能。
+// 扩展锻造台（extension-forge）：让模型自己写插件 / 技能。
 //
-// ── 为什么它是一个独立插件，而不是塞进 self-doctor ──
+// ── 为什么独立成模块，而不是塞进 self-doctor ──
 //   self-doctor 的自我声明是"**全程只读，不写任何被检对象**"，而且它的一部分价值
-//   正来自这个承诺。往里加"往磁盘写可执行 JS"的能力会直接毁掉这个契约 ——
+//   正来自这个承诺。往里加"往磁盘写可执行 JS"的能力会直接毁掉这个契约，
 //   而它自己就有一条规则专抓"声明与行为不符"这类问题。
 //
 // ── 三段式：起草 → 过闸 → 落地 ──
 //   1. **起草**：模型用 forge-tools.js 的写工具把草稿写进暂存区
 //      （<DATA_DIR>/plugin-data/extension-forge/staging/<draftId>/）。
-//      暂存区**不在** plugins/ 或 skills/ 下 —— 那两个目录被 fs.watch 监听，
+//      暂存区**不在** plugins/ 或 skills/ 下，那两个目录被 fs.watch 监听，
 //      写进去 500ms 就会被当正式扩展加载执行。这一步把"生成"与"生效"隔开。
 //   2. **过闸**：gate.js 跑五道闸门（结构 / 语法 / 危险模式 / 声明-实现一致 / 环境适配）。
 //   3. **落地**：本文件的 forge.install 把放行过的草稿搬进 skills/ 或 plugins/，
@@ -17,14 +17,14 @@
 // ── 安全立场（必须说清）──
 //   **进程内 Node 模块无法被真正沙箱。** 落地后的代码拥有完整权限：能 import fs
 //   读 account.json（内含 API Key）、能 child_process、能联网。项目现有的
-//   permissions 白名单只拦住了 fetch 一项 —— 因为 fs 是扩展自己 import 的，
+//   permissions 白名单只拦住了 fetch 一项，因为 fs 是扩展自己 import 的，
 //   拦截层根本碰不到。
 //
 //   所以本插件**不是**在提供沙箱，而是在提供三道可检查的关口：
 //     · 写盘 confinement（forge-tools.js：路径永远出不了暂存区）
 //     · 静态危险扫描（gate.js：block 级一票否决，confirm 级需人工放行）
 //     · **人工确认**（UI 上必须点"安装"；本插件从不自动落地任何东西）
-//   最后一条是真正的防线 —— 前两条是为了让"确认"这个动作有足够信息可依据。
+//   最后一条是真正的防线：前两条是为了让"确认"这个动作有足够信息可依据。
 //
 // 红线（本项目铁律）：本插件自己的落盘只写 data/plugin-data/extension-forge/。
 
@@ -41,12 +41,12 @@ import { runGates, GATE_MAX_FILES, draftDigest } from './gate.js';
 // 插件 import src/ 下工具模块是本项目既有做法（media-download → safe-fetch、
 // reply-safety → llm），不是特例。
 import { parseZip } from '../../zip-install.js';
-// M5（2026-10-14）：数据目录以核心的 DATA_DIR 为唯一真源（含 QQ_AGENT_PROFILE 推导），
-// 不再各自用 `QQ_AGENT_DATA_DIR || '.'` 拼（那样会回落到进程 cwd）。
+// 数据目录以核心的 DATA_DIR 为唯一真源（含 QQ_AGENT_PROFILE 推导），
+// 不用 `QQ_AGENT_DATA_DIR || '.'` 拼（那样会回落到进程 cwd）。
 import { DATA_DIR } from '../../config.js';
 // 内置基线重算：升级 / 回滚落地后，把该模块的指纹刷新回 builtin-modules.json。
-// 不刷新的话，下一轮热重扫会把它当"占了内置目录名的第三方"拦下 —— 细节见
-// plugin-loader.js 的 refreshBuiltinEntry 注释（2026-10-08 修的闭环缺口）。
+// 不刷新的话，下一轮热重扫会把它当"占了内置目录名的第三方"拦下。细节见
+// plugin-loader.js 的 refreshBuiltinEntry 注释。
 import { refreshBuiltinEntry } from '../../plugin-loader.js';
 
 const DEFAULTS = {
@@ -64,9 +64,9 @@ let appRoot = null;
 let dataBase = null;      // <DATA_DIR>（含 logs/ 与 plugin-data/）
 
 /**
- * 本地环境快照 —— 给"适配"用。
+ * 本地环境快照：给"适配"用。
  *
- * 为什么需要它：第三方扩展是对着**别人的环境**写的，最常见的失败不是"不安全"，
+ * 第三方扩展是对着**别人的环境**写的，最常见的失败不是"不安全"，
  * 而是"水土不服"：requires 了一个本机没人提供的能力、调了一个本地不存在的 api 成员。
  * 模型要修这些，就必须先知道本地有什么。
  */
@@ -91,9 +91,9 @@ function envSnapshot() {
 function envBrief() {
   const snap = envSnapshot();
   return {
-    // ⚠️ 与 gate.js 的 KNOWN_APIS、plugin-loader.js 的 createSkillApi 三处同步。
-    //    storage 是扩展的持久化存储（plugin-loader 的 makeSkillStorage）——
-    //    2026-10-10 收包人报告②：这里漏列 storage，模型适配时不敢用闸门推荐的写法。
+    // 与 gate.js 的 KNOWN_APIS、plugin-loader.js 的 createSkillApi 三处同步。
+    //    storage 是扩展的持久化存储（plugin-loader 的 makeSkillStorage）：
+    //    这里漏列的话，模型适配时不敢用闸门推荐的写法。
     knownApis: ['registerTool', 'config', 'isSkillActive', 'capability', 'hasCapability',
       'storage.get / storage.set / storage.remove', 'log', 'warn', 'error',
       'fetch（需声明 web_fetch 权限）', 'utils.sleep', 'utils.safeJsonParse'],
@@ -119,7 +119,7 @@ function toolCtx(draftId = null) {
 
 // ── 草稿元数据（_meta/<draftId>.json）──────────────────────────────────────
 // 只有一处真源：需求文本、来源（市场口令 / 自创 / 升级目标）、确认票据都住在这里。
-// 读写都走这两个函数 —— save-meta 原来各写各的，一次覆盖就把票据抹了。
+// 读写都走这两个函数：各写各的话，一次覆盖就把票据抹了。
 function metaPath(ctx, id) {
   return path.join(stagingRoot(ctx), '_meta', `${id}.json`);
 }
@@ -143,7 +143,7 @@ function writeMetaRaw(ctx, id, obj) {
 //
 // 闸门回答的是「这份东西安全吗」，票据回答的是「**人**看过这份东西了吗」。
 // 两者不能互相替代：
-//   · 静态扫描是启发式的（见 gate.js 头注释），过闸不等于安全 —— 所以闸门
+//   · 静态扫描是启发式的（见 gate.js 头注释），过闸不等于安全。所以闸门
 //     再严也不该自动换出"安装许可"；
 //   · "看过"必须绑定到具体字节（digest），否则确认完再改内容就白确认了。
 // 票据一次性、10 分钟过期、绑摘要，且**只能由人工在控制台签发**
@@ -195,10 +195,10 @@ function markApprovalConsumed(ctx, id, consumed) {
   writeMetaRaw(ctx, id, meta);
 }
 
-/** 闸门选项（统一入口 —— 避免有的调用点忘了带 env，导致第 4 道检查静默跳过）。 */
+/** 闸门选项（统一入口：避免有的调用点忘了带 env，导致第 4 道检查静默跳过）。 */
 function gateOpts(id = '') {
-  // 档位（2026-10-22）：别人打的包（zip 导入 / 市场下载 / 升级副本）走 third-party 尺度，
-  // 模型现写的走 generated（最严）。判据写在 _meta 里而不是草稿目录里 ——
+  // 档位：别人打的包（zip 导入 / 市场下载 / 升级副本）走 third-party 尺度，
+  // 模型现写的走 generated（最严）。判据写在 _meta 里而不是草稿目录里：
   // 草稿内容会被原样复制进模块目录，标记文件混进去是污染；且那份内容第三方能改，当判据不可信。
   let meta = {};
   try { meta = id ? readMetaRaw(toolCtx(), sanitizeDraftId(id)) : {}; } catch { meta = {}; }
@@ -218,18 +218,16 @@ export function setup(api) {
   log = api.log;
 
   // 本插件自己的数据目录：<DATA_DIR>/plugin-data/extension-forge/
-  // ⚠️（2026-10-14 修 M5）原来写 `QQ_AGENT_DATA_DIR || '.'` —— env 没设时**回落进程 cwd**，
-  //   而核心的数据目录还有 QQ_AGENT_PROFILE 推导这一层（见 src/config.js）。
-  //   后果：多实例 profile 启动（data-2）、或安装版从别的目录拉起时，草稿暂存区
-  //   会落到错误目录 —— 正是 conversation-memory/lib/env.js 用整段注释警告的事故类别
-  //   （"实例 #2 写进 #1 的目录，极难发现"）。统一改用核心导出的 DATA_DIR（同一真源）。
+  // 用 `QQ_AGENT_DATA_DIR || '.'` 的话，env 没设时**回落进程 cwd**，而核心的
+  //    数据目录还有 QQ_AGENT_PROFILE 推导这一层（见 src/config.js）。后果：多实例
+  //    profile 启动（data-2）、或安装版从别的目录拉起时，草稿暂存区会落到错误目录
+  //    （"实例 #2 写进 #1 的目录，极难发现"）。统一改用核心导出的 DATA_DIR（同一真源）。
   const own = path.join(DATA_DIR, 'plugin-data', 'extension-forge');
   // toolCtx.dataRoot 要的是 <DATA_DIR> 本身（tools 层会再拼 plugin-data/extension-forge/staging）
   dataBase = path.dirname(path.dirname(own));
   // app 根：本文件位于 <appRoot>/src/harness/forge/index.js
-  // ⚠️ 必须用 fileURLToPath —— new URL().pathname 在 Windows 上给出 /E:/... 带前导斜杠，
+  // 必须用 fileURLToPath：new URL().pathname 在 Windows 上给出 /E:/... 带前导斜杠，
   //    且中文/空格路径不会自动解码。
-  // 内置化后本文件位于 <appRoot>/src/harness/<mod>/index.js —— 层级比插件期深一层，
   // 优先用宿主注入的 appRoot（见 src/harness/index.js），算错会让自检/修复指向 src/。
   appRoot = api.appRoot || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -264,7 +262,7 @@ export const providers = {
   /**
    * 把"别人发来的 zip"读进暂存区（**不安装**）。
    *
-   * 拿到的是一个普通草稿 —— 之后由模型适配、闸门检查、用户确认，
+   * 拿到的是一个普通草稿：之后由模型适配、闸门检查、用户确认，
    * 全程与"自创"走同一条路。这样第三方包享受同一套安全边界，
    * 又不会出现"导入即执行"的旁路。
    *
@@ -292,7 +290,7 @@ export const providers = {
       return { ok: false, rejected: out.rejected === true, error: out.error, draftId: id };
     }
 
-    // 顺手把原始包留在草稿外的 _origin 子目录？不 —— 会污染草稿内容。
+    // 顺手把原始包留在草稿外的 _origin 子目录？不：会污染草稿内容。
     // 原始 zip 的字节没必要留：文件已经在草稿里了，而"适配前长什么样"
     // 靠的是适配前的快照（见 forge.snapshot）。
 
@@ -302,7 +300,7 @@ export const providers = {
     // 而且那份内容第三方能改，拿它当判据等于让被检对象自己决定检查尺度。
     try {
       writeMetaRaw(toolCtx(), id, { ...readMetaRaw(toolCtx(), id), origin: 'import' });
-    } catch { /* 写失败就退化为最严档位 —— 只会更严，不会放宽 */ }
+    } catch { /* 写失败就退化为最严档位，只会更严，不会放宽 */ }
 
     log(`导入 zip：${zipName || '(未命名)'} → 草稿 ${id}（${out.files.length} 个文件，跳过 ${out.skipped.length}）`);
     return {
@@ -399,13 +397,13 @@ export const providers = {
 
   /**
    * 存草稿元数据（原始需求 / 来源）。
-   * 必须放草稿目录**外**（_meta/）—— 草稿目录里的文件会被闸门扫描、会被
+   * 必须放草稿目录**外**（_meta/），草稿目录里的文件会被闸门扫描、会被
    * install 原样复制进正式扩展，需求文本混进去就是污染。
    * 用途：修改轮 / 跨会话打开老草稿时，让模型知道"这个扩展当初是按什么需求写的"；
    * 「来源」让界面能说清"这是市场口令 XXX 下载来的"，而不是一视同仁的"某个草稿"。
    *
    * ⚠️ 合并写，不是覆盖写：同一份 meta 里还住着 approval（确认票据）。
-   *    原实现整体覆盖，补存一次需求就会顺手把票据抹掉（用户点了确认却装不上）。
+   *    整体覆盖的话，补存一次需求就会顺手把票据抹掉（用户点了确认却装不上）。
    */
   'forge.save-meta': ({ draftId, requirement = '', source = '', originName = '', originCode = '' } = {}) => {
     if (!draftId) return { ok: false, error: '缺少 draftId' };
@@ -449,7 +447,7 @@ export const providers = {
   // 展示"更新了什么"→ 用户确认 → 备份原版 → 覆盖 →（出问题可回滚）。
   //
   // 与"安装新扩展"的安全差异：upgrade-install 用 **manifest.id 一致性** 当准入，
-  // 而不是撞车加 _1 —— id 不同就拒绝覆盖，"升级"的定义就是同一个扩展的新版本。
+  // 而不是撞车加 _1：id 不同就拒绝覆盖，"升级"的定义就是同一个扩展的新版本。
 
   /** 列出可升级的已装扩展（读 plugins/ 与 skills/ 的清单）。 */
   'forge.installed': () => {
@@ -478,7 +476,7 @@ export const providers = {
 
   /**
    * 把一个已装扩展复制进暂存区，作为"升级草稿"。
-   * 复制**不受**模型写限额约束 —— 源文件本来就在本机执行，复制不新增风险；
+   * 复制**不受**模型写限额约束：源文件本来就在本机执行，复制不新增风险；
    * 但白名单外的后缀仍跳过（闸门对它们一票否决，复制了也装不上）。
    */
   'forge.upgrade-start': ({ kind, dir } = {}) => {
@@ -494,7 +492,7 @@ export const providers = {
     const tctx = toolCtx();
     const skipped = [];
     copyDirFiltered(srcBase, draftDir(tctx, id), skipped);
-    // meta 带上升级目标 —— compare/回滚/前端展示都用它定位。
+    // meta 带上升级目标：compare/回滚/前端展示都用它定位。
     // 写失败不致命：upgrade-install 的准入是"id 一致"，不依赖 meta。
     try {
       const mdir = path.join(stagingRoot(tctx), '_meta');
@@ -551,7 +549,7 @@ export const providers = {
   /**
    * 升级落地：备份原版 → 覆盖安装。
    * 准入三关：目标存在、**双边 manifest.id 一致**、闸门通过（maxFiles 按草稿实际放宽）。
-   * 备份放 plugin-data/extension-forge/backups/ 下 —— plugins/ 被 watcher 监听，备份不能住那。
+   * 备份放 plugin-data/extension-forge/backups/ 下：plugins/ 被 watcher 监听，备份不能住那。
    * 覆盖失败自动从备份恢复原版，绝不给热重载留半截扩展。
    */
   'forge.upgrade-install': ({ draftId, kind, dir, confirmIssues = false, approvalToken = '' } = {}) => {
@@ -604,7 +602,7 @@ export const providers = {
       return { ok: false, error: `备份原版失败（未做任何改动）：${e.message}` };
     }
 
-    // ④ 覆盖。失败则从备份恢复 —— 热重载 500ms 就会加载，绝不能留半截目录
+    // ④ 覆盖。失败则从备份恢复：热重载 500ms 就会加载，绝不能留半截目录
     try {
       fs.rmSync(targetBase, { recursive: true, force: true });
       fs.mkdirSync(targetBase, { recursive: true });
@@ -624,7 +622,7 @@ export const providers = {
       return { ok: false, error: `覆盖失败（已尽力从备份恢复原版）：${e.message}`, backup: backupDir };
     }
 
-    // ⑤ 内置模块被覆盖后，随包基线的指纹不再一致 —— 下一轮热重扫会被准入闸
+    // ⑤ 内置模块被覆盖后，随包基线的指纹不再一致：下一轮热重扫会被准入闸
     //    当"占名顶替"拦下（文案还写着"触碰高危能力"，非常误导）。
     //    这里当作落地的一部分，即时重算该模块的基线（目标不是内置目录时自动跳过）。
     try {
@@ -646,7 +644,7 @@ export const providers = {
 
   /**
    * 回滚：把某个扩展恢复到最近一次升级前的备份。
-   * 当前版本先挪到 reverted-<ts>（不删 —— 万一"回滚"本身错了还能再救），
+   * 当前版本先挪到 reverted-<ts>（不删：万一"回滚"本身错了还能再救），
    * 再把备份复制回原位。
    */
   'forge.rollback': ({ kind, dir } = {}) => {
@@ -684,7 +682,7 @@ export const providers = {
     } catch (e) {
       try {
         if (!fs.existsSync(targetBase)) {
-          // 复原也走"复制+删除"—— rename 在跨盘场景同样会炸
+          // 复原也走"复制+删除"，rename 在跨盘场景同样会炸
           fs.mkdirSync(targetBase, { recursive: true });
           copyDir(revertedDir, targetBase, []);
           fs.rmSync(revertedDir, { recursive: true, force: true });
@@ -692,7 +690,7 @@ export const providers = {
       } catch { /* 尽力复原 */ }
       return { ok: false, error: `回滚失败：${e.message}` };
     }
-    // 回滚把文件换回了升级前的版本 —— 基线若在升级时重算过，这里也要重算回来，
+    // 回滚把文件换回了升级前的版本：基线若在升级时重算过，这里也要重算回来，
     // 否则同一个陷阱会以反方向再踩一次（升级过的模块在回滚后反被拦）。
     try {
       const rb = refreshBuiltinEntry(safeDir, { appRoot });
@@ -721,7 +719,7 @@ export const providers = {
     for (const e of ents) {
       if (!e.isDirectory()) continue;
       const id = e.name;
-      // `_` 前缀是内部目录（_snapshots / _meta），不是草稿 —— 不排除的话，
+      // `_` 前缀是内部目录（_snapshots / _meta），不是草稿：不排除的话，
       // 快照目录（里面是完整代码副本）会被当成一个"草稿"列进清单里。
       if (id.startsWith('_')) continue;
       const stats = draftStats(toolCtx(), id);
@@ -752,13 +750,13 @@ export const providers = {
   },
 
   /**
-   * 签发「人工确认票据」—— 落地的唯一凭据。
+   * 签发「人工确认票据」，这是落地的唯一凭据。
    *
    * 闸门通过 ≠ 可以装。这条链上"人"的动作不能被跳过：
    *   闸门跑完 → 人看界面上的结论与要改的代码 → 人点确认 → 签票 → install 验票落地。
    *
    * 票绑两样东西：**草稿 id** 与**内容摘要**。摘要对不上（确认期间被改）就失效；
-   * 票一次性、10 分钟过期。调用方必须显式传 human=true —— 插件侧不认任何
+   * 票一次性、10 分钟过期。调用方必须显式传 human=true：插件侧不认任何
    * "系统自动帮你确认"的说法，这条能力只服务界面。
    *
    * @param {{draftId:string, digest?:string, human?:boolean}} args
@@ -806,13 +804,13 @@ export const providers = {
   /**
    * 落地：把放行过的草稿搬进 skills/ 或 plugins/。
    *
-   * ⚠️ 这是本插件唯一的"写模块目录"通道。它**强制**先跑闸门 ——
+   * ⚠️ 这是本插件唯一的"写模块目录"通道。它**强制**先跑闸门：
    *    即使调用方忘了检查，这里也会拦。装之前再确认一次，
    *    是因为闸门结论与安装之间可能隔着人工确认（期间草稿可能被改）。
    *
    * ⚠️ 还必须有一张**人工确认票据**（forge.confirm-ticket 签发）。
    *    闸门通过只说明"静态检查没发现问题"，不说明"有人同意装它"。
-   *    票据绑内容摘要 + 一次性 + 有有效期 —— 这三条一起才让"人确认过的
+   *    票据绑内容摘要 + 一次性 + 有有效期：这三条一起才让"人确认过的
    *    就是即将落盘的那份字节"成立。
    *
    * @param {{draftId: string, confirmIssues?: boolean, approvalToken?: string}} args
@@ -825,12 +823,11 @@ export const providers = {
     const tctx = toolCtx();
 
     // ① 强制过闸（不信任调用方）
-    // ⚠️ 必须用 gateOpts()，不能手写 `{ allowNetwork }`（2026-10-07 修）。
-    //   落地是**最关键**的一次复核（文档称"不信任调用方"，因为草稿在人工确认期间
-    //   可能已被改动），而它原先漏了 env → gate.js 的第 5 道「环境适配」闸门
-    //   （opts.env 缺省时返回 {ok:true, skipped:true}）被静默跳过，
-    //   于是"落地时的强制复核"反而比预检更弱，requires 缺失 / api.xxx 不存在都拦不住。
-    //   gateOpts() 的存在理由正是这个，别绕过它。
+    // ⚠️ 必须用 gateOpts()，不能手写 `{ allowNetwork }`。
+    //   落地是**最关键**的一次复核（草稿在人工确认期间可能已被改动），而手写时
+    //   漏了 env → gate.js 的第 5 道「环境适配」闸门（opts.env 缺省时返回
+    //   {ok:true, skipped:true}）被静默跳过，于是"落地时的强制复核"反而比预检更弱，
+    //   requires 缺失 / api.xxx 不存在都拦不住。gateOpts() 的存在理由正是这个。
     const gate = runGates(tctx, id, gateOpts(id));
     if (!gate.ok) {
       return {
@@ -857,7 +854,7 @@ export const providers = {
     const kind = gate.kind;
     const baseDir = path.join(appRoot, kind === 'plugin' ? 'plugins' : 'skills');
 
-    // ③ 目录名：用清单 id，冲突则递增（绝不覆盖 —— 覆盖写一半会让热重载加载出半截代码）
+    // ③ 目录名：用清单 id，冲突则递增（绝不覆盖：覆盖写一半会让热重载加载出半截代码）
     const wantName = sanitizeDraftId(String(gate.manifest?.id || id));
     let finalName = wantName;
     for (let n = 1; n <= 100; n++) {
@@ -907,7 +904,7 @@ export const providers = {
       kind,
       // ⚠️ id 与 dir 是**两件事**，别混用：
       //    · dir   = 磁盘上的目录名，id 撞车时会变成 `xxx_1`
-      //    · id    = 清单里的 id，也是**注册表/配置里的键** —— 扩展被装载后就是按它注册的
+      //    · id    = 清单里的 id，也是**注册表/配置里的键**：扩展被装载后就是按它注册的
       //    要开关这个扩展（写 skills.<id>.enabled）必须用 id：用 dir 的话，
       //    一旦发生过撞车重命名，就会给一个不存在的 id 写配置，开关静默失效。
       id: String(gate.manifest?.id || finalName),
@@ -923,9 +920,8 @@ export const providers = {
     if (!draftId) return { ok: false, error: '缺少 draftId' };
     const id = sanitizeDraftId(draftId);
     const ok = clearDraft(toolCtx(), id);
-    // ⚠️ 快照必须一起删。只删草稿的话 _snapshots/<id>/ 会永久累积 ——
+    // ⚠️ 快照必须一起删。只删草稿的话 _snapshots/<id>/ 会永久累积：
     //    快照里是完整文件内容，攒久了就是一堆没人会看、也没人知道能删的垃圾。
-    //    （这个坑是实测时发现暂存区里躺着一个孤儿快照才注意到的。）
     clearSnapshots(id);
     clearDraftMeta(id);
     return ok ? { ok: true } : { ok: false, error: '删除失败（草稿可能不存在）' };
@@ -964,7 +960,7 @@ export const providers = {
 /**
  * 删掉某个草稿的全部快照。
  * 为什么单独一个函数：草稿与快照在 staging 下的两棵子树里（<draftId>/ 与
- * _snapshots/<draftId>/），任何"清理草稿"的地方都必须同时管到两边 ——
+ * _snapshots/<draftId>/），任何"清理草稿"的地方都必须同时管到两边：
  * 漏一处就是一批没人会看、也没人知道能删的残留（快照里是完整文件内容）。
  */
 function clearSnapshots(draftId) {
@@ -998,7 +994,7 @@ function copyDir(from, to, acc) {
 
 /**
  * 读一个扩展目录的清单（skill.json 优先，plugin.json 兜底，与 plugin-loader 同序）。
- * 含 BOM 处理 —— 已装扩展也可能是 Windows 编辑器写的。
+ * 含 BOM 处理：已装扩展也可能是 Windows 编辑器写的。
  */
 function readManifestOf(base) {
   for (const name of ['skill.json', 'plugin.json']) {
@@ -1042,7 +1038,7 @@ function countFiles(base) {
   return n;
 }
 
-/** 读一个目录下所有文本文件（utf8，读不了的跳过）—— compare-installed 的对比底料。 */
+/** 读一个目录下所有文本文件（utf8，读不了的跳过），作 compare-installed 的对比底料。 */
 function readAllText(base) {
   const out = {};
   const walk = (dir, depth) => {
@@ -1064,9 +1060,9 @@ function readAllText(base) {
  * 给 prompt 用：有草稿待确认时提一句，平时不占 token。
  * （与 self-doctor 的 promptSections 同款做法。）
  *
- * ⚠️ priority 必须保持 0（排【可用技能】最末，缓存热区，2026-10-08 改）：
+ * priority 必须保持 0（排【可用技能】最末，缓存热区）：
  *    这一段的内容随草稿生命周期变化（起草→过闸→确认/丢弃），排在中间时它一变，
- *    后面所有段落的字节位置全被推走 —— cache-guard 的 prompt-drift 记录里
+ *    后面所有段落的字节位置全被推走：cache-guard 的 prompt-drift 记录里
  *    当场截到过它。放到最末（与 self-doctor-alert 同款）后，它变只作废自己这一段。
  */
 export function promptSections() {

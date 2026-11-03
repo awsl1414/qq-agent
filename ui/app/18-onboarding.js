@@ -1,23 +1,21 @@
-// 〔启动引导 / OOBE〕—— M9 拆分第 19 段
+// 〔启动引导 / OOBE〕
 'use strict';
 
 /* ══════════════════════════════════════════════════════════════════════
    启动引导（OOBE，Out-Of-Box Experience）
 
-   解决的问题：群友多次反馈新手不知道从哪下手 ——
-     "重写软件引导刻不容缓" / "来个新手指引" / "oobe也确实应该有引导"。
-   旧方案（r84，2026-10-10）是"配置没配好就 switchTab('settings') 后
-   return"，被「每次点开都在设置界面，我要的是直接进会话」否决后整段移除，
-   只剩右下角横幅 + 顶栏 4 个就绪圆点——对**从没配过的新用户**仍然不够：
-   圆点不会说话，横幅只在 OneBot 未连接时出现。
+   解决的问题：群友多次反馈新手不知道从哪下手。
+   旧方案是"配置没配好就 switchTab('settings') 后 return"，被「每次点开都在
+   设置界面，我要的是直接进会话」否决后整段移除，只剩右下角横幅 + 顶栏 4 个
+   就绪圆点，对从没配过的新用户仍然不够：圆点不会说话，横幅只在 OneBot 未连接时出现。
 
-   本实现的四条设计约束（都从上面的历史教训来）：
-     ① 不拦截、不跳转 —— 全屏遮罩可随时关掉，关掉照常进会话页；
-     ② 不烦人 —— 只在「从没看过引导」或「引导改版」时自动弹一次；
+   四条设计约束：
+     ① 不拦截、不跳转：全屏遮罩可随时关掉，关掉照常进会话页；
+     ② 不烦人：只在「从没看过引导」或「引导改版」时自动弹一次；
          "跳过"与"开始使用"都会写 config.onboarding.seen；
-     ③ 步骤状态与实时数据同源 —— 完成态口径与就绪圆点/体检（assessReadiness）
+     ③ 步骤状态与实时数据同源：完成态口径与就绪圆点/体检（assessReadiness）
          逐条一致，打开期间每 2s 跟随底层状态刷新（OneBot 可能刚连上）；
-     ④ 保留手动入口 —— 设置页侧栏「使用引导」，想回来看随时能看。
+     ④ 保留手动入口：设置页侧栏「使用引导」，想回来看随时能看。
 
    触发判定：config.onboarding 缺字段 / seen=false / version 低于本文件
    ONBOARDING_VERSION → 下次启动自动展示。
@@ -26,7 +24,7 @@
 // 引导内容版本号。改版（增删步骤、改文案结构）时 +1，老用户升级后会重新看一版。
 const ONBOARDING_VERSION = 1;
 
-/** 步骤定义。done/status 每次渲染现算 —— 引导开着的时候用户可能刚配好一项。 */
+/** 步骤定义。done/status 每次渲染现算，引导开着的时候用户可能刚配好一项。 */
 function onboardingSteps() {
   const cfg = state.config || {};
   const st = state.status || {};
@@ -37,8 +35,8 @@ function onboardingSteps() {
   // 有群 / 有好友 / 或显式开了"白名单为空时响应所有人"都算配过。
   const allowOk = !!((cfg.allow?.groups?.length || cfg.allow?.private?.length || cfg.allowAllWhenEmpty));
   const obOk = !!st.onebot?.connected;
-  // 人设步骤的"完成"口径（2026-10-18 修）：**用现成模板（含内置默认的小鲸鱼）
-  // 不算自定义** —— 刚装完时 persona.roleText 就是内置文本，旧判定会把它标成
+  // 人设步骤的"完成"口径：用现成模板（含内置默认的小鲸鱼）不算自定义。
+  // 刚装完时 persona.roleText 就是内置文本，按"有文本就算"判会把它标成
   // 「已自定义」还打勾，既误导又让"四步全绿"失去意义。
   // 模板列表没加载时保守判"未自定义"，不误报。
   const roleText = String(cfg.persona?.roleText || '').trim();
@@ -46,12 +44,11 @@ function onboardingSteps() {
   const tplHit = tplList.find((p) => String(p.text ?? '').trim() === roleText);
   const personaOk = tplList.length > 0 ? (!!roleText && !tplHit) : false;
   const personaStatus = tplHit ? `使用「${tplHit.name}」` : (personaOk ? '已自定义' : '使用默认人设');
-  // 第 5 步（验证）的完成判据：机器人真的在群里发过话 —— state.sessions 里
+  // 第 5 步（验证）的完成判据：机器人真的在群里发过话，state.sessions 里
   // 有 sent（已发送到 QQ 的条目）。四步全绿只说明"配置齐了"，不说明"能说话"：
   // 响应档位停在「仅艾特」/ 左栏「自动回复」被关时，配置再全群里也没动静。
-  // ⚠️（2026-10-24 修）这两行曾被合并 0.4.9 的补丁连带删掉，而第 5 步的
-  //    done / status 仍在用它们 → 引导一渲染就 ReferenceError: repliedCount
-  //    is not defined。补回来，别再去删。
+  // repliedCount 曾被一次合并连带删掉，第 5 步的 done / status 还在用它，
+  // 引导一渲染就 ReferenceError，别再去删。
   const repliedCount = (state.sessions || []).filter((s) => Array.isArray(s.sent) && s.sent.length > 0).length;
   const preOk = urlOk && modelOk && obOk && allowOk;
   return [
@@ -62,21 +59,20 @@ function onboardingSteps() {
       done: urlOk && modelOk,
       status: !urlOk ? '还没填接口地址' : (!modelOk ? '还没选模型' : `已选 ${api.model}`),
       jump: { tab: 'settings', section: 'api' },
-      // 2026-10-18：点「去配置」直接把「模型管理」弹窗弹出来 —— 只跳到设置页
-      // 还不够，萌新会在页面上找不到「模型管理」这颗按钮（用户反馈原话：
-      // "省的有些萌新脑子不好连按钮都找不到"）。弹窗里「＋ 添加提供商」就是
+      // 点「去配置」直接把「模型管理」弹窗弹出来：只跳到设置页还不够，
+      // 萌新会在页面上找不到「模型管理」这颗按钮。弹窗里「＋ 添加提供商」就是
       // 最短路径，关掉弹窗后人还在设置页对应分区，不会迷路。
       open: 'openModelManageModal'
     },
     {
       id: 'qq', required: true,
       title: '把机器人接上 QQ',
-      // 2026-10-20：这句原来写「到「连接与启动」页启动 SnowLuma」，但按钮跳的是
-      // SnowLuma 页（jump.tab = 'snowluma'）—— 说的和做的不是一个地方，萌新会在
-      // 设置页里找「连接与启动」然后回不来。文案跟着**跳转目标**走。
-      // 2026-10-23（协议端解耦）：本软件不再自带、也不再启动协议端。流程变成
+      // 文案要跟着跳转目标走：曾经这里写「到「连接与启动」页启动 SnowLuma」，
+      // 但按钮跳的是 SnowLuma 页，说的和做的不是一个地方，萌新会在设置页里
+      // 找「连接与启动」然后回不来。
+      // 协议端解耦后本软件不再自带、也不再启动协议端，流程是
       // 「装一个协议端 → 启动它并登录机器人 QQ → 回连接页看是否连上」，
-      // 因此这里改成三步、并把"去哪儿装"说清楚（连接页有两张卡：SnowLuma / NapCat）。
+      // 所以这里分三步、并把"去哪儿装"说清楚（连接页有两张卡：SnowLuma / NapCat）。
       desc: '点「去连接」会打开连接页：① 先按页面上的两张卡装一个协议端（SnowLuma 或 NapCat，二选一）；② 启动它并登录机器人 QQ；③ 回到连接页，状态会自动变成「机器人工作中」。QQ 本身可以在「设置 → 连接 QQ」里一键启动。⚠️ 请用专用小号，不要用你的日常 QQ —— 机器人会以这个号的身份在群里发言。',
       done: obOk,
       status: obOk ? `已连接（${st.onebot?.self?.nickname || '机器人 QQ'}）` : (st.onebot?.diagnosis || '机器人还没连上'),
@@ -101,7 +97,7 @@ function onboardingSteps() {
       open: 'openGlobalPersonaModal'
     },
     {
-      // 2026-10-23：第 5 步「验证」—— 四步全绿 ≠ 能在群里说话。
+      // 第 5 步「验证」：四步全绿 ≠ 能在群里说话。
       // 「响应档位」停在仅艾特档 / 左栏「自动回复」被关这两种"全绿仍不说话"的情况，
       // 旧引导只字未提，用户进群 @ 没反应就判定"软件坏了"。这一步把验证动作和
       // 两个排查点写进引导，形成闭环。
@@ -125,7 +121,7 @@ function onboardingNeedsShow(cfg) {
   return Number(ob.version || 0) < ONBOARDING_VERSION;             // 引导内容改版
 }
 
-/** 写"已看过"。失败不抛 —— 顶多少弹一次，不能堵住用户关引导的手。 */
+/** 写"已看过"。失败不抛：顶多少弹一次，不能堵住用户关引导的手。 */
 async function markOnboardingSeen() {
   // 用户明确退出引导（跳过/完成/Esc）→ 守候也撤掉，不再自动弹回
   obPendingStep = null;
@@ -140,9 +136,9 @@ async function markOnboardingSeen() {
 /**
  * 「去配置」后的守候轮询：每 2s 看一次目标步骤配好没有，配好就自动接回引导。
  *
- * 为什么需要：萌新点「去配置」跳去设置页，配完那一步后**不知道该干嘛了** ——
- * 旧行为是引导彻底消失，要么自己摸回设置页、要么每次重启再看一遍。现在配好
- * 2 秒内引导自己弹回来（该步打勾 + 高亮闪一下），接着走下一步。
+ * 萌新点「去配置」跳去设置页，配完那一步后不知道该干嘛了。旧行为是引导彻底消失，
+ * 要么自己摸回设置页、要么每次重启再看一遍。现在配好 2 秒内引导自己弹回来
+ * （该步打勾 + 高亮闪一下），接着走下一步。
  * 只认 onboardingSteps() 的完成口径，不会误弹；「我先自己看看 / Esc / 开始使用」
  * 走 markOnboardingSeen，会把守候撤掉，不再回来。
  */
@@ -171,7 +167,7 @@ let obPendingStep = null;   // 「去配置」之后守候的步骤 id：配好�
 let obPendingTimer = null;
 let obHighlight = null;     // 刚配好的步骤：回到引导时高亮一下，让用户知道为什么又弹出来了
 
-/** 只重绘步骤状态区（不重建卡片）—— 按钮焦点不闪、动画不重放。 */
+/** 只重绘步骤状态区（不重建卡片）：按钮焦点不闪、动画不重放。 */
 function refreshOnboarding() {
   if (!obOverlay) return;
   const steps = onboardingSteps();
@@ -180,9 +176,9 @@ function refreshOnboarding() {
   const box = obOverlay.querySelector('#ob-steps');
   if (box && sig !== obLastSig) {
     obLastSig = sig;
-    // 焦点保护：重建前焦点若在某一步的「去配置」上，重建后还回去 ——
+    // 焦点保护：重建前焦点若在某一步的「去配置」上，重建后还回去。
     // 否则整区 innerHTML 重建会把焦点打回 body，之后 Ctrl+V 全部静默失效
-    // （2026-10-18 同族问题，见 closeModelModal 的三重兜底注释）。
+    // （同族问题见 closeModelModal 的三重兜底注释）。
     const focusedIdx = document.activeElement?.classList?.contains('ob-step-go')
       ? document.activeElement.dataset.jump : null;
     box.innerHTML = steps.map((s, i) => `
@@ -198,15 +194,15 @@ function refreshOnboarding() {
     box.querySelectorAll('.ob-step-go').forEach((btn) => {
       btn.addEventListener('click', () => {
         const step = steps[Number(btn.dataset.jump)];
-        // 「去配置」= 接受引导并去行动：**不标 seen** —— 关掉引导、跳去目标页，
+        // 「去配置」= 接受引导并去行动：不标 seen，关掉引导、跳去目标页，
         // 并挂上守候：该步骤一旦配好（2s 内发现），自动把引导弹回来接着走。
         obPendingStep = step.id;
         startPendingWatch();
         closeOnboarding();
         onboardingJump(step.jump);
-        // 2026-10-18：带 open 的步骤（模型 / 人设）跳完再把对应弹窗盖上来 ——
-        // 只跳到设置页还不够，萌新会在页面里找不到「模型管理」「⚙ 编辑人设」
-        // 那颗按钮。延迟 340ms：等页签切换动画和引导退场都落定，视觉上不打架。
+        // 带 open 的步骤（模型 / 人设）跳完再把对应弹窗盖上来：只跳到设置页还不够，
+        // 萌新会在页面里找不到「模型管理」「⚙ 编辑人设」那颗按钮。
+        // 延迟 340ms：等页签切换动画和引导退场都落定，视觉上不打架。
         if (step.open) {
           setTimeout(() => {
             const fn = window[step.open];
@@ -278,10 +274,10 @@ function openOnboarding() {
     </div>`;
   document.body.appendChild(overlay);
   obOverlay = overlay;
-  // ⚠️ 2026-10-18 修「再次点使用引导时步骤区空白」：obLastSig 是跨实例的签名缓存，
-  //    新建的 overlay 里 #ob-steps 是空 div —— 若签名与上次关闭时相同（用户还没配
-  //    任何东西，状态没变），refreshOnboarding 会以为"没变化"跳过渲染，于是引导只剩
-  //    标题和两个按钮。每次新建弹层都必须让签名失效，强制重绘一次。
+  // obLastSig 是跨实例的签名缓存，新建的 overlay 里 #ob-steps 是空 div。
+  // 若签名与上次关闭时相同（用户还没配任何东西，状态没变），refreshOnboarding
+  // 会以为"没变化"跳过渲染，引导只剩标题和两个按钮。
+  // 每次新建弹层都必须让签名失效，强制重绘一次。
   obLastSig = null;
 
   overlay.querySelector('#ob-skip-btn').addEventListener('click', () => {
@@ -314,7 +310,7 @@ function openOnboarding() {
     }
     obHighlight = null;
   }
-  // 引导开着的时候底层状态可能变化（OneBot 刚好连上 / 用户在别的窗口配好了）——
+  // 引导开着的时候底层状态可能变化（OneBot 刚好连上 / 用户在别的窗口配好了），
   // 2s 一刷，只重绘状态区，不碰按钮焦点。
   obTimer = setInterval(refreshOnboarding, 2000);
 }
@@ -338,10 +334,10 @@ function closeOnboarding() {
 /**
  * 自动展示入口（启动时一次）。
  *
- * ⚠️ 时序：本文件与 11-init.js 同为 defer、按文档序执行 —— 11-init 的 init()
- *    在本文件之前就起步了，但它要等 bootLoop + /api/config 回来才写
- *    state.config。这里轮询等待（最长 ~10s），**不阻塞启动链**：
- *     拿不到 config（启动异常）→ 不弹，交给横幅 + 就绪圆点，那也是它们的本职。
+ * 时序：本文件与 11-init.js 同为 defer、按文档序执行，11-init 的 init()
+ * 在本文件之前就起步了，但它要等 bootLoop + /api/config 回来才写 state.config。
+ * 这里轮询等待（最长 ~10s），不阻塞启动链：
+ *   拿不到 config（启动异常）→ 不弹，交给横幅 + 就绪圆点，那也是它们的本职。
  */
 (async function onboardingAutoLaunch() {
   for (let i = 0; i < 50; i++) {
@@ -356,11 +352,11 @@ function closeOnboarding() {
 window.openOnboarding = openOnboarding;
 
 /**
- * 「该步骤已处理」信号 —— 由配置弹窗在关闭时调用（2026-10-18）。
+ * 「该步骤已处理」信号，由配置弹窗在关闭时调用。
  *
- * 为什么需要：守候轮询只认"状态达成"，而**可选步骤**（人设）会出现"处理过但
- * 状态没变"的情况 —— 用户选回原版默认人设保存，roleText 与模板一致 → 判定
- * 仍是未自定义 → 守候永远不触发，保存完引导也不回来（用户反馈）。
+ * 守候轮询只认"状态达成"，而可选步骤（人设）会出现"处理过但状态没变"的情况：
+ * 用户选回原版默认人设保存，roleText 与模板一致，判定仍是未自定义，
+ * 守候永远不触发，保存完引导也不回来。
  * 对可选步骤，"打开并关闭了配置弹窗"本身就是处理完毕的信号。
  *
  * 仅在守候的正是该步骤时生效；手动打开弹窗（不在引导流程里）不受影响。

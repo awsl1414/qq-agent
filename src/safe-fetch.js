@@ -151,15 +151,14 @@ export async function validateFetchUrl(raw, { allowPrivate = false } = {}) {
   return { url, ip };
 }
 
-// ── 浏览锁定（browseLock）──────────────────────────────────────────────
+// 浏览锁定（browseLock）
 //
 // 作用：把"机器人能访问哪些域名"收成一个白名单，给用户一个硬边界
 // （家长/老师/自用场景：只让它上这几个站）。
 //
-// ⚠️ 最关键的一点：白名单必须**逐跳校验**。
-// 只看入口 URL 是不够的 —— 一个站内链接 302 到站外就绕过去了。
-// 所以 safeFetch / safeFetchBinary 在**每一次重定向之后**都重新查一遍白名单，
-// 而不是只在开始查一次。
+// 最关键的一点：白名单必须逐跳校验。只看入口 URL 是不够的，
+// 一个站内链接 302 到站外就绕过去了。所以 safeFetch / safeFetchBinary
+// 在每一次重定向之后都重新查一遍白名单，而不是只在开始查一次。
 
 /** 域名归一化：去协议/去路径/去端口/转小写，只留主机名。 */
 export function normalizeDomain(raw) {
@@ -185,8 +184,8 @@ export function browseLockState() {
 }
 
 /**
- * 主机是否在白名单内。**支持子域**：白名单里有 `example.com` 时
- * `img.example.com` 也算通过 —— 否则一个图床的 CDN 域名就把正常使用挡死了。
+ * 主机是否在白名单内。支持子域：白名单里有 `example.com` 时
+ * `img.example.com` 也算通过，否则一个图床的 CDN 域名就把正常使用挡死了。
  * 但反向不成立：白名单写 `img.example.com` 不会放行 `example.com`。
  */
 export function hostAllowed(host, state = browseLockState()) {
@@ -233,15 +232,14 @@ function readBounded(res, maxBytes, asText) {
       total += chunk.length;
       if (asText) text += decoder.write(chunk);
       else chunks.push(chunk);
-      // 只用字节数判断是否超限。原实现还额外判断了 text.length >= maxBytes，
-      // 但 text.length 是字符数而 maxBytes 是字节数（UTF-8 下中文 1 字符 = 3 字节），
+      // 只用字节数判断是否超限。额外判断 text.length >= maxBytes 是错的：
+      // text.length 是字符数而 maxBytes 是字节数（UTF-8 下中文 1 字符 = 3 字节），
       // 单位不一致，会让刚好读满的响应被误标成 truncated。
       if (total >= maxBytes) {
         try { res.destroy(); } catch { /* ignore */ }
-        // ⚠️（2026-10-12 r92 修）超限时 resolve 必须带 truncated:true。
-        //   原实现只返回截断后的数据、没有任何标记，调用方无法区分"响应本来
-        //   就这么大"和"被截断了"——文本路径用长度反推在中文下恒为 false
-        //   （见 safeFetch 的同款注释），二进制路径则把残缺文件当正常数据。
+        // 超限时 resolve 必须带 truncated:true。只返回截断后的数据、没有任何标记，
+        // 调用方无法区分"响应本来就这么大"和"被截断了"：文本路径用长度反推在中文下
+        // 恒为 false，二进制路径则把残缺文件当正常数据。
         finish(resolve, { data: asText ? sliceByCodePoints(text, maxBytes) : Buffer.concat(chunks).subarray(0, maxBytes), truncated: true });
       }
     });
@@ -263,14 +261,13 @@ function readBounded(res, maxBytes, asText) {
 /**
  * 合并调用方提供的请求头。
  *
- * ⚠️ 为什么需要它（2026-10-07 审查发现）：media-download 插件需要带
- *   `Referer`（B 站 CDN 防盗链）、`Cookie: SESSDATA=…`（登录态）、
- *   移动端 `User-Agent`、`ttwid`（抖音 detail 接口）—— 而本模块原先把 headers
- *   写死，插件的这些头**全部被静默丢弃**，于是依赖 Referer 的流 403、
- *   抖音接口返回空体。插件侧 media-common.js 的注释也承认"传入的 headers 尚未生效"。
+ * 为什么需要它：media-download 插件需要带 `Referer`（B 站 CDN 防盗链）、
+ * `Cookie: SESSDATA=…`（登录态）、移动端 `User-Agent`、`ttwid`（抖音 detail 接口），
+ * 而本模块原先把 headers 写死，插件的这些头全部被静默丢弃，于是依赖 Referer 的流 403、
+ * 抖音接口返回空体。
  *
  * 安全约束（不能省，否则等于把 SSRF 防护打开一个口子）：
- *   ① `host` **必须**由本模块按已解析的固定 IP 语义写入，永远不让调用方覆盖 ——
+ *   ① `host` 必须由本模块按已解析的固定 IP 语义写入，永远不让调用方覆盖，
  *      防 Host 头被用来做 DNS rebinding / 虚拟主机绕过；
  *   ② 头名/头值必须是字符串且不含 CR/LF（防 header injection）；
  *   ③ 只接受白名单头名（Referer / Cookie / User-Agent / Origin / Accept /
@@ -333,15 +330,15 @@ function requestOnce(url, ip, { asBinary = false, maxBytes = 50000, headers = nu
 }
 
 const MAX_REDIRECTS = 5;
-// 文本读取上限。默认值保持 50KB（原行为）；允许调用方提高，但必须有硬上界 ——
+// 文本读取上限。默认值保持 50KB（原行为）；允许调用方提高，但必须有硬上界，
 // 否则一次抓取就能把内存吃光（调用方可能传 Infinity / 巨大值）。
 const TEXT_BODY_DEFAULT = 50000;
 const TEXT_BODY_MAX = 8 * 1024 * 1024;
 
 /**
- * 单请求超时的钳制（M4，2026-10-14 加）。导出仅为测试（同 resolveTextCap 约定）。
- * 背景：random-image 一直传 `timeoutMs`（booru/detail/download 三处配置），
- * 但本模块**没有这个参数** —— 调用方传了被静默忽略，实际恒为硬编码 20s，
+ * 单请求超时的钳制。导出仅为测试（同 resolveTextCap 约定）。
+ * random-image 一直传 `timeoutMs`（booru/detail/download 三处配置），
+ * 但本模块没有这个参数，调用方传了被静默忽略，实际恒为硬编码 20s，
  * 于是"外部图床响应慢"配置项不生效（表现为莫名其妙的 20 秒超时）。
  * 钳制范围 1s~120s：不许传 0/负数（那会立刻超时），也不许无限等。
  */
@@ -352,11 +349,11 @@ export function resolveTimeoutMs(v, fallback = 20000) {
 }
 
 /**
- * proxy 参数的处理（M4，2026-10-14）。
- * ⚠️ 现状：本模块的请求走 node:http/https 并**固定已校验的 IP**（防 DNS rebinding），
- *   要支持代理得自己实现 HTTP CONNECT 隧道 —— 属新的网络路径，没有代理环境就无法验证，
- *   贸然上线反而可能破坏"直连兜底"这条现在能用的链路。
- *   所以这里**不假装支持**：收到 proxy 时明确警告一次，请求按直连发出。
+ * proxy 参数的处理。
+ * 现状：本模块的请求走 node:http/https 并固定已校验的 IP（防 DNS rebinding），
+ * 要支持代理得自己实现 HTTP CONNECT 隧道，属新的网络路径，没有代理环境就无法验证，
+ * 贸然上线反而可能破坏"直连兜底"这条现在能用的链路。
+ * 所以这里不假装支持：收到 proxy 时明确警告一次，请求按直连发出。
  */
 let proxyUnsupportedWarned = false;
 function noteProxyUnsupported(proxy) {
@@ -376,20 +373,19 @@ export function resolveTextCap(maxBytes) {
 
 /** 抓取网页文本（≤50000 字符），SSRF 全防护（不做内网例外）。 */
 export async function safeFetch(urlString, { browseLocked = false, headers = null, maxBytes = TEXT_BODY_DEFAULT, timeoutMs = null, proxy = '' } = {}) {
-  // ⚠️ `maxBytes` 必须真的生效（2026-10-08 修，用户报障"联网搜图经常搜不了"）。
-  //   此前签名里**没有这个参数**，调用方传进来的 maxBytes 被静默忽略，实际恒为 50KB。
-  //   后果有两处：
-  //     · 图片搜索抓搜索页 HTML（Bing 完整页/结果片段都 >50KB）→ 结果数据在后面，
-  //       直接被截掉 → "没解析到结果"，功能整个不可用；
-  //     · media-download 的 biliJson / 抖音 detail 早就传了 1MB 并检查 res.truncated，
-  //       于是 >50KB 的响应一律被截断 → 它们自己抛"超过读取上限（1024KB）被截断"
-  //       （阈值还是错的：实际 50KB）。
-  //   上界仍然要有：调用方可能传 Infinity/巨大值，不能让一次抓取把内存吃光。
+  // `maxBytes` 必须真的生效。此前签名里没有这个参数，调用方传进来的 maxBytes
+  // 被静默忽略，实际恒为 50KB。后果有两处：
+  //   - 图片搜索抓搜索页 HTML（Bing 完整页/结果片段都 >50KB），结果数据在后面，
+  //     直接被截掉，"没解析到结果"，功能整个不可用；
+  //   - media-download 的 biliJson / 抖音 detail 早就传了 1MB 并检查 res.truncated，
+  //     于是 >50KB 的响应一律被截断，它们自己抛"超过读取上限（1024KB）被截断"
+  //     （阈值还是错的：实际 50KB）。
+  // 上界仍然要有：调用方可能传 Infinity/巨大值，不能让一次抓取把内存吃光。
   const cap = resolveTextCap(maxBytes);
-  // M4：timeoutMs 真的生效（钳制后），proxy 不支持则明确告知一次
+  // timeoutMs 真的生效（钳制后），proxy 不支持则明确告知一次
   const timeout = resolveTimeoutMs(timeoutMs);
   noteProxyUnsupported(proxy);
-  // 锁定校验放在**最前面**，连 DNS 都不做 —— 不在白名单就根本不该发起连接
+  // 锁定校验放在最前面，连 DNS 都不做：不在白名单就根本不该发起连接
   const lock = browseLocked ? checkBrowseLock(urlString) : { enabled: false, allowed: true, host: '' };
   if (!lock.allowed) throw new Error(`浏览锁定：${lock.host || '该地址'} 不在允许的域名清单内`);
   let { url, ip } = await validateFetchUrl(urlString);
@@ -398,7 +394,7 @@ export async function safeFetch(urlString, { browseLocked = false, headers = nul
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();
-      // ⚠️ 逐跳校验：重定向目标也要在白名单里。
+      // 逐跳校验：重定向目标也要在白名单里。
       // 只在入口校验的话，一个站内链接 302 到站外就绕过了锁定。
       if (browseLocked) {
         const nl = checkBrowseLock(next);
@@ -408,47 +404,47 @@ export async function safeFetch(urlString, { browseLocked = false, headers = nul
       continue;
     }
     const body = result.body || '';
-    // truncated 必须按**本次实际的上限**判断（原来硬编码 50000 —— 调用方提高上限后
+    // truncated 必须按本次实际的上限判断（硬编码 50000 的话，调用方提高上限后
     // 这个标记就会误报，media-download 正是靠它决定"要不要报截断错误"）。
-    // ⚠️（2026-10-12 r92 修）且必须来自 readBounded 的实测截断标记：原实现用
-    //   `body.length >= cap` 反推，body.length 是**字符数**而 cap 是**字节数**，
-    //   中文场景 50KB 字节 ≈ 1.6 万字符，该比较恒为 false → 超限响应被静默
-    //   截断且 truncated=false，调用方的"超过读取上限"检查全部失效。
+    // 且必须来自 readBounded 的实测截断标记：用 `body.length >= cap` 反推是错的，
+    // body.length 是字符数而 cap 是字节数，中文场景 50KB 字节 ≈ 1.6 万字符，
+    // 该比较恒为 false，超限响应被静默截断且 truncated=false，
+    // 调用方的"超过读取上限"检查全部失效。
     return { url: url.toString(), statusCode: result.statusCode, truncated: !!result.truncated, body };
   }
   throw new Error('重定向次数过多，已停止');
 }
 
-// ── 扩展侧受保护 fetch（H3，2026-10-17）─────────────────────────────────
+// 扩展侧受保护 fetch
 //
-// 背景：扩展（Skill）的 `api.fetch` 原先**直接就是 `globalThis.fetch`** —— 只要
+// 背景：扩展（Skill）的 `api.fetch` 原先直接就是 `globalThis.fetch`，只要
 // 清单里声明了 `permissions: ["web_fetch"]`，就能 `fetch('http://127.0.0.1:3210/api/…')`
-// 或打 `169.254.169.254`（云元数据），本模块这一整套 SSRF 防护**一条都不生效**。
+// 或打 `169.254.169.254`（云元数据），本模块这一整套 SSRF 防护一条都不生效。
 // UI 上 `web_fetch` 呈现为"只读联网"语义，与实际能力面不符。
 //
 // 为什么不是"直接转发到 safeFetch"：safeFetch 只支持 GET 文本，而唯一在用 api.fetch
 // 的 image-generate 需要 POST JSON（生成接口）+ 读二进制流（`res.body.getReader()` 下载图片）。
 // 用 node:http 重造一份完整的 fetch 语义（流 / 解压 / 超时 / AbortSignal / keep-alive）
-// 风险远大于收益 —— 任何一处不吻合都会把"图能生成但下载回来是坏档"这类问题引进来。
+// 风险远大于收益，任何一处不吻合都会把"图能生成但下载回来是坏档"这类问题引进来。
 //
-// 所以这里的做法是**校验后转发**：
-//   · 入口与**每一跳重定向**都过 validateFetchUrl（scheme 白名单 + 禁止 URL 内嵌凭据 +
+// 所以这里的做法是校验后转发：
+//   - 入口与每一跳重定向都过 validateFetchUrl（scheme 白名单 + 禁止 URL 内嵌凭据 +
 //     域名 DNS 全记录内网检查）与浏览锁定，与 safeFetch / safeFetchBinary 同源；
-//   · 真正的传输交给平台 fetch，因此 Response 的全部能力（text / json / arrayBuffer /
+//   - 真正的传输交给平台 fetch，因此 Response 的全部能力（text / json / arrayBuffer /
 //     body 流式读取 / headers / AbortSignal）原样保留，调用方代码一行都不用改；
-//   · 重定向由本函数自己跟随（一律以 `redirect: 'manual'` 发出），这样**每一跳**都能重新
-//     校验 —— 若交给平台跟随，一个公网站 302 到 `127.0.0.1` 就绕过整套防护了。
+//   - 重定向由本函数自己跟随（一律以 `redirect: 'manual'` 发出），这样每一跳都能重新
+//     校验。若交给平台跟随，一个公网站 302 到 `127.0.0.1` 就绕过整套防护了。
 //     同时按 fetch 规范处理：303（及 301/302 上的 POST）改 GET 丢体、跨源丢凭据类头。
 //
-// ⚠️ 与 safeFetch 的**已知差异**：这里不做"解析后固定 IP"（防 DNS rebinding），
-//    平台 fetch 会自行再解析一次域名，理论上存在 TOCTOU 窗口。取舍理由：该窗口需要
-//    扩展主动访问一个"攻击者控制 DNS、且两次解析结果从公网翻转到内网"的域名，而扩展本身
-//    已在主进程内运行（等同 RCE）—— 为堵这个窗口去重造 fetch 反而引入更大回归风险。
-//    真正会被利用的**实际目标**（内网/环回/链路本地/CGNAT IPv4 与 IPv6 内嵌形态）
-//    已由入口的 DNS 全记录检查挡住。
+// 与 safeFetch 的已知差异：这里不做"解析后固定 IP"（防 DNS rebinding），
+// 平台 fetch 会自行再解析一次域名，理论上存在 TOCTOU 窗口。取舍理由：该窗口需要
+// 扩展主动访问一个"攻击者控制 DNS、且两次解析结果从公网翻转到内网"的域名，而扩展本身
+// 已在主进程内运行（等同 RCE），为堵这个窗口去重造 fetch 反而引入更大回归风险。
+// 真正会被利用的实际目标（内网/环回/链路本地/CGNAT IPv4 与 IPv6 内嵌形态）
+// 已由入口的 DNS 全记录检查挡住。
 //
-// ⚠️ 例外：security.allowPrivateImageHosts = true 时同样放行内网（与 safeFetchBinary /
-//    validateImageUrl 一致），供"接口/图床就架在本机或内网"的场景使用，默认关闭。
+// 例外：security.allowPrivateImageHosts = true 时同样放行内网（与 safeFetchBinary /
+// validateImageUrl 一致），供"接口/图床就架在本机或内网"的场景使用，默认关闭。
 const REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);
 // 跨源重定向时必须丢掉的凭据类请求头（同 fetch 规范）：否则 API Key / Cookie
 // 会被顺手带到第三方站点去。
@@ -494,7 +490,7 @@ export async function guardedFetch(input, init = {}, { browseLocked = true, allo
   let target = rawUrl;
   for (let hop = 0; ; hop += 1) {
     const { url } = await validateFetchUrl(target, { allowPrivate: doAllowPrivate });
-    // 与 safeFetch 一致：锁定校验放在**发起连接之前**（连 DNS 都算白做，先拦掉）
+    // 与 safeFetch 一致：锁定校验放在发起连接之前（连 DNS 都算白做，先拦掉）
     if (browseLocked) {
       const lock = checkBrowseLock(url.toString());
       if (!lock.allowed) throw new Error(`浏览锁定：${lock.host || '该地址'} 不在允许的域名清单内`);
@@ -539,7 +535,7 @@ export async function guardedFetch(input, init = {}, { browseLocked = true, allo
 export async function safeFetchBinary(urlString, maxBytes = 12 * 1024 * 1024, { browseLocked = false, headers = null, timeoutMs = null, proxy = '' } = {}) {
   const lock = browseLocked ? checkBrowseLock(urlString) : { enabled: false, allowed: true, host: '' };
   if (!lock.allowed) throw new Error(`浏览锁定：${lock.host || '该地址'} 不在允许的域名清单内`);
-  // M4：timeoutMs 真的生效；proxy 不支持则明确告知一次（不静默忽略）
+  // timeoutMs 真的生效；proxy 不支持则明确告知一次（不静默忽略）
   const timeout = resolveTimeoutMs(timeoutMs);
   noteProxyUnsupported(proxy);
   const allowPrivate = getConfig().security?.allowPrivateImageHosts === true;
@@ -558,11 +554,11 @@ export async function safeFetchBinary(urlString, maxBytes = 12 * 1024 * 1024, { 
       continue;
     }
     if (result.statusCode !== 200) throw new Error(`HTTP ${result.statusCode}`);
-    // ⚠️（2026-10-12 r92 修）超限响应必须显式抛错，与 safeFetchBinaryToFile
-    //   语义对齐：原实现把截断后的残缺 Buffer 当正常数据返回，调用方
-    //   （image-cache / sticker-manager）的 `buffer.length > MAX_BYTES` 检查
-    //   永远不成立（截断后长度恰好等于上限，`>` 为 false）→ 半张 JPEG/PNG
-    //   被写进缓存，表现为"图能读到但花屏/解码失败"且缓存留下永久坏档。
+    // 超限响应必须显式抛错，与 safeFetchBinaryToFile 语义对齐：把截断后的残缺
+    // Buffer 当正常数据返回的话，调用方（image-cache / sticker-manager）的
+    // `buffer.length > MAX_BYTES` 检查永远不成立（截断后长度恰好等于上限，
+    // `>` 为 false），半张 JPEG/PNG 被写进缓存，表现为"图能读到但花屏/解码失败"
+    // 且缓存留下永久坏档。
     if (result.truncated) throw new Error('响应超过读取上限，已截断（数据不完整，拒绝采用）');
     return { buffer: result.body, contentType: result.contentType };
   }
@@ -572,30 +568,28 @@ export async function safeFetchBinary(urlString, maxBytes = 12 * 1024 * 1024, { 
 // ── 流式落盘下载 ────────────────────────────────────────────────────────
 //
 // 与 safeFetchBinary 的分工：小文件（图片/表情）整读进内存更简单，继续走
-// safeFetchBinary；大文件（视频，几十到 200MB）必须边收边写盘 —— 整读会把
+// safeFetchBinary；大文件（视频，几十到 200MB）必须边收边写盘，整读会把
 // 进程内存顶到文件大小，多个视频并发时直接 OOM。
 //
-// SSRF 防护与 safeFetchBinary 完全同源：入口与**每一跳重定向**都过
+// SSRF 防护与 safeFetchBinary 完全同源：入口与每一跳重定向都过
 // validateFetchUrl（DNS 全记录内网检查 + IP 固定防 rebinding），上限语义也
-// 一致 —— 累计字节到达 maxBytes 即判"读满上限"（服务端文件 ≥ 上限，收到的
+// 一致：累计字节到达 maxBytes 即判"读满上限"（服务端文件 ≥ 上限，收到的
 // 必是残缺数据），删掉半截文件并抛错，绝不把截断文件留给调用方。
 
 /**
  * 通过 HTTP 代理建立 CONNECT 隧道，返回一个可当 https.request 的 agent 用。
  *
- * ── 为什么需要它（2026-11-03）────────────────────────────────────────
- * ffmpeg 安装包（34MB）走 GitHub Release，国内直连约 700KB/s（50 秒）；
+ * 为什么需要它：ffmpeg 安装包（34MB）走 GitHub Release，国内直连约 700KB/s（50 秒），
  * 走本机代理实测 5.5MB/s（8 秒）。用户本来就在设置里配了 LLM 代理，
- * 下载却没走 —— 体验上就是"明明开了代理还是慢"。
+ * 下载却没走，体验上就是"明明开了代理还是慢"。
  *
- * ── 与 LLM 那条代理链路的区别 ─────────────────────────────────────────
- * LLM 走 undici 的 ProxyAgent（fetch 的 dispatcher）。safe-fetch 是手写的
- * http/https 请求（为了 SSRF 防护要自己控制 DNS 与逐跳重定向），用不了
- * dispatcher，所以这里自己建隧道。两条链路共用**同一个**代理地址配置
+ * 与 LLM 那条代理链路的区别：LLM 走 undici 的 ProxyAgent（fetch 的 dispatcher）。
+ * safe-fetch 是手写的 http/https 请求（为了 SSRF 防护要自己控制 DNS 与逐跳重定向），
+ * 用不了 dispatcher，所以这里自己建隧道。两条链路共用同一个代理地址配置
  * （api.proxy），避免出现两个地方都要填代理。
  *
- * ⚠️ 隧道建立后仍是 Node 自己做 TLS 握手（rejectUnauthorized 不变），
- *    代理只转发字节 —— 不会把证书校验交给代理。
+ * 隧道建立后仍是 Node 自己做 TLS 握手（rejectUnauthorized 不变），
+ * 代理只转发字节，不会把证书校验交给代理。
  */
 function connectViaProxy(proxyUrl, targetHost, targetPort, timeoutMs) {
   return new Promise((resolve, reject) => {
@@ -637,20 +631,20 @@ function connectViaProxy(proxyUrl, targetHost, targetPort, timeoutMs) {
  * 把一次响应流式写入 dest（200 时）；重定向只取 Location，响应体直接排空丢弃。
  *
  * onProgress(received, total)：可选进度回调。total 来自 content-length，
- * 缺失/不可信时为 0（调用方自己决定怎么显示）。回调里**不要抛错** ——
+ * 缺失/不可信时为 0（调用方自己决定怎么显示）。回调里不要抛错，
  * 异常会中断下载，这里也包了 try 兜住。
  *
  * proxy：HTTP 代理地址（http://host:port）。给了就走 CONNECT 隧道；
- * 隧道建立失败**不静默回落**——回落成直连会让"配了代理还是慢"更难查，
+ * 隧道建立失败不静默回落。回落成直连会让"配了代理还是慢"更难查，
  * 直接报错，让用户看见是哪一步不行。
  */
 async function requestToFile(url, ip, dest, { limit = Infinity, timeoutMs = 30000, headers = null, onProgress = null, proxy = '' } = {}) {
   const mod = url.protocol === 'https:' ? https : http;
   const port = url.port || (url.protocol === 'https:' ? 443 : 80);
   // 走代理时先建 CONNECT 隧道；https 还要在隧道上自己做 TLS 握手。
-  // ⚠️ 不能把裸 socket 直接当 createConnection 的返回值给 https.request：
-  //    Node 会当成"已经就绪的连接"，于是明文 HTTP 打到 443 端口上，服务端
-  //    回 400 —— 实测就是这么发现的。必须在隧道上 tls.connect 一次。
+  // 不能把裸 socket 直接当 createConnection 的返回值给 https.request：
+  // Node 会当成"已经就绪的连接"，于是明文 HTTP 打到 443 端口上，服务端回 400。
+  // 必须在隧道上 tls.connect 一次。
   let tunnel = null;
   if (proxy) {
     const raw = await connectViaProxy(proxy, url.hostname, port, timeoutMs);
@@ -683,7 +677,7 @@ async function requestToFile(url, ip, dest, { limit = Infinity, timeoutMs = 3000
       }, headers),
       servername: url.protocol === 'https:' ? url.hostname : undefined,
       rejectUnauthorized: url.protocol === 'https:',
-      // 大文件下载：这是 socket 空闲超时而非总时长上限 —— 数据持续流动时不触发，
+      // 大文件下载：这是 socket 空闲超时而非总时长上限，数据持续流动时不触发，
       // 卡死的连接才会被掐掉（与 requestOnce 的行为一致，只是上限放宽到 timeoutMs）
       timeout: timeoutMs
     }, (res) => {
@@ -739,12 +733,12 @@ async function requestToFile(url, ip, dest, { limit = Infinity, timeoutMs = 3000
 
 /**
  * 流式下载到文件。成功返回 { bytes, contentType }；任何失败（非 200、超限截断、
- * 空响应、网络/磁盘错误、重定向超次）都会**删掉半截文件**再抛错 —— 调用方往往
+ * 空响应、网络/磁盘错误、重定向超次）都会删掉半截文件再抛错：调用方往往
  * 按"文件存在"判定成功，残缺文件留在盘上会被当成已下载。
  *
  * @param {string} urlString  下载地址
  * @param {string} destPath   目标文件路径（父目录不存在会自动创建）
- * @param {number} maxBytes   硬上限；累计字节**到达**该值即判超限（保守语义：
+ * @param {number} maxBytes   硬上限；累计字节到达该值即判超限（保守语义：
  *                            与 safeFetchBinary 的 readBounded 一致，宁可误杀
  *                            "恰好等于上限"的文件，也不放过被截断的残缺文件）
  * @param {object} [opts]     { timeoutMs = 30000 }（socket 空闲超时）、
@@ -767,7 +761,7 @@ export async function safeFetchBinaryToFile(urlString, destPath, maxBytes, { tim
   try {
     let { url, ip } = await validateFetchUrl(urlString, { allowPrivate });
     for (let i = 0; i <= MAX_REDIRECTS; i++) {
-      // 凭据类头必须**逐跳**决定，不能整次下载统一给：下载源常会 302 到另一个
+      // 凭据类头必须逐跳决定，不能整次下载统一给：下载源常会 302 到另一个
       // 域（GitHub Release → objects.githubusercontent.com），把 Authorization
       // 原样带过去等于把 Token 交给另一个服务。headersForHost 让调用方按本跳
       // 的实际主机决定带不带；返回 null 时退化为只有默认头。

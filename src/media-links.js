@@ -1,12 +1,10 @@
 // 消息链接 → 媒体转发（确定性触发的"调度"部分）
 //
-// ── 为什么单独成模块 ──────────────────────────────────────────────────────
-// 这段逻辑（候选链接提取、多提供者的"谁认领谁处理"协商、失败文案的发送时机）
-// 是纯逻辑，不碰网络也不碰 QQ。留在 app.js 的闭包里就只能靠起整个应用才能验证；
-// 抽出来后测试可以直接用假的 provider 驱动它，把每条分支都走一遍。
+// 单独成模块的原因：候选链接提取、多提供者的"谁认领谁处理"协商、失败文案的
+// 发送时机都是纯逻辑，不碰网络也不碰 QQ。留在 app.js 的闭包里就只能靠起整个
+// 应用才能验证；抽出来后测试可以直接用假的 provider 驱动它。
 //
-// ── 定位：核心只做"调度"，不认识任何平台 ───────────────────────────────────
-// 核心不知道 B站/抖音 长什么样，只负责：
+// 核心只做"调度"，不认识任何平台：
 //   ① 从消息文本里挑出候选链接（粗提取，不判断平台）
 //   ② 把每个链接喂给 `media.download` 能力的所有提供者
 //   ③ 谁认领（不返回 skip）谁处理，认领后就不再问了
@@ -18,10 +16,10 @@ export const MAX_MEDIA_LINKS_PER_MESSAGE = 3;
 /**
  * 从文本里挑候选链接。
  *
- * 带协议的 http(s) 全收；另外单独认不带协议的裸短链 —— 群友经常直接粘
+ * 带协议的 http(s) 全收；另外单独认不带协议的裸短链，群友经常直接粘
  * `b23.tv/xxxx` 或 `v.douyin.com/xxxx`（分享文案里常把协议头吃掉）。
  *
- * ⚠️ 这里**不判断平台**。平台归属由提供者自己认（它手里才有精确解析器），
+ * ⚠️ 这里不判断平台。平台归属由提供者自己认（它手里才有精确解析器），
  * 否则核心就得维护"每个平台的链接长什么样"。
  */
 export function extractCandidateUrls(text, max = MAX_MEDIA_LINKS_PER_MESSAGE) {
@@ -51,14 +49,13 @@ export function extractCandidateUrls(text, max = MAX_MEDIA_LINKS_PER_MESSAGE) {
  * 把候选链接依次交给提供者，谁认领谁处理。
  *
  * 失败处理的分工（刻意的）：
- *   · 普通失败只写日志 —— 自动触发的东西失败了不该往群里刷屏
+ *   · 普通失败只写日志，自动触发的东西失败了不该往群里刷屏
  *   · 但提供者若给了 `friendly`，说明它认领了这条链接且失败对用户是有意义的
  *     （时长/体积超限之类），这时才提示一句
  *
- * @param {Array} urls              候选链接
- * @param {Array} providers         [{ skillId, fn }]，来自 getCapabilityProviders('media.download')
- * @param {object} ctx              { onebot, sender, kind, chatId }（会透传给 provider）
- * @param {Function} log
+ * @param {Array} urls      候选链接
+ * @param {Array} providers [{ skillId, fn }]，来自 getCapabilityProviders('media.download')
+ * @param {object} ctx      { onebot, sender, kind, chatId }（会透传给 provider）
  * @returns {Promise<Array>} 每个链接的结果，便于测试与排障
  */
 export async function dispatchMediaLinks({ urls, providers, ctx = {}, log = () => {} }) {

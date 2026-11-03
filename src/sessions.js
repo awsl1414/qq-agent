@@ -15,24 +15,23 @@ const SESSIONS_DIR = path.join(DATA_DIR, 'sessions');
 // reconcileInBackground），所以缓存缺失/过期都只是"首次启动慢"，不会错。
 const INDEX_CACHE_FILE = path.join(DATA_DIR, 'session-index-cache.json');
 // v2：摘要里新增了 toolCalls（工具调用次数）。旧缓存里的条目没有这个字段，
-//     而这正是"缓存只有摘要、没有 messages"所以算不出来的情况 —— 只能让版本号失效，
-//     启动时从会话文件重建一次索引把计数补上。一次性代价，之后照旧走缓存。
+// 而缓存只有摘要、没有 messages，算不出来，只能让版本号失效，
+// 启动时从会话文件重建一次索引把计数补上。一次性代价，之后照旧走缓存。
 const INDEX_CACHE_VERSION = 2;
-// r92（R78-1）：僵尸回收改为只处理索引里仍为 running/waiting 的条目
-//（见 #reclaimZombies 注释），不再需要 mtime 窗口常量。
 
 /**
  * 会话文件的原子写（tmp + rename）。
  *
- * 裸 writeFileSync 在中断/崩溃时会留下**截断的 JSON**，而读取侧
- * （#loadOne / reconcileInBackground）的 catch 会静默跳过它 →
- * 该会话在索引里永久消失，且**没有任何补救入口**（文件已坏、索引也建不出来）。
- * 启动扫描路径（僵尸回收）尤其不能这么写 —— 那正是最容易被断电/强杀打断的地方。
+ * 裸 writeFileSync 在中断/崩溃时会留下截断的 JSON，而读取侧
+ * （#loadOne / reconcileInBackground）的 catch 会静默跳过它，
+ * 该会话在索引里永久消失，且没有任何补救入口（文件已坏、索引也建不出来）。
+ * 启动扫描路径（僵尸回收）尤其不能这么写，那正是最容易被断电/强杀打断的地方。
+ *
+ * 改走 src/atomic-write.js 的统一实现。原来是本文件自己写的一份（tmp + rename），
+ * 与 store.js / migrate.js 各有一份、口径不一（缺 mkdir、失败不留清理）。
+ * atomicWriteText 是它们的严格超集：同样的 tmp+rename 语义，
+ * 另加父目录自动创建与失败时清掉临时文件。
  */
-// 2026-10-16（外部审查 #13）：改走 src/atomic-write.js 的统一实现。
-// 原来是本文件自己写的一份（tmp + rename），与 store.js / migrate.js 各有一份、
-// 口径不一（缺 mkdir、失败不留清理）。atomicWriteText 是它们的严格超集：
-// 同样的 tmp+rename 语义，另加父目录自动创建与失败时清掉临时文件。
 function atomicWriteSessionFile(fileName, data) {
   atomicWriteText(path.join(SESSIONS_DIR, fileName), JSON.stringify(data));
 }
@@ -47,10 +46,10 @@ export function newSessionId() {
 /**
  * 一条会话调用了多少次工具。
  * 优先用会话对象上的 `toolCalls` 计数器（运行中的会话在 orchestrator 里逐个累加）；
- * 缺失时（早于该字段的老会话文件）现数一次 —— 文件里带 messages，能算准。
- * ⚠️ 口径必须与用量页/遥测一致：数 `messages` 里带 `toolCall` 的条目，
- *    不是数 assistant 的 `tool_calls` 数组（一轮可以并发多个工具，
- *    但每条 tool 结果都会单独 push 一条 toolCall 消息）。
+ * 缺失时（早于该字段的老会话文件）现数一次，文件里带 messages，能算准。
+ * 口径必须与用量页/遥测一致：数 `messages` 里带 `toolCall` 的条目，
+ * 不是数 assistant 的 `tool_calls` 数组（一轮可以并发多个工具，
+ * 但每条 tool 结果都会单独 push 一条 toolCall 消息）。
  */
 export function toolCallCount(s) {
   const n = Number(s?.toolCalls);
@@ -59,8 +58,8 @@ export function toolCallCount(s) {
 }
 
 export function sessionFile(id) {
-  // r92：函数自我保护。当前唯一 HTTP 调用方（routes.js）用路由正则挡住了
-  // `..` 与 `/`，但这是调用方自觉 —— 任何未来调用方（内部代码/插件）传入含
+  // 函数自我保护。当前唯一 HTTP 调用方（routes.js）用路由正则挡住了
+  // `..` 与 `/`，但这是调用方自觉，任何未来调用方（内部代码/插件）传入含
   // 路径分隔符的 id 就是任意文件读/删。与 store.js 的 chatFile 同款消毒口径。
   const safe = String(id ?? '');
   if (!/^[\w-]+$/.test(safe)) throw new Error(`非法会话 id：${safe.slice(0, 40)}`);
@@ -69,8 +68,8 @@ export function sessionFile(id) {
 
 export class SessionRegistry {
   /**
-   * @param {number} keepFiles 保留最近多少个会话记录文件；**0 = 不限制**。
-   *   注意：不能用 `x || 300` 兜底 —— 0 是 falsy 会被误当成"未设置"变回 300，
+   * @param {number} keepFiles 保留最近多少个会话记录文件；0 = 不限制。
+   *   注意：不能用 `x || 300` 兜底，0 是 falsy 会被误当成"未设置"变回 300，
    *   用户想"取消上限"就永远改不掉。也不能 Math.max(20,…) 强制下限。
    */
   constructor(keepFiles = 0) {
@@ -83,8 +82,8 @@ export class SessionRegistry {
 
   /**
    * 运行时改保留上限（配置里改了 keepSessionFiles 要立即生效）。
-   * 原来是"只在构造时读一次"，导致用户在设置页改了这个值后，
-   * 要重启才生效 —— 磁盘上的会话文件会一直按旧值（默认 0 = 不限）增长。
+   * 只在构造时读一次的话，用户在设置页改了这个值后要重启才生效，
+   * 磁盘上的会话文件会一直按旧值（默认 0 = 不限）增长。
    */
   setKeepFiles(keepFiles) {
     const next = Math.max(0, Number.isFinite(Number(keepFiles)) ? Math.round(Number(keepFiles)) : 0);
@@ -108,11 +107,11 @@ export class SessionRegistry {
       for (const f of files.slice(this.keepFiles)) {
         const id = f.replace(/\.json$/, '');
         if (activeIds.has(id)) continue;
-        // ⚠️（2026-10-17）删文件之前必须先把用量补进账本。
-        //    账本是"会话文件被删也不丢"的唯一凭据；少了这一步，被裁掉的会话
-        //    在用量页里永远少算 —— 用户报"今日 200 次运行只算 120 次"，
-        //    根因就是默认 keepSessionFiles=120 裁文件、而统计只认文件。
-        //    appendUsageLedger 按 id 幂等，正常路径下这里已是空操作。
+        // 删文件之前必须先把用量补进账本。
+        // 账本是"会话文件被删也不丢"的唯一凭据；少了这一步，被裁掉的会话
+        // 在用量页里永远少算。用户报"今日 200 次运行只算 120 次"，
+        // 根因就是默认 keepSessionFiles=120 裁文件、而统计只认文件。
+        // appendUsageLedger 按 id 幂等，正常路径下这里已是空操作。
         try { appendUsageLedger(this.#ledgerSourceOfFile(id)); } catch { /* 兜底失败不阻塞清理 */ }
         try { fs.rmSync(path.join(SESSIONS_DIR, f), { force: true }); } catch { /* ignore */ }
       }
@@ -141,8 +140,8 @@ export class SessionRegistry {
       const cached = this.#readIndexCache();
       if (cached && Array.isArray(cached.entries)) {
         const cachedIds = new Set(cached.entries.map((e) => e?.id).filter(Boolean));
-        // r92（R78-7）：先建 Set 再过滤。原实现是 `cached.entries.filter((e) => diskFiles.includes(...))`
-        // —— Array.includes 是线性查找，外面又套一层 filter，整体 O(N²)。
+        // 先建 Set 再过滤。用 `cached.entries.filter((e) => diskFiles.includes(...))`
+        // 的话，Array.includes 是线性查找，外面又套一层 filter，整体 O(N²)：
         // 2277 个会话文件时就是 500 万次字符串比较（纯浪费在主进程启动路径上）。
         const diskSet = new Set(diskFiles);
         // 只保留磁盘上确实存在的条目（外部删了文件/清理脚本跑过）
@@ -160,7 +159,7 @@ export class SessionRegistry {
         } else {
           this.#sortIndex();
         }
-        // 僵尸回收：只处理索引里仍为 running/waiting 的条目（r92 / R78-1）
+        // 僵尸回收：只处理索引里仍为 running/waiting 的条目
         this.#reclaimZombies();
         this.#writeIndexCache();
         return;
@@ -185,39 +184,39 @@ export class SessionRegistry {
       if (!data?.id) return;
       if (zombieScan && (data.status === 'running' || data.status === 'waiting')) {
         // 僵尸会话回收：进程上次退出时正在运行/等待的会话，运行循环已不存在，
-        // 状态却停留在 running/waiting —— UI 里既不结束也无法中止（中止按钮
+        // 状态却停留在 running/waiting，UI 里既不结束也无法中止（中止按钮
         // 找不到活对象）。这里启动即改判 aborted 并写回文件，让会话页能看到
         // 真实状态。不改内存 current（启动时它是空的，这些会话本来就不在其中）。
         data.status = 'aborted';
         data.endedAt = data.endedAt ?? Date.now();
         data.abortedOnBoot = true;   // 标记来源，UI/排障能分清"用户中止"和"重启遗留"
-        // 原子写（2026-10-07）：启动扫描路径上尤其不能用裸 writeFileSync ——
-        // 中断/崩溃会留下截断的会话文件，之后 #loadOne 的 catch 会静默跳过它
-        // → 该会话在索引里**永久消失**（reconcileInBackground 也读不回来，文件已坏）。
+        // 原子写：启动扫描路径上尤其不能用裸 writeFileSync，
+        // 中断/崩溃会留下截断的会话文件，之后 #loadOne 的 catch 会静默跳过它，
+        // 该会话在索引里永久消失（reconcileInBackground 也读不回来，文件已坏）。
         try { atomicWriteSessionFile(file, data); } catch { /* 写不回就只改内存视图 */ }
       }
       this.index.push(this.#summary(data));
     } catch (error) {
-      // r92：坏文件不能无声跳过 —— 那意味着这条会话从索引里静默消失，
+      // 坏文件不能无声跳过，那意味着这条会话从索引里静默消失，
       // 用户看不到任何迹象。至少留一行日志供排障。
       logger.warn('sessions', `会话文件读取失败，已跳过：${file}（${String(error?.message ?? error).slice(0, 120)}）`);
     }
   }
 
   /**
-   * 僵尸回收（r92 / R78-1 重写）。
+   * 僵尸回收。
    *
    * 上次进程异常退出时正在 running/waiting 的会话，运行循环已不存在、状态却停在
-   * running/waiting —— UI 里既不结束也无法中止（中止按钮找不到活对象）。启动时改判
+   * running/waiting，UI 里既不结束也无法中止（中止按钮找不到活对象）。启动时改判
    * aborted 并写回文件，让会话页看到真实状态。不改内存 current（启动时它是空的）。
    *
-   * ⚠️ 为什么重写：原实现遍历**全部**磁盘文件 → 逐个 statSync → 对最近 3 天改过的
-   *    逐个 readFileSync + JSON.parse。而"只有 running/waiting 才可能是僵尸"这个
-   *    事实索引里已经带着（#summary 的 status），于是全量读盘完全是白付：
-   *      实测 data/sessions 数百文件时每次启动全量 parse 一遍，且这段在
-   *      createApp() 内、**建窗之前**跑 —— 直接表现成"双击后迟迟不出窗"。
-   *    现在只对"索引里 status 仍是 running/waiting"的条目读文件，典型 0~3 个。
-   *    顺带不再依赖 mtime 窗口：10 天前遗留的 running 同样是僵尸，本来就该收。
+   * 为什么只处理索引里的条目：原实现遍历全部磁盘文件 → 逐个 statSync → 对最近 3 天
+   * 改过的逐个 readFileSync + JSON.parse。而"只有 running/waiting 才可能是僵尸"这个
+   * 事实索引里已经带着（#summary 的 status），全量读盘完全是白付：
+   * 实测 data/sessions 数百文件时每次启动全量 parse 一遍，且这段在 createApp() 内、
+   * 建窗之前跑，直接表现成"双击后迟迟不出窗"。
+   * 现在只对"索引里 status 仍是 running/waiting"的条目读文件，典型 0~3 个。
+   * 顺带不再依赖 mtime 窗口：10 天前遗留的 running 同样是僵尸，本来就该收。
    */
   #reclaimZombies() {
     const targets = this.index.filter((e) => e && (e.status === 'running' || e.status === 'waiting'));
@@ -229,9 +228,9 @@ export class SessionRegistry {
         data.status = 'aborted';
         data.endedAt = data.endedAt ?? Date.now();
         data.abortedOnBoot = true;   // 标记来源，UI/排障能分清"用户中止"和"重启遗留"
-        // 原子写（2026-10-07）：启动扫描路径上尤其不能用裸 writeFileSync ——
-        // 中断/崩溃会留下截断的会话文件，之后 #loadOne 的 catch 会静默跳过它
-        // → 该会话在索引里**永久消失**（reconcileInBackground 也读不回来，文件已坏）。
+        // 原子写：启动扫描路径上尤其不能用裸 writeFileSync，
+        // 中断/崩溃会留下截断的会话文件，之后 #loadOne 的 catch 会静默跳过它，
+        // 该会话在索引里永久消失（reconcileInBackground 也读不回来，文件已坏）。
         try { atomicWriteSessionFile(file, data); } catch { /* 写不回就只改内存视图 */ }
         const idx = this.index.findIndex((e) => e.id === data.id);
         if (idx >= 0) this.index[idx] = this.#summary(data);
@@ -264,7 +263,7 @@ export class SessionRegistry {
   }
 
   /**
-   * 防抖写缓存：索引有变动时调这个，而不是直接 #writeIndexCache ——
+   * 防抖写缓存：索引有变动时调这个，而不是直接 #writeIndexCache，
    * 运行中的会话每次 update 都会改索引条目，逐次写 0.5MB 同步 IO 太亏。
    * flushIndexCache()（进程退出前）会立刻落盘。
    */
@@ -337,7 +336,7 @@ export class SessionRegistry {
       trigger: s.triggerSummary ?? '',
       promptChars: s.promptChars ?? 0,
       rounds: s.rounds ?? 0,
-      // 2026-10-18：错误连同本地化解释一起进摘要 —— 列表/索引从磁盘重建时
+      // 错误连同本地化解释一起进摘要：列表/索引从磁盘重建时
       // 也能显示中文错误摘要，而不是刷新后只剩一条没有原因的失败。
       error: s.error ?? null,
       errorHuman: s.errorHuman ?? null,
@@ -391,10 +390,10 @@ export class SessionRegistry {
   }
 
   /**
-   * 不克隆的读取：**只用于"读出来马上序列化"的热路径**（如 SSE 广播）。
+   * 不克隆的读取：只用于"读出来马上序列化"的热路径（如 SSE 广播）。
    * 运行中的会话每次 session-update 都要走一次，get() 的 structuredClone
-   * 会把整个会话（含每轮 raw 响应）全量复制一遍 —— 纯序列化用不到这份拷贝。
-   * ⚠️ 返回的是活对象，调用方绝对不能改它；要改请用 get()。
+   * 会把整个会话（含每轮 raw 响应）全量复制一遍，纯序列化用不到这份拷贝。
+   * 返回的是活对象，调用方绝对不能改它；要改请用 get()。
    */
   peek(id) {
     if (this.current.has(id)) return this.current.get(id);
@@ -434,8 +433,8 @@ export class SessionRegistry {
     // error 态优先用错误摘要，其它终态按 status 填中文。
     if (status !== 'running' && status !== 'waiting') {
       if (status === 'error' && s.error) {
-        // 优先用本地化标题（errorHuman.title），没有才退回错误原文前 100 字 ——
-        // 会话索引/列表行的简短摘要要能一眼看懂（2026-10-18）。
+        // 优先用本地化标题（errorHuman.title），没有才退回错误原文前 100 字，
+        // 会话索引/列表行的简短摘要要能一眼看懂。
         s.activity = `⚠️ 出错：${s.errorHuman?.title || s.error.slice(0, 100)}`;
       } else if (!s.activity || s.activity === '正在思考…') {
         s.activity = ({ done: '已完成', noreply: '无回复', aborted: '已中止' })[status] || s.activity;
@@ -448,24 +447,24 @@ export class SessionRegistry {
     if (idx >= 0) this.index[idx] = this.#summary(s);
     this.#scheduleIndexCacheWrite();
     // 清理超出保留数的旧文件
-    // ⚠️（2026-10-17）必须走 #pruneFiles()：它删文件前会先把用量补进账本
-    //    （appendUsageLedger 按 id 幂等），并跳过运行中/等待中的会话。
-    //    曾经这里内联了一份"只删不补账"的裁剪，被裁掉的会话用量直接消失，
-    //    就是"今日 200 次运行只算 120 次"的直接原因。
+    // 必须走 #pruneFiles()：它删文件前会先把用量补进账本
+    // （appendUsageLedger 按 id 幂等），并跳过运行中/等待中的会话。
+    // 内联一份"只删不补账"的裁剪会让被裁掉的会话用量直接消失，
+    // 就是"今日 200 次运行只算 120 次"的直接原因。
     try { this.#pruneFiles(); } catch { /* ignore */ }
     return s;
   }
 
   /**
-   * 彻底丢弃一个会话：从内存索引移除 + 删掉磁盘文件，**不留"中止"记录**。
+   * 彻底丢弃一个会话：从内存索引移除 + 删掉磁盘文件，不留"中止"记录。
    *
    * 用途：档位判定"这次不响应"时，连"等待中"会话都不该出现在会话页
    * （否则用户会看到一堆等半天最后变"中止"的条目，还以为出错了）。
    * 与 finish(id,'aborted') 的区别：finish 是"开始了但没成"，会留下痕迹；
    * 这个是"压根没开始"，干净消失。
    *
-   * ⚠️ 只用于从未真正运行过的会话（status='waiting'）。
-   *    已经跑过并消耗了 token 的会话要走 finish，别用这个抹掉用量记录。
+   * 只用于从未真正运行过的会话（status='waiting'）。
+   * 已经跑过并消耗了 token 的会话要走 finish，别用这个抹掉用量记录。
    */
   discard(id) {
     if (!id) return false;
@@ -473,16 +472,16 @@ export class SessionRegistry {
     // 已运行过的不允许丢弃（会抹掉用量/成本记录，导致对不上账）
     if (s && s.status !== 'waiting') return false;
     this.current.delete(id);
-    this._lastPersistAt?.delete(id);   // r92：节流时间戳随会话删除清理（finish 有，这里原先漏了）
+    this._lastPersistAt?.delete(id);   // 节流时间戳随会话删除清理（finish 有，这里原先漏了）
     const before = this.index.length;
     this.index = this.index.filter((e) => e.id !== id);
     try {
       const f = path.join(SESSIONS_DIR, `${id}.json`);
       if (fs.existsSync(f)) {
-        // ⚠️（2026-10-17）兜底补账本：discard 的既定用途是"从未真正运行"的
-        //    会话（无用量，ledgerRecordOf 直接返回 null，这里是空操作）；
-        //    但进程被杀留下的"僵尸 waiting 会话"可能带部分用量，补一行
-        //    再删，避免这部分 token 凭空消失。
+        // 兜底补账本：discard 的既定用途是"从未真正运行"的会话
+        // （无用量，ledgerRecordOf 直接返回 null，这里是空操作）；
+        // 但进程被杀留下的"僵尸 waiting 会话"可能带部分用量，补一行
+        // 再删，避免这部分 token 凭空消失。
         try { appendUsageLedger(this.#ledgerSourceOfFile(id)); } catch { /* 兜底失败不阻塞删除 */ }
         fs.unlinkSync(f);
       }
@@ -494,7 +493,7 @@ export class SessionRegistry {
   /**
    * 主动删除一条会话记录（含已结束的）。
    * 与 discard 的区别：discard 只允许删"等待中"的（保护用量记录）；
-   * remove 是用户主动清理历史，允许删任何状态，但**不删正在运行的**（那会丢账）。
+   * remove 是用户主动清理历史，允许删任何状态，但不删正在运行的（那会丢账）。
    * @returns {boolean} 是否真的删了
    */
   remove(id) {
@@ -503,15 +502,15 @@ export class SessionRegistry {
     // 正在运行的会话不能删（usage 还在累加，删了账就乱了）；等待中的可以
     if (s && s.status === 'running') return false;
     this.current.delete(id);
-    this._lastPersistAt?.delete(id);   // r92：节流时间戳随会话删除清理（finish 有，这里原先漏了）
+    this._lastPersistAt?.delete(id);   // 节流时间戳随会话删除清理（finish 有，这里原先漏了）
     const before = this.index.length;
     this.index = this.index.filter((e) => e.id !== id);
     try {
       const f = path.join(SESSIONS_DIR, `${id}.json`);
       if (fs.existsSync(f)) {
-        // ⚠️（2026-10-17）与 #pruneFiles 同理：删之前先补账本。
-        //    用户主动清历史，不该让"真花掉的 token"从用量统计里消失。
-        //    appendUsageLedger 按 id 幂等，结束态落盘时通常已入账。
+        // 与 #pruneFiles 同理：删之前先补账本。
+        // 用户主动清历史，不该让"真花掉的 token"从用量统计里消失。
+        // appendUsageLedger 按 id 幂等，结束态落盘时通常已入账。
         try { appendUsageLedger(this.#ledgerSourceOfFile(id)); } catch { /* 兜底失败不阻塞删除 */ }
         fs.unlinkSync(f);
       }
@@ -534,15 +533,15 @@ export class SessionRegistry {
     for (const e of this.index) {
       if (keepIds.has(e.id)) { remaining.push(e); continue; }
       removed++;
-      this._lastPersistAt?.delete(e.id);   // r92：节流时间戳随会话删除清理
-      // ⚠️（2026-10-17 N8）**删文件之前必须先补账本**。
-      //    账本是会话文件之外唯一能给出"这天花了多少"的长期凭据，
-      //    而 app.js 的 aggregateDayFromArchive / authoritativeGapForDay 会用它
-      //    给历史日补差（否则这些用量只剩"已生成快照的那几天"还能查到）。
-      //    正常路径下会话在结束态 #persist 时就已入过账，appendUsageLedger 按 id
-      //    幂等 → 这里是空操作；只有"结束那次落盘失败"或"旧版本遗留的会话文件"
-      //    才会真正补上一行。反过来看，这段代码让界面那句
-      //    "不影响用量统计的历史数据"从**空话**变成了**事实**。
+      this._lastPersistAt?.delete(e.id);   // 节流时间戳随会话删除清理
+      // 删文件之前必须先补账本。
+      // 账本是会话文件之外唯一能给出"这天花了多少"的长期凭据，
+      // 而 app.js 的 aggregateDayFromArchive / authoritativeGapForDay 会用它
+      // 给历史日补差（否则这些用量只剩"已生成快照的那几天"还能查到）。
+      // 正常路径下会话在结束态 #persist 时就已入过账，appendUsageLedger 按 id
+      // 幂等，这里是空操作；只有"结束那次落盘失败"或"旧版本遗留的会话文件"
+      // 才会真正补上一行。反过来看，这段代码让界面那句
+      // "不影响用量统计的历史数据"从空话变成了事实。
       try { appendUsageLedger(this.#usageSourceOf(e)); } catch { /* 兜底失败不阻塞清理 */ }
       try {
         const f = path.join(SESSIONS_DIR, `${e.id}.json`);
@@ -559,7 +558,7 @@ export class SessionRegistry {
    *
    * 优先读磁盘上的会话文件：只有它带 `retriedUsage`（重试归档的 token 也算钱）
    * 与 `vendor`，用索引摘要会少算或字段缺失。
-   * 文件缺失/损坏时退回索引摘要 —— 它至少有 id/chatKey/startedAt/endedAt/
+   * 文件缺失/损坏时退回索引摘要：它至少有 id/chatKey/startedAt/endedAt/
    * usage/model/webSearchCount，足以构成一条可用的账本记录。
    */
   #usageSourceOf(entry) {
@@ -607,10 +606,10 @@ export class SessionRegistry {
 
   /** 在会话结束时累加今日用量。 */
   #bumpTodayUsage(s) {
-    // ── 把重试归档的用量并进来（2026-10-07）──
+    // 把重试归档的用量并进来。
     // orchestrator 的 #resetSessionForRetry 会把"已消耗但本轮作废"的 token 归档到
     // retriedUsage（因为重试时 live.usage 被归零）。那笔钱是真花了，不并进来
-    // → 成本看板**系统性偏低**，且偏低程度取决于重试次数（无法对账）。
+    // 会让成本看板系统性偏低，且偏低程度取决于重试次数（无法对账）。
     const archived = s.retriedUsage || null;
     const eff = {
       calls: (Number(s.usage?.calls) || 0) + (Number(archived?.calls) || 0),
@@ -622,12 +621,12 @@ export class SessionRegistry {
     /* 零消耗会话（aborted 的等待会话：从未调用模型、token 全 0）不计 runs，
        否则"今日运行次数"会被暂停/未命中等中止事件虚增，与 LLM 调用次数脱节。 */
     if (eff.calls === 0 && eff.totalTokens === 0) return;
-    // ⚠️ dayKey 必须用**结束**时间，不是开始时间（2026-10-07 修）。
-    //   usage-today.json 是单槽文件：跨零点的会话若最后才 finish，用 startedAt 会把
-    //   dayKey 打回昨天，下面 `parsed?.dayKey === dayKey` 不匹配 → data 保持全零初始值
-    //   → **整体覆盖写回，今天的用量凭空消失**。
-    //   实测序列（A昨天/B今天/C昨天最后结束/D今天）：真实消耗 600，文件显示 100，
-    //   runs 显示 1（真实 2）。方向取决于会话结束顺序，不可预测、无法通过对比发现。
+    // dayKey 必须用结束时间，不是开始时间。
+    // usage-today.json 是单槽文件：跨零点的会话若最后才 finish，用 startedAt 会把
+    // dayKey 打回昨天，下面 `parsed?.dayKey === dayKey` 不匹配，data 保持全零初始值，
+    // 然后整体覆盖写回，今天的用量凭空消失。
+    // 实测序列（A昨天/B今天/C昨天最后结束/D今天）：真实消耗 600，文件显示 100，
+    // runs 显示 1（真实 2）。方向取决于会话结束顺序，不可预测、无法通过对比发现。
     const dayKey = localDayKey(s.endedAt ?? Date.now());
     let data = { dayKey, promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedTokens: 0, runs: 0, webSearchCount: 0 };
     let stale = null;
@@ -636,7 +635,7 @@ export class SessionRegistry {
       if (parsed?.dayKey === dayKey) data = parsed;
       else stale = parsed;
     } catch { /* 新的一天 */ }
-    // dayKey 不匹配时**不丢弃旧槽位**：先按天归档（usage-archived-days.json）再开新槽，
+    // dayKey 不匹配时不丢弃旧槽位：先按天归档（usage-archived-days.json）再开新槽，
     // 否则跨零点那部分的用量就永久查不到了。
     if (stale && (Number(stale.totalTokens) || 0) > 0) {
       try { this.#archiveDayUsage(stale); } catch { /* 归档失败不阻塞主流程 */ }
@@ -647,8 +646,8 @@ export class SessionRegistry {
     data.cachedTokens = (data.cachedTokens || 0) + eff.cachedTokens;
     data.runs += 1;
     data.webSearchCount = (data.webSearchCount || 0) + (Number(s.webSearchCount) || 0);
-    // r92（R78-6）：临时名带 pid。固定名 `.tmp` 在双开/两个核心指向同一数据目录时，
-    // A 进程写一半、B 进程 rename 走的是 A 的半截内容 —— 落一个半新半旧文件。
+    // 临时名带 pid。固定名 `.tmp` 在双开/两个核心指向同一数据目录时，
+    // A 进程写一半、B 进程 rename 走的是 A 的半截内容，落一个半新半旧文件。
     const tmp = path.join(DATA_DIR, `usage-today.json.${process.pid}.tmp`);
     fs.writeFileSync(tmp, JSON.stringify(data), 'utf8');
     fs.renameSync(tmp, path.join(DATA_DIR, 'usage-today.json'));
@@ -658,9 +657,9 @@ export class SessionRegistry {
       const tPath = path.join(DATA_DIR, 'telemetry-totals.json');
       let t = { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, toolCounts: {} };
       try { t = { ...t, ...JSON.parse(fs.readFileSync(tPath, 'utf8')) }; } catch { /* 首次 */ }
-      // ⚠️ calls 的口径是「LLM 调用次数」（与用量页一致：带 token 用量的 raw 条目数），
-      //    不是会话数；与 telemetry.js 的重建逻辑保持同一算法。
-      //    重试归档的调用也要计入（那些 raw 已被 messages=[] 清掉，不数就少记）。
+      // calls 的口径是「LLM 调用次数」（与用量页一致：带 token 用量的 raw 条目数），
+      // 不是会话数，与 telemetry.js 的重建逻辑保持同一算法。
+      // 重试归档的调用也要计入（那些 raw 已被 messages=[] 清掉，不数就少记）。
       let llmCalls = (Number(archived?.calls) || 0);
       for (const m of (s.messages || [])) {
         const ru = m?.raw?.usage || {};
@@ -676,10 +675,10 @@ export class SessionRegistry {
         const name = m?.toolCall?.name;
         if (name) t.toolCounts[String(name)] = (t.toolCounts[String(name)] || 0) + 1;
       }
-      // 原子写（2026-10-07）：原先是裸 writeFileSync，中途被杀会留下截断文件。
-      // 而 loadTotals() 对损坏的兜底是**全量重扫sessions/**（实测 185MB / 1963 文件
+      // 原子写：裸 writeFileSync 中途被杀会留下截断文件。
+      // 而 loadTotals() 对损坏的兜底是全量重扫 sessions/（实测 185MB / 1963 文件
       // 要 20+ 秒同步阻塞），反复损坏会把启动拖垮；且重建只统计磁盘上还留着的会话，
-      // 清理过的历史无法区分"被清理"与"未发生" → 累计量永久缺口。
+      // 清理过的历史无法区分"被清理"与"未发生"，累计量永久缺口。
       const tTmp = `${tPath}.${process.pid}.tmp`;
       fs.writeFileSync(tTmp, JSON.stringify(t), 'utf8');
       fs.renameSync(tTmp, tPath);
@@ -687,25 +686,25 @@ export class SessionRegistry {
   }
 
   /**
-   * 把 usage-today.json 的旧槽位按天归档到 usage-archived-days.json（2026-10-07 新增）。
+   * 把 usage-today.json 的旧槽位按天归档到 usage-archived-days.json。
    *
-   * 背景：usage-today.json 是**单槽**文件（只存"今天"）。跨零点时若直接覆盖，
+   * 背景：usage-today.json 是单槽文件（只存"今天"）。跨零点时若直接覆盖，
    * 昨天那部分用量就消失了（见 #bumpTodayUsage 里的说明）。所以 dayKey 不匹配时
-   * 先把旧槽位按天归档再开新槽 —— 归档后历史仍可在用量页查到。
+   * 先把旧槽位按天归档再开新槽，归档后历史仍可在用量页查到。
    *
-   * ⚠️ 归档写到**独立文件** usage-archived-days.json，不写 usage-daily.json。
+   * 归档写到独立文件 usage-archived-days.json，不写 usage-daily.json。
    *
    * 曾经两者共用 usage-daily.json，踩了大坑：app.js 的日快照层
    * （src/app.js 的 loadUsageDaily/saveUsageDaily）与本方法对同一个文件做
-   * read-modify-write，两边写入的结构还不兼容 —— 本方法写的是扁平
+   * read-modify-write，两边写入的结构还不兼容：本方法写的是扁平
    * {promptTokens, runs, webSearchCount, ...}，app.js 读的是嵌套的
    * { sig, aggregates: { totals, chats, models, searchCount, toolCounts } }。
    * 后果是 app.js 每次判定这些条目失效 → 从 sessions 档案重算该日 →
-   * 用自己的结构**覆盖掉**本方法累加进去的 webSearchCount（重算路径里
+   * 用自己的结构覆盖掉本方法累加进去的 webSearchCount（重算路径里
    * 根本没有这个字段），于是跨零点的搜索次数被静默丢弃。
    * 分文件后：app.js 只管自己的快照，本方法只管本文件，互不干扰。
    *
-   * 本文件是"结算流水"，不是统计快照 —— 统计口径以 app.js 的重算为准，
+   * 本文件是"结算流水"，不是统计快照：统计口径以 app.js 的重算为准，
    * 本文件只在 sessions 原始文件被清理后仍留一份底。
    */
   #archiveDayUsage(stale) {
@@ -730,7 +729,7 @@ export class SessionRegistry {
   /**
    * 运行中会话的落盘节流：每个会话 2 秒内最多写一次盘。
    *
-   * 曾经 update() 每次都 #persist —— activity 翻转（每轮 2 次）、每个工具调用
+   * 曾经 update() 每次都 #persist：activity 翻转（每轮 2 次）、每个工具调用
    * 都会同步 writeFileSync 整个会话 JSON（含提示词与所有消息，越跑越大）。
    * 同步写盘阻塞 event loop，排在后面的 SSE 广播/HTTP 响应全被拖慢。
    *
@@ -753,10 +752,10 @@ export class SessionRegistry {
       fs.writeFileSync(tmp, JSON.stringify(s, null, 1), 'utf8');
       fs.renameSync(tmp, sessionFile(s.id));
       if (s.status !== 'running' && s.status !== 'waiting') {
-        // ⚠️ 顺序要紧：账本必须在 #pruneFiles/finish 的删除之前写。
-        //   会话文件一旦被 keepFiles 裁掉，它携带的用量就再也读不到了
-        //   （这正是"用量估算不更新"的根因，见 src/usage-ledger.js）。
-        //   账本是这里唯一的长期凭据，先写它才安全。
+        // 顺序要紧：账本必须在 #pruneFiles/finish 的删除之前写。
+        // 会话文件一旦被 keepFiles 裁掉，它携带的用量就再也读不到了
+        // （这正是"用量估算不更新"的根因，见 src/usage-ledger.js）。
+        // 账本是这里唯一的长期凭据，先写它才安全。
         appendUsageLedger(s);
         this.#bumpTodayUsage(s);
       }

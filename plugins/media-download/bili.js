@@ -1,22 +1,17 @@
-﻿// B站访问与下载公共库
+﻿// B站访问与下载公共库。
 //
-// 供 data/plugins/ 下 B站相关插件共用：
-//   · bilibili-video  —— 群友分享 B站视频 → 自动下载发送
-//   · bili-music      —— @机器人 说「我想听 xxx」→ 搜索最相关的音乐视频下载发送
-// 两个插件各自独立配置（sessdata / 画质 / 时长上限），但下载管道只有一份：
-// 下载逻辑排查只改这里，不用在两个插件里各改一遍。
+// 下载管道只有一份：视频下载插件与将来的 B站相关插件共用它，
+// 排查只改这里，不用在多个插件里各改一遍。
 //
-// ── 搜索接口实测结论（2026-09-11）──
+// 搜索接口实测结论：
 //   ① 匿名 /x/web-interface/search/type             → 返回 HTML 风控页，不可用
 //   ② 带 SESSDATA /x/web-interface/search/type      → 仍返回 HTML，旧端点已废弃
-//   ③ 带 SESSDATA /x/web-interface/wbi/search/type + WBI 签名 → code:0，正常返回 20 条 ✅
-//   ⇒ 搜索**必须**走 WBI 签名端点 + SESSDATA，没有退化路径。
+//   ③ 带 SESSDATA /x/web-interface/wbi/search/type + WBI 签名 → code:0，正常返回 20 条
+//   搜索必须走 WBI 签名端点 + SESSDATA，没有退化路径。
 //
-// ── 相关度排序实测结论 ──
-//   B站返回的默认相关度排序对歌曲查询**不可用**：
-//     「高松灯 落花流水」前 5 名无一是正确答案（有陈奕迅版、千早爱音翻唱、AI高松灯雨爱）
-//     「晴天」前 2 名是 222 分钟 / 40 分钟的合集
-//   ⇒ 必须自己做「时长硬门槛 + 标题命中度 + 热度」打分，不能取第 1 名。
+// 相关度排序实测结论：B站返回的默认相关度排序对歌曲查询不可用
+//   （「高松灯 落花流水」前 5 名无一是正确答案；「晴天」前 2 名是 222 分钟 / 40 分钟的合集），
+//   必须自己做「时长硬门槛 + 标题命中度 + 热度」打分，不能取第 1 名。
 //
 // 依赖：
 //   · safe-fetch（防 SSRF，B站 CDN 是公网不会拦）
@@ -34,10 +29,10 @@ import { safeFetch } from '../../src/safe-fetch.js';
 import { safeFetchToFile } from './media-common.js';
 import { resolveParam, sleep, safeName, cleanupDir, createFailureNotifier, flattenMessageToText } from './media-common.js';
 import { logger } from '../../src/logger.js';
-// 数据目录必须与核心**同一真源**（src/config.js 的 DATA_DIR：env 优先、否则模块位置
+// 数据目录必须与核心同一真源（src/config.js 的 DATA_DIR：env 优先、否则模块位置
 // 锚定的 data<profile>）。旧的 `|| path.join(process.cwd(), 'data')` 兜底在安装版是
 // 隐患：cwd 取决于启动方式（快捷方式起始位置/命令行/计划任务），cwd 不对时媒体缓存
-// 写到随机位置 —— 表现为"下载功能失效/缓存找不到"（2026-10-10 包外依赖排查）。
+// 写到随机位置，表现为"下载功能失效/缓存找不到"。
 import { DATA_DIR } from '../../src/config.js';
 
 const DATA_ROOT = DATA_DIR;
@@ -58,10 +53,9 @@ export function biliHeaders(referer, sessdata) {
 /**
  * 抓取 B站 API 的 JSON 响应：统一"截断检查 + 解析"。
  *
- * ⚠️ 必须检查 truncated：safe-fetch 读到 maxBytes 上限会**静默截断**并正常返回，
- * 截断的 JSON 必然解析失败（2026-09-12 群里 BV1cEY26pEoD 的
- * "Unterminated string in JSON at position 177329" 就是 playurl 清单超过
- * 200KB 被截断所致）。在这里拦下并给出明确错误，而不是让 JSON.parse 掷骰子。
+ * 必须检查 truncated：safe-fetch 读到 maxBytes 上限会静默截断并正常返回，
+ * 截断的 JSON 必然解析失败（"Unterminated string in JSON" 就是 playurl 清单
+ * 超过 200KB 被截断所致）。在这里拦下并给出明确错误，而不是让 JSON.parse 掷骰子。
  */
 async function biliJson(url, { maxBytes = 1024 * 1024, referer = '', sessdata = '', timeoutMs = 15000 } = {}) {
   // 凭证兜底防线：SESSDATA 只发给 B站自家域（hostAllowedForCookie）。
@@ -100,16 +94,15 @@ export function parseDuration(s) {
 // 路径解析统一交给 src/ffmpeg-resolve.js（全项目唯一入口）：它覆盖「手填 >
 // QQ_AGENT_FFMPEG > 设置页下载的 > 旧随包 > PATH / 注册表 / WinGet / 常见目录」。
 //
-// 为什么不在这里自己探测（2026-11-03 收敛）：此前本文件只查 PATH 与 B站客户端的
-// Windows 路径，于是「设置页下载了 ffmpeg / 在设置里手填了路径」的用户，B站视频
-// 仍会退化成 FLV 单流 —— 同一个安装包里，别的功能能用、B站下载不用，正是
-// ffmpeg-resolve.js 头注释里记录的那类不一致。插件不能 import 核心模块做路径
-// 解析以外的判断（那会变成第二份实现），所以这里只取它给出的路径。
+// 不在这里自己探测：只查 PATH 与 B站客户端的 Windows 路径时，「设置页下载了 ffmpeg /
+// 在设置里手填了路径」的用户，B站视频仍会退化成 FLV 单流，同一个安装包里别的功能
+// 能用、B站下载不用。插件不能 import 核心模块做路径解析以外的判断（那会变成
+// 第二份实现），所以这里只取它给出的路径。
 let ffmpegPath = undefined;
 export async function findFfmpeg(customPath) {
   if (ffmpegPath !== undefined) return ffmpegPath;
 
-  // ① 插件配置里单独指定的路径（优先于全局设置 —— 插件可能要用另一份）
+  // ① 插件配置里单独指定的路径（优先于全局设置，插件可能要用另一份）
   if (customPath && fs.existsSync(customPath)) {
     try {
       await execFileAsync(customPath, ['-version'], { timeout: 5000 });
@@ -167,7 +160,7 @@ export async function avToBvViaApi(av, sessdata) {
 }
 
 /** b23.tv 短链 → 跟重定向拿最终 URL → 提取 BV 号。
- *  ⚠️ 不带 SESSDATA：解析只需跟随重定向，匿名即可；凭证跟着任意请求走是泄漏面。 */
+ *  不带 SESSDATA：解析只需跟随重定向，匿名即可；凭证跟着任意请求走是泄漏面。 */
 export async function resolveB23(shortUrl) {
   const { url: final } = await safeFetch(shortUrl, { timeoutMs: 10000, headers: biliHeaders(null) });
   return extractBvid(final) || extractBvid(shortUrl);
@@ -182,8 +175,8 @@ export async function resolveB23(shortUrl) {
  * @param {object} deps { onebot, sessdata }
  */
 export async function resolveBvid(args, { onebot }) {
-  // ⚠️ 解析路径全程不带 SESSDATA：BV 号解析（b23 重定向 / 页面重定向 / av→BV API）
-  // 匿名即可完成。曾经这里把管理员的 SESSDATA 发给消息里出现的**任意第三方 URL**
+  // 解析路径全程不带 SESSDATA：BV 号解析（b23 重定向 / 页面重定向 / av→BV API）
+  // 匿名即可完成。曾经这里把管理员的 SESSDATA 发给消息里出现的任意第三方 URL
   // （"任意 URL 兜底"分支 + safeFetch 跟随跨域重定向复用同一份 headers），
   // 群友一条消息就能偷走登录态。需要凭证的只有下载/搜索路径，且已用
   // hostAllowedForCookie 限定 B站自家域。
@@ -295,7 +288,7 @@ export function signWbi(params, mixin) {
 /**
  * B站关键词搜索。
  *
- * ⚠️ 必须走 WBI 签名端点 + SESSDATA —— 匿名或旧端点 /search/type 已返回 HTML 风控页，不可用。
+ * 必须走 WBI 签名端点 + SESSDATA：匿名或旧端点 /search/type 已返回 HTML 风控页，不可用。
  *
  * @returns {Promise<Array<{bvid,title,author,play,duration,desc,review}>>} 按 B站默认相关度排序的候选
  */
@@ -335,9 +328,9 @@ const SIGNAL_WORDS = new Set([
  * 对搜索结果打分排序。
  *
  * 打分依据（按优先级）：
- *   ① 时长硬门槛 —— 音乐通常在 1~8 分钟；过滤掉 15 秒片段和 40/222 分钟合集
- *   ② 标题命中度 —— 完整关键词 > 全部分词命中 > 部分命中；标题一个词都不含的直接淘汰
- *   ③ 热度（log 播放量）—— 同分时的 tiebreaker：热门 ≈ 大家公认的那版
+ *   ① 时长硬门槛：音乐通常在 1~8 分钟，过滤掉 15 秒片段和 40/222 分钟合集
+ *   ② 标题命中度：完整关键词 > 全部分词命中 > 部分命中；标题一个词都不含的直接淘汰
+ *   ③ 热度（log 播放量）：同分时的 tiebreaker，热门 ≈ 大家公认的那版
  *
  * 实测依据：B站默认相关度排序对歌曲查询不可用（「高松灯 落花流水」前 5 名无一正确），
  * 所以必须自己打分，不能直接取第 1 名。
@@ -410,9 +403,9 @@ export async function getVideoInfo(bvid, sessdata) {
 
 /** 取播放地址：fnval=16 → DASH（分轨）；fnval=1 → FLV durl（单流含音）。
  *
- * ⚠️ maxBytes 必须 4MB 起步：DASH 清单包含全部画质 + 每条流十几个 backup_url，
- * 大视频的清单轻松超过 200KB（2026-09-12 BV1cEY26pEoD 即被 200KB 截断报
- * "Unterminated string in JSON"）。截断在 biliJson 里显式报错。
+ * maxBytes 必须 4MB 起步：DASH 清单包含全部画质 + 每条流十几个 backup_url，
+ * 大视频的清单轻松超过 200KB，会被截断报 "Unterminated string in JSON"。
+ * 截断在 biliJson 里显式报错。
  */
 export async function getPlayUrl(bvid, cid, fnval, sessdata) {
   const data = await biliJson(
@@ -425,9 +418,8 @@ export async function getPlayUrl(bvid, cid, fnval, sessdata) {
 
 /** 把流的候选地址压成有序数组（主地址在前，backup_url 在后），去重。
  *
- * B站 playurl 给每个流都带 `backup_url`（备选 CDN 节点）。实测（2026-09-11，
- * BV1Actq6LEAM / BV17kYu63EkC 的真实群分享）：
- *   · 主地址落在 `*.mcdn.bilivideo.cn:8082` 段时**整段不可达** —— 8s 试连超时
+ * B站 playurl 给每个流都带 `backup_url`（备选 CDN 节点）。实测：
+ *   · 主地址落在 `*.mcdn.bilivideo.cn:8082` 段时整段不可达，8s 试连超时
  *   · 同一资源的 backup_url 指向 `*.bilivideo.com` / `upos-sz-mirror*` 时 37ms 连上
  * 所以候选列表必须带上 backup_url，否则死节点无解。
  */
@@ -478,11 +470,10 @@ export function fileMagicType(p) {
  *
  * streamUrl 可传单个 URL 字符串，或候选数组（主地址 + backup_url，见 streamCandidates）。
  *
- * 失败策略：**逐候选各试 1 次**，连接类失败立刻换下一个 CDN 节点。
- *   旧版在同址重试 3 次，注释假设"节点会轮换"——但固定 CDN URL 不会轮换，
- *   死节点上重试 3 次 = 白等 ~63 秒后照样失败（2026-09-11 群里两次事故均如此）。
- * 只有候选只剩 1 个（没有 backup）时才在同址重试，保留瞬断容错。
- * HTTP 4xx/5xx、字节超限、空流不重试（重试无意义）。
+ * 失败策略：逐候选各试 1 次，连接类失败立刻换下一个 CDN 节点。
+ *   在同址重试 3 次没有意义：固定 CDN URL 不会轮换，死节点上重试 3 次
+ *   = 白等 ~63 秒后照样失败。只有候选只剩 1 个（没有 backup）时才在同址重试，
+ *   保留瞬断容错。HTTP 4xx/5xx、字节超限、空流不重试（重试无意义）。
  */
 export async function downloadStreamToFile(streamUrl, outPath, maxBytes, bvid, sessdata) {
   // 传字符串 = 单候选（旧调用方式兼容）；传数组 = 主 + backup 候选
@@ -550,13 +541,13 @@ export const inFlight = new Set();
 
 /** 把下载错误压成一句极简中文（给群友看，不带技术细节）。
  *
- * ⚠️ 网络类错误必须显式映射：旧版没有这个分支，`connect ETIMEDOUT 115.56.95.6:8082`
- * 会被兜底原样发进群，等于把内部 CDN 的 IP:端口泄露给群友（2026-09-11 群里出现两次）。
- * 管理员要看原始错误请看日志（[bilibili-video] 自动下载失败: ...）。
+ * 网络类错误必须显式映射：没有这个分支时，`connect ETIMEDOUT 115.56.95.6:8082`
+ * 会被兜底原样发进群，等于把内部 CDN 的 IP:端口泄露给群友。
+ * 管理员要看原始错误请看日志。
  */
 export function briefFailure(e) {
   const m = String(e?.message ?? e ?? '');
-  // 截断/坏 JSON：playurl 清单过大被截（已调大上限兜底）、CDN 返回风控页等——重试可能好
+  // 截断/坏 JSON：playurl 清单过大被截（已调大上限兜底）、CDN 返回风控页等，重试可能好
   if (/截断|Unterminated|not valid JSON|Unexpected token|Unexpected end|非 JSON/i.test(m)) return 'B站那边返回的数据不完整，稍后再试一次';
   if (/大小上限/.test(m)) return '这个视频太大了，超出下载大小上限，下不了';
   if (/啥都木有|code=-404|-404/.test(m)) return '这个视频下载不了（B站那边已失效/私密，发不了）';
@@ -623,8 +614,8 @@ export async function downloadAndSend(bvid, { onebot, kind, chatId, params = {},
       outPath = path.join(CACHE_DIR, `${baseName}.mp4`);
       if (aStream) {
         const aUrl = streamCandidates(aStream.baseUrl || aStream.base_url, aStream.backup_url);
-        // 音频上限与视频同额：旧版音频硬编码 5MB，128kbps 下 6 分钟就 5.6MB，
-        // 会被静默截断成半截音频（safeFetchBinary 截断返回的老行为），合出来视频短一截
+        // 音频上限与视频同额：音频硬编码 5MB 时，128kbps 下 6 分钟就 5.6MB，
+        // 会被静默截断成半截音频，合出来视频短一截
         const vFile = outPath + '.v', aFile = outPath + '.a';
         try {
           await Promise.all([
@@ -637,7 +628,7 @@ export async function downloadAndSend(bvid, { onebot, kind, chatId, params = {},
           }
           await execFileAsync(ffmpeg, ['-i', vFile, '-i', aFile, '-c', 'copy', '-y', outPath], { timeout: 60000 });
         } finally {
-          // 中间分段无论成败都清理（旧版 ffmpeg 抛错时 .v/.a 会泄漏到 1 小时后）
+          // 中间分段无论成败都清理（否则 ffmpeg 抛错时 .v/.a 会泄漏到 1 小时后）
           // 清理失败可忽略：文件可能已被 ffmpeg 读走/占用，留着也会被定期清扫。
           try { fs.unlinkSync(vFile); } catch { /* 清理失败可忽略 */ }
           try { fs.unlinkSync(aFile); } catch { /* 清理失败可忽略 */ }
@@ -651,7 +642,7 @@ export async function downloadAndSend(bvid, { onebot, kind, chatId, params = {},
       }
     } else if (playData.durl && playData.durl.length) {
       const part = playData.durl[0];
-      // 先落 .raw，魔数定扩展名（CDN 的 content-type 不可信，旧版按它定 ext 会错名）
+      // 先落 .raw，魔数定扩展名（CDN 的 content-type 不可信，按它定 ext 会错名）
       const rawPath = path.join(CACHE_DIR, `${baseName}.raw`);
       const { contentType } = await downloadStreamToFile(
         streamCandidates(part.url, part.backup_url), rawPath, maxBytes, bvid, sessdata);
@@ -674,7 +665,7 @@ export async function downloadAndSend(bvid, { onebot, kind, chatId, params = {},
     }
 
     // ③ 发送：优先走核心的发送队列（限频 / 去重 / 留档都在这条链路上）。
-    //    绕过去直发会跳过限频与留档 —— 媒体把配额吃光后文字突然发不出，
+    //    绕过去直发会跳过限频与留档，媒体把配额吃光后文字突然发不出，
     //    而且下一次运行不知道自己发过。sender 缺失时退回直发，仅为让本模块能独立复用。
     const segments = [{ type: 'video', data: { file: outPath } }];
     if (sender?.sendMedia) {
@@ -682,7 +673,7 @@ export async function downloadAndSend(bvid, { onebot, kind, chatId, params = {},
     } else if (onebot?.sendSegments) {
       await onebot.sendSegments(kind, chatId, segments);
     }
-    // L 级（2026-10-14）：unref —— 纯清理用途的定时器不该拖住进程退出
+    // L 级：unref，纯清理用途的定时器不该拖住进程退出
     const biliCleanupTimer = setTimeout(() => { try { fs.unlinkSync(outPath); } catch { /* 两分钟后清理缓存；文件已被移走/删除都算正常 */ } }, 120000);
     biliCleanupTimer.unref?.();
 
