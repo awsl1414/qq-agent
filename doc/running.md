@@ -142,6 +142,7 @@ Bing 网页解析不需要 Key，是默认搜索源。
 | `desktop-pet/` | 桌宠模型（`models/`）、预览图、`state.json` |
 | `exports/` / `import-bundles/` / `import-backups/` | 数据导出包、导入包解压临时区、导入前备份 |
 | `runtime/ffmpeg/` | 设置页「媒体工具」下载的 ffmpeg |
+| `runtime/legacy-backup/` | 跨版本迁移搬出来的旧文件（如旧版随包的 ffmpeg）。不自动删除，确认不要了在「设置 → 外观与数据」里清 |
 | `account.json` | 社区市场账号凭据（不进 `config.json`） |
 | `qq-agent.lock` | 进程单实例锁 |
 | `console-port` | 控制台实际端口（一行数字） |
