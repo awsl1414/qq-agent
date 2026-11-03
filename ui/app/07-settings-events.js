@@ -2302,7 +2302,7 @@ async function bindBackupSettings() {
           const categories = categoryOptions(Array.isArray(target.categories) ? target.categories : status.categories.filter((item) => item.defaultOn !== false).map((item) => item.key), 'data-category');
           return '<fieldset data-target="' + esc(target.id) + '"><legend>' + esc(targetLabels[target.type] || target.type) + (target.name ? ' · ' + esc(target.name) : '') + '</legend><div class="backup-target-fields">' + fields + specific + '</div><fieldset><legend>备份内容</legend><p class="hint">勾选什么就备份什么，恢复时可以只选其中一部分。</p><p class="hint">体积为当前实际内容的未压缩大小；空类别显示 0 B。包含密钥时另加加密配置。</p>' + categories + '</fieldset><p class="hint">每个目标只备份自己勾选的类别；类别相同的目标共用一个包。</p><div class="backup-actions"><button type="button" class="btn btn-small" data-test="' + esc(target.id) + '">测试连接</button><button type="button" class="btn btn-small" data-remove="' + esc(target.id) + '">删除目标</button></div></fieldset>';
         }).join('') + '</div><fieldset><legend>添加备份目标</legend><div class="field-row"><div class="field"><label for="backup-type">备份方式</label><select id="backup-type" aria-describedby="backup-type-help"><option value="local">本地目录</option><option value="webdav">WebDAV</option><option value="s3">S3 兼容</option></select></div><button type="button" class="btn" id="backup-add">添加目标</button></div><div class="set-hint" id="backup-type-help">' + helpList('local') + '</div></fieldset>' +
-        '<h4 id="backup-restore-title" tabindex="-1">恢复与回滚</h4><div id="backup-files"><p class="hint">请刷新备份列表，选择备份进行预览与恢复。</p></div><h4>恢复回滚</h4><div id="backup-rollbacks"></div>';
+        '<h4 id="backup-restore-title" tabindex="-1">恢复与回滚</h4><button type="button" class="btn" id="backup-import" data-restore>选择备份文件…</button><input type="file" id="backup-import-file" accept=".zip,.qqab" aria-label="选择备份文件" hidden><div id="backup-preview"></div><div id="backup-files"><p class="hint">请刷新备份列表，或选择本地 ZIP / QQAB 备份文件进行预览与恢复。</p></div><h4>恢复回滚</h4><div id="backup-rollbacks"></div>';
       const collect = () => {
         exportCategories = [...panel.querySelectorAll('[data-export-category]:checked')].map((el) => el.dataset.exportCategory);
         panel.querySelectorAll('#backup-global [data-bk]').forEach((el) => { config[el.dataset.bk] = el.type === 'checkbox' ? el.checked : Number(el.value); });
@@ -2337,6 +2337,8 @@ async function bindBackupSettings() {
         panel.querySelector('#backup-status').textContent = (status.running ? '备份或恢复正在运行，请稍后刷新。' : '') + (last ? '最近备份：' + (partial ? '部分成功' : last.ok ? '成功' : '失败') + (last.error ? '；' + last.error : '') + (failures.length ? '；' + failures.join('；') : '') : '还没有备份。添加并保存目标后点「立即备份」，或直接「导出到本地」留一份离线副本。');
         panel.querySelector('#backup-run').disabled = busy || status.running;
         panel.querySelectorAll('[data-restore], [data-rollback]').forEach((el) => { el.disabled = busy || status.running; });
+        const execute = panel.querySelector('[data-restore-execute]');
+        if (execute) execute.disabled = busy || status.running || !panel.querySelector('[data-restore-category]:checked');
       };
       const refreshStatus = async () => {
         Object.assign(status, await api('/api/backup/targets'));
@@ -2349,7 +2351,7 @@ async function bindBackupSettings() {
         for (const item of status.rollbacks || []) addRollback(item.id || item.backupId);
         if (!status.rollbacks?.length) panel.querySelector('#backup-rollbacks').innerHTML = '<p class="muted">暂无可回滚的恢复快照</p>';
       };
-      const action = (button, fn, loading = '正在处理…') => button.addEventListener('click', async () => {
+      const action = (button, fn, loading = '正在处理…', eventName = 'click') => button.addEventListener(eventName, async () => {
         if (busy) return;
         const focused = document.activeElement;
         const label = button.textContent;
@@ -2441,6 +2443,101 @@ async function bindBackupSettings() {
       action(panel.querySelector('#backup-add'), async () => { collect(); config.targets.push({ id: crypto.randomUUID(), type: panel.querySelector('#backup-type').value, name: '', enabled: true, categories: status.categories.filter((item) => item.defaultOn !== false).map((item) => item.key) }); draw(); feedback('目标已添加，请填写并保存'); return '[data-target]:last-child [data-bk="name"]'; });
       panel.querySelectorAll('[data-remove]').forEach((button) => action(button, async () => { collect(); config.targets = config.targets.filter((target) => target.id !== button.dataset.remove); draw(); feedback('目标已移除，请保存设置'); return '#backup-add'; }));
       panel.querySelectorAll('[data-test]').forEach((button) => action(button, async () => { await save(); feedback('正在测试连接…'); const result = await post('test', { targetId: button.dataset.test }); if (!result.ok) throw new Error(result.message || result.error || '连接失败'); feedback(result.message || '连接成功'); }, '正在测试…'));
+      let previewFileId;
+      const clearPreview = async () => {
+        if (previewFileId) await api('/api/backup/import-file?' + new URLSearchParams({ fileId: previewFileId }), { method: 'DELETE' });
+        previewFileId = undefined;
+        panel.querySelector('#backup-preview').replaceChildren();
+      };
+      const showRestorePreview = async (preview, input, name) => {
+        await clearPreview();
+        previewFileId = input.fileId;
+        const row = document.createElement('fieldset');
+        const legend = document.createElement('legend'); legend.textContent = name; row.append(legend);
+        const info = document.createElement('p'); info.className = 'hint';
+        info.textContent = (preview.manifest.encrypted ? '已加密备份。' : '未加密备份。') + '勾选要恢复的类别；消息合并去重，恢复前生成可回滚快照。'
+          + (preview.scan.modules.length ? '用户扩展先进入锻造台暂存，需逐个确认安装。' : '');
+        row.append(info);
+        const categories = document.createElement('div'); categories.className = 'backup-categories';
+        for (const item of preview.scan.categories) {
+          const label = document.createElement('label'); label.className = 'checkbox-row';
+          const check = document.createElement('input'); check.type = 'checkbox'; check.className = 'sw'; check.checked = true; check.dataset.restoreCategory = item.key;
+          const text = document.createElement('span'); text.textContent = item.label + ' · ' + item.chats + ' 个会话 · ' + item.files + ' 个文件 · ' + fmtBytes(item.bytes);
+          label.append(check, text); categories.append(label);
+        }
+        row.append(categories);
+        const details = document.createElement('details');
+        const summary = document.createElement('summary'); summary.textContent = '查看来源与本机数据详情';
+        const contents = document.createElement('pre'); contents.textContent = JSON.stringify(preview.scan, null, 2);
+        details.append(summary, contents); row.append(details);
+        const hint = document.createElement('p'); hint.className = 'hint'; hint.setAttribute('role', 'status'); row.append(hint);
+        const execute = document.createElement('button'); execute.type = 'button'; execute.className = 'btn'; execute.dataset.restoreExecute = ''; execute.textContent = '执行恢复';
+        const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn'; cancel.textContent = '取消预览';
+        const actions = document.createElement('div'); actions.className = 'backup-actions'; actions.append(execute, cancel); row.append(actions);
+        panel.querySelector('#backup-preview').append(row);
+        const updateSelection = () => {
+          hint.textContent = categories.querySelector(':checked') ? '' : '请至少选择一项恢复内容';
+          updateStatus();
+        };
+        categories.addEventListener('change', updateSelection);
+        updateSelection();
+        action(cancel, async () => { await clearPreview(); feedback('已取消恢复'); return '#backup-import'; });
+        action(execute, async () => {
+          const selected = [...categories.querySelectorAll(':checked')].map((el) => el.dataset.restoreCategory);
+          if (!selected.length) throw new Error('请至少选择一项恢复内容');
+          const selection = Object.fromEntries(selected.map((key) => [key, preview.selection[key]]));
+          if (!await qaConfirm({ danger: true, confirmText: '执行恢复', message: name + '\n将恢复所选的 ' + selected.length + ' 个类别，可能覆盖当前文件；恢复前会生成可回滚快照。回滚也会撤销恢复后对相关文件的修改。' })) { feedback('已取消执行，可继续调整恢复范围'); return; }
+          try {
+            feedback('正在恢复，请等待完成…');
+            const restored = await post('restore', { ...input, selection });
+            previewFileId = undefined;
+            categories.remove(); actions.remove(); hint.remove();
+            feedback('恢复完成，可在下方回滚：' + restored.backupId);
+            for (const module of restored.report?.modules || []) {
+              if (!module.ok || !module.draftId) continue;
+              const install = document.createElement('button'); install.type = 'button'; install.className = 'btn btn-small'; install.dataset.restore = ''; install.textContent = '确认安装 ' + module.key;
+              row.append(install);
+              action(install, async () => {
+                if (!await qaConfirm({ danger: true, confirmText: '安装此扩展', message: '安装扩展 ' + module.key + '？安装后默认关闭。\n安全检查：\n' + JSON.stringify(module.gate, null, 2) })) { feedback('扩展仍在锻造台暂存区，尚未安装'); return; }
+                const result = await api('/api/bundle/install', { method: 'POST', body: JSON.stringify({ items: [{ draftId: module.draftId, confirmIssues: true }], enable: false }) });
+                if (!result.ok) throw new Error(result.results?.map((item) => item.error).filter(Boolean).join('；') || result.error || '安装失败');
+                install.remove(); feedback('已安装 ' + module.key + '，默认关闭；可在扩展页启用');
+              }, '正在安装…');
+            }
+            if (restored.report?.modules?.length) feedback('数据恢复完成，可回滚：' + restored.backupId + '；扩展已暂存，请逐个确认安装');
+          } finally {
+            await refreshStatus().catch((error) => feedback(panel.querySelector('#backup-feedback').textContent + '；刷新回滚快照失败：' + error.message));
+          }
+        });
+        feedback('预览已就绪，请勾选恢复范围');
+        row.scrollIntoView({ block: 'nearest' });
+        return '[data-restore-category]';
+      };
+      const importFile = async (file, name) => {
+        if (file.size > status.maxFileBytes) throw new Error('备份文件体积超过上限（' + fmtBytes(status.maxFileBytes) + '）');
+        await clearPreview();
+        const preview = await api('/api/backup/import-file', { method: 'POST', body: file,
+          headers: { 'content-type': 'application/octet-stream', 'x-console-token': CONSOLE_AUTH_TOKEN || CONSOLE_MARKER } });
+        return showRestorePreview(preview, { fileId: preview.fileId }, name);
+      };
+      const fileInput = panel.querySelector('#backup-import-file');
+      action(fileInput, async () => {
+        const file = fileInput.files[0];
+        fileInput.value = '';
+        if (file) return importFile(file, file.name);
+      }, '正在预览文件…', 'change');
+      action(panel.querySelector('#backup-import'), async () => {
+        if (typeof window.qqaDesktop?.pickBackupFile !== 'function') {
+          // action 的忙碌守卫会禁用表单；原生文件选择器必须从启用的 input 打开。
+          fileInput.disabled = false;
+          fileInput.click();
+          return;
+        }
+        const picked = await window.qqaDesktop.pickBackupFile();
+        if (picked.canceled) { feedback('已取消选择文件'); return; }
+        if (!picked.ok) throw new Error(picked.error);
+        return importFile(new Blob([picked.bytes]), picked.name);
+      }, '正在选择备份…');
       const refreshFiles = async () => {
         const result = await api('/api/backup/list');
         const container = panel.querySelector('#backup-files'); container.replaceChildren();
@@ -2455,30 +2552,7 @@ async function bindBackupSettings() {
             action(button, async () => {
               const input = { targetId: target.id, key: item.key };
               const preview = await post('preview', input);
-              const encryption = preview.manifest?.encrypted ? '已加密备份。' : '未加密备份（不含密钥）。';
-              const scan = preview.scan;
-              const modules = scan.modules || [];
-              const warning = modules.length ? '\n包含 ' + modules.length + ' 个扩展，恢复时需逐个确认安装。扩展先进入锻造台暂存区，通过安全检查后再由你确认。' : '';
-              if (!await qaConfirm({ danger: true, confirmText: '执行恢复', message: (target.name || target.id) + ' / ' + item.key + '\n' + encryption + warning + '\n恢复会合并数据，并可能覆盖当前文件；恢复前会生成可回滚快照。回滚也会撤销恢复后对相关文件的修改。预览：\n' + JSON.stringify(scan, null, 2) })) { feedback('已取消恢复'); return; }
-              try {
-                feedback('正在恢复，请等待完成…');
-                const restored = await post('restore', input); feedback('恢复完成，可在下方回滚：' + restored.backupId);
-                for (const module of restored.report?.modules || []) {
-                  if (!module.ok || !module.draftId) continue;
-                  const install = document.createElement('button'); install.type = 'button'; install.className = 'btn btn-small'; install.dataset.restore = ''; install.textContent = '确认安装 ' + module.key;
-                  row.append(install);
-                  action(install, async () => {
-                    if (!await qaConfirm({ danger: true, confirmText: '安装此扩展', message: '安装扩展 ' + module.key + '？安装后默认关闭。\n安全检查：\n' + JSON.stringify(module.gate, null, 2) })) { feedback('扩展仍在锻造台暂存区，尚未安装'); return; }
-                    const result = await api('/api/bundle/install', { method: 'POST', body: JSON.stringify({ items: [{ draftId: module.draftId, confirmIssues: true }], enable: false }) });
-                    if (!result.ok) throw new Error(result.results?.map((item) => item.error).filter(Boolean).join('；') || result.error || '安装失败');
-                    install.remove(); feedback('已安装 ' + module.key + '，默认关闭；可在扩展页启用');
-                  }, '正在安装…');
-                }
-                if (restored.report?.modules?.length) feedback('数据恢复完成，可回滚：' + restored.backupId + '；扩展已暂存，请逐个确认安装');
-              } finally {
-                // 导入失败也可能已产生快照，必须让用户能找到回滚入口。
-                await refreshStatus().catch((error) => feedback(panel.querySelector('#backup-feedback').textContent + '；刷新回滚快照失败：' + error.message));
-              }
+              return showRestorePreview(preview, input, (target.name || target.id) + ' / ' + item.key);
             }, '正在预览…'); container.append(row);
           }
         }

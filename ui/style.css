@@ -9303,6 +9303,7 @@ input.mig-input:focus-visible,
 #backup-panel #backup-feedback:empty { display: none; }
 #backup-panel #backup-feedback { color: var(--muted); }
 #backup-panel #backup-export-options { margin-block: var(--space-md); }
+#backup-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
 @media (max-width: 760px) {
   #backup-panel .backup-target-fields, #backup-panel .backup-categories { grid-template-columns: minmax(0, 1fr); }
 }

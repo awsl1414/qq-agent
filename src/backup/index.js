@@ -21,6 +21,7 @@ import {
 } from './archive.js';
 import { createTarget } from './targets/index.js';
 import { applyRetention } from './schedule.js';
+import { readBackupUpload, startBackupUploads, stopBackupUploads } from './uploads.js';
 import {
   readState, listRuns, getLastRun, markRunStarted, markRunFinished
 } from './state.js';
@@ -101,12 +102,14 @@ export async function runBackup({ trigger = 'manual', targetIds = null, categori
 
 export function startBackupOperations() {
   operationsStopped = false;
+  startBackupUploads();
 }
 
 /** 停机先拒绝新操作，等上传、恢复和历史收尾，再释放实例锁与热生效回调。 */
 export async function stopBackupOperations() {
   operationsStopped = true;
   await Promise.allSettled([backupTask, restoreTask]);
+  await stopBackupUploads();
 }
 
 async function runBackupInner({ trigger, targetIds, categories, now, encryptData }) {
@@ -214,16 +217,24 @@ function parseRestoreBackup(buffer) {
   }
 }
 
-async function withRestoreSource({ targetId, key }, action) {
+/** 获取字节与解析分离：上传只能用服务端颁发的临时 ID，不能读任意路径。 */
+async function readRestoreBuffer({ targetId, key, fileId }) {
+  if (fileId !== undefined) {
+    if (targetId !== undefined || key !== undefined) throw new Error('只能选择一个恢复来源');
+    return { buffer: readBackupUpload(fileId), source: `file:${fileId}` };
+  }
+  const entry = findTargetEntry(targetId);
+  if (!entry) throw new Error(`找不到备份目标：${targetId}`);
+  const k = String(key || '').trim();
+  if (!k) throw new Error('缺少备份文件 key');
+  try { return { buffer: await createTarget(entry).get(k), source: `${targetId}:${k}` }; }
+  catch (error) { throw new Error(`下载备份失败：${error?.message ?? error}`); }
+}
+
+async function withRestoreSource(input, action) {
   let extractDir = '';
   try {
-    const entry = findTargetEntry(targetId);
-    if (!entry) return { ok: false, error: `找不到备份目标：${targetId}` };
-    const k = String(key || '').trim();
-    if (!k) return { ok: false, error: '缺少备份文件 key' };
-    let buffer;
-    try { buffer = await createTarget(entry).get(k); }
-    catch (error) { return { ok: false, error: `下载备份失败：${error?.message ?? error}` }; }
+    const { buffer, source } = await readRestoreBuffer(input);
     const parsed = parseRestoreBackup(buffer);
     if (!parsed.ok) return parsed;
     fs.mkdirSync(RESTORE_ROOT, { recursive: true });
@@ -239,7 +250,7 @@ async function withRestoreSource({ targetId, key }, action) {
     const sourceDir = path.join(extractDir, 'data');
     const scan = scanSource(extractDir);
     if (!scan.ok) return scan;
-    return await action({ packageRoot: extractDir, sourceDir, scan, manifest: parsed.manifest, key: k });
+    return await action({ packageRoot: extractDir, sourceDir, scan, manifest: parsed.manifest, entries: parsed.entries, source });
   } catch (error) {
     return { ok: false, error: String(error?.message ?? error) };
   } finally {
@@ -267,7 +278,10 @@ function defaultRestoreSelection(packageRoot, sourceDir, scan) {
     stats: Object.fromEntries(scan.stats.map((stat) => [stat.id, true])),
     reminders: hasData('reminders.json'),
     stickers: hasData('stickers.json'),
-    wallpaper: hasData('wallpaper-static') || hasData('wallpaper-state.json') || hasData('ui'),
+    // wallpaper-imports.json 单独存在时也说明包里有壁纸数据：只导入过壁纸、
+    // 没有静态副本与状态文件时，漏掉它会让整类壁纸被静默排除。
+    wallpaper: hasData('wallpaper-static') || hasData('wallpaper-state.json')
+      || hasData('wallpaper-imports.json') || hasData('ui'),
     desktopPet: hasData('desktop-pet'),
     drafts: has('drafts'),
     persona: hasCategory('persona'),
@@ -279,27 +293,47 @@ function defaultRestoreSelection(packageRoot, sourceDir, scan) {
 }
 
 /** options.selection / options.hooks 传给 migrate；第二参数仅用于注入导入实现测试。 */
-export async function runRestore({ targetId, key, options = {}, selection, hooks } = {}, { applyImport: importData = applyImport } = {}) {
+export async function runRestore({ targetId, key, fileId, options = {}, selection, hooks } = {}, { applyImport: importData = applyImport } = {}) {
   if (operationsStopped) return { ok: false, error: '应用正在停止，无法开始恢复' };
   if (restoreInFlight || backupInFlight) return { ok: false, error: '已有一个备份或恢复正在进行，请等它完成' };
   restoreInFlight = true;
   try {
-    restoreTask = withRestoreSource({ targetId, key }, async ({ packageRoot, sourceDir, scan, manifest, key: k }) => {
+    restoreTask = withRestoreSource({ targetId, key, fileId }, async ({ packageRoot, sourceDir, scan, manifest, source }) => {
       const picked = options.selection ?? selection ?? defaultRestoreSelection(packageRoot, sourceDir, scan);
       const report = await importData(packageRoot, picked, options.hooks ?? hooks ?? {});
       if (!report.ok) return { ok: false, backupId: report.backupId, error: report.error || '导入失败', report };
-      logger.info('backup', `恢复完成：${targetId} / ${k}`);
-      return { ok: true, backupId: report.backupId, source: `${targetId}:${k}`, manifest, report };
+      logger.info('backup', `恢复完成：${source}`);
+      return { ok: true, backupId: report.backupId, source, manifest, report };
     });
     return await restoreTask;
   } finally { restoreInFlight = false; restoreTask = null; }
 }
 
 /** scanSource 提供包内、本机和预计新增消息数；预览结束立即清理临时数据。 */
-export async function restorePreview({ targetId, key } = {}) {
-  return withRestoreSource({ targetId, key }, ({ scan, manifest }) => {
-    const { sourceDir, ...preview } = scan;
-    return { ok: true, manifest, scan: preview };
+export async function restorePreview({ targetId, key, fileId } = {}) {
+  return withRestoreSource({ targetId, key, fileId }, ({ packageRoot, sourceDir, scan, manifest, entries }) => {
+    const selection = defaultRestoreSelection(packageRoot, sourceDir, scan);
+    const { sourceDir: ignored, ...preview } = scan;
+    // 按真实解包文件统计，不依赖清单里的类别声明；usage 的导入键为 stats。
+    preview.categories = listBackupCategories().flatMap((category) => {
+      const selectionKey = category.key === 'usage' ? 'stats' : category.key;
+      const picked = selection[selectionKey];
+      const available = selectionKey === 'messages' ? picked.chatKeys.length > 0
+        : selectionKey === 'stats' ? Object.keys(picked).length > 0 : picked === true;
+      if (!available) return [];
+      const files = entries.filter(({ name }) => {
+        if (category.key === 'extensions') return name.startsWith('modules/');
+        if (category.key === 'drafts') return name.startsWith('drafts/');
+        if (scan.configFields[category.key]) return name === `config-fields/${category.key}.json`;
+        if (category.key === 'usage') return scan.stats.some((stat) => name === `data/${stat.file}`);
+        return category.files.some((file) => name === `data/${file}`)
+          || category.dirs.some((dir) => name.startsWith(`data/${dir}/`));
+      });
+      return [{ key: selectionKey, label: category.label, files: files.length,
+        bytes: files.reduce((sum, entry) => sum + entry.data.length, 0),
+        chats: selectionKey === 'messages' ? scan.messages.length : selectionKey === 'memory' ? scan.memory.chats.length : 0 }];
+    });
+    return { ok: true, manifest, scan: preview, selection };
   });
 }
 

@@ -1212,6 +1212,29 @@ ipcMain.handle('dialog:pick-dir', async (event) => {
   return { ok: true, path: filePaths[0] };
 });
 
+// 只读用户通过对话框选中的文件；渲染进程不能指定任意本地路径。
+ipcMain.handle('dialog:pick-backup', async (event) => {
+  const win = windowOf(event);
+  if (!win || win !== mainWindow) return { ok: false, error: '仅主窗口可选择备份文件' };
+  try {
+    const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+      title: '选择备份文件', properties: ['openFile'],
+      filters: [{ name: 'QQ Agent 备份', extensions: ['zip', 'qqab'] }]
+    });
+    if (canceled || !filePaths.length) return { ok: false, canceled: true };
+    // 延迟导入，确保主进程已完成数据目录初始化。
+    const { BACKUP_MAX_ARCHIVE_BYTES } = await import('../src/backup/archive.js');
+    const chunks = [];
+    let bytes = 0;
+    for await (const chunk of fs.createReadStream(filePaths[0])) {
+      bytes += chunk.length;
+      if (bytes > BACKUP_MAX_ARCHIVE_BYTES) throw new Error('备份文件体积超过上限');
+      chunks.push(chunk);
+    }
+    return { ok: true, name: path.basename(filePaths[0]), bytes: new Uint8Array(Buffer.concat(chunks)) };
+  } catch (error) { return { ok: false, error: '读取备份失败：' + error.message }; }
+});
+
 // 保存位置必须由用户在原生对话框中选择，不接受渲染进程指定的写入路径。
 ipcMain.handle('backup:save-file', async (event, name, bytes) => {
   const win = windowOf(event);

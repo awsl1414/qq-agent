@@ -41,7 +41,8 @@ import { listAccounts, removeAccount, loginAccount, publishModule, verifyInstall
 import { importModules } from './module-import.js';
 import { applyImport, rollbackImport, listBackups } from './migrate.js';
 import * as backup from './backup/index.js';
-import { buildBackup } from './backup/archive.js';
+import { buildBackup, BACKUP_MAX_ARCHIVE_BYTES } from './backup/archive.js';
+import { receiveBackupUpload, discardBackupUpload } from './backup/uploads.js';
 import { encryptCredential } from './backup/crypto.js';
 import { TARGET_TYPES } from './backup/targets/index.js';
 import { collect as collectBackupSources, listBackupCategories } from './backup/sources/index.js';
@@ -235,7 +236,26 @@ export function createRoutes(deps) {
         return json(res, 200, { ok: true, config: publicBackupConfig(getConfig().backup) });
       } catch { return json(res, 400, { ok: false, error: '备份配置无效，保存失败' }); }
     } },
-    { method: 'GET', pattern: '/api/backup/targets', handler: async ({ res, json }) => json(res, 200, { ...backup.getStatus(), categories: backupCategories(), rollbacks: listBackups() }) },
+    { method: 'GET', pattern: '/api/backup/targets', handler: async ({ res, json }) => json(res, 200, { ...backup.getStatus(), maxFileBytes: BACKUP_MAX_ARCHIVE_BYTES, categories: backupCategories(), rollbacks: listBackups() }) },
+    { method: 'POST', pattern: '/api/backup/import-file', handler: async ({ req, res, json }) => {
+      let fileId;
+      try {
+        fileId = await receiveBackupUpload(req);
+        const preview = await backup.restorePreview({ fileId });
+        if (!preview.ok) {
+          discardBackupUpload(fileId);
+          return json(res, 400, preview);
+        }
+        return json(res, 200, { ...preview, fileId });
+      } catch (error) {
+        if (fileId) discardBackupUpload(fileId);
+        return json(res, error.status === 413 ? 413 : 400, { ok: false, error: String(error?.message ?? error) });
+      }
+    } },
+    { method: 'DELETE', pattern: '/api/backup/import-file', handler: async ({ res, json, url }) => {
+      discardBackupUpload(url.searchParams.get('fileId'));
+      return json(res, 200, { ok: true });
+    } },
     { method: 'POST', pattern: '/api/backup/export', handler: async ({ req, res, json }) => {
       try {
         const body = await bodyOf(req);
@@ -273,8 +293,11 @@ export function createRoutes(deps) {
           let result;
           if (action === 'test') result = await backup.testTarget(String(body.targetId || ''));
           if (action === 'run') result = await backup.runBackup({ targetIds: body.targetIds });
-          if (action === 'preview') result = await backup.restorePreview({ targetId: body.targetId, key: body.key });
-          if (action === 'restore') result = await backup.runRestore({ targetId: body.targetId, key: body.key, selection: body.selection, hooks: backupHooks });
+          if (action === 'preview') result = await backup.restorePreview({ targetId: body.targetId, key: body.key, fileId: body.fileId });
+          if (action === 'restore') {
+            result = await backup.runRestore({ targetId: body.targetId, key: body.key, fileId: body.fileId, selection: body.selection, hooks: backupHooks });
+            if (result.ok && body.fileId) discardBackupUpload(body.fileId);
+          }
           if (action === 'rollback') result = await rollbackImport(body.backupId, backupHooks);
           const targetErrors = (result.targets || []).filter((target) => !target.ok)
             .map((target) => `${target.id}：${target.error || '操作失败'}`).join('；');
