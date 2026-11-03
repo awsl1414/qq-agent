@@ -51,8 +51,9 @@ pnpm run prepack:check  # 只跑构建前静态校验
 pnpm run verify:version # 校验 VERSION / package.json / CHANGELOG 顶部版本一致
 ```
 
-- 数据目录固定在 **exe 同级的 `data/`**（多实例为 `data-<N>/`），不往 `%APPDATA%` 塞。安装目录必须可写，所以安装器默认装到 `%LOCALAPPDATA%\Programs\…`，不要手工装进 `Program Files`。
-- 卸载时保留 `data/`（群聊记录、记忆、API Key 都在里面）。
+- **Windows 安装版**的数据目录为 `%APPDATA%\qq-agent\data\`；**Windows 免安装 zip 版**为 exe 同级的 `data/`。macOS / Linux 打包版使用 Electron `userData` 下的 `data/`，具体位置见第 3 节。多实例改用 `data-<N>/`，`QQ_AGENT_DATA_DIR` 可显式覆盖这些默认位置。
+- Windows 安装版卸载时保留系统用户数据目录（群聊记录、记忆、API Key 都在里面）；升级会清空安装目录，因此不要把安装版的数据覆盖到安装目录内。便携版的数据目录必须可写，不可写时会报错，不会自动换到 `%APPDATA%`。
+- 运行时安装扩展仍要写程序目录，因此 Windows 安装器默认装到 `%LOCALAPPDATA%\Programs\…`，不要手工装进 `Program Files`；这与业务数据存放在用户目录是两件事。
 - 打包产物里 `asar` 关闭：运行时要往代码根写 `plugins/`、`skills/` 与 `builtin-modules.json`，这是硬约束，不是风格选择。
 
 ---
@@ -117,11 +118,13 @@ Bing 网页解析不需要 Key，是默认搜索源。
 | 场景 | 位置 |
 |---|---|
 | 开发 / `pnpm run server` | 仓库内的 `data/` |
-| 打包版（三平台） | Electron `userData` 下的 `data/`：Windows 为 `%APPDATA%\qq-agent\data\`，macOS 为 `~/Library/Application Support/qq-agent/data/`，Linux 为 `~/.config/qq-agent/data/` |
+| Windows NSIS 安装版 | Electron `userData` 下的 `data/`：`%APPDATA%\qq-agent\data\` |
+| Windows 免安装 zip 版 / `win-unpacked` | exe 同级的 `data/` |
+| macOS / Linux 打包版 | Electron `userData` 下的 `data/`：macOS 为 `~/Library/Application Support/qq-agent/data/`，Linux 为 `~/.config/qq-agent/data/` |
 | 多实例（`QQ_AGENT_PROFILE=N`） | 上述位置换成 `data-<N>/` |
 | 显式覆盖 | `QQ_AGENT_DATA_DIR` 指向的目录（优先级最高） |
 
-Windows 的 NSIS 升级会清空安装目录，包括运行时生成的文件，所以默认数据必须放在安装目录之外。便携场景仍可用 `QQ_AGENT_DATA_DIR` 显式指定位置，建议选择安装目录外的可写目录，避免覆盖安装时被清空。
+Windows 的 NSIS 升级会清空安装目录，包括运行时生成的文件，所以安装版默认数据放在安装目录之外。Windows 打包版以 exe 旁是否存在 `Uninstall QQ Agent.exe` 区分安装版与便携版：有卸载器用 `userData`，没有则用 exe 同级目录；不要删除安装版卸载器或把便携版解压进安装版目录。便携版更新时保留原有 `data/`，也可以用 `QQ_AGENT_DATA_DIR` 指定另一个可写目录。
 
 主要子目录与文件：
 
@@ -143,6 +146,7 @@ Windows 的 NSIS 升级会清空安装目录，包括运行时生成的文件，
 | `wallpaper-static/` / `wallpaper-state.json` / `wallpaper-imports.json` | 壁纸库静态副本与状态 |
 | `desktop-pet/` | 桌宠模型（`models/`）、预览图、`state.json` |
 | `exports/` / `import-bundles/` / `import-backups/` | 数据导出包、导入包解压临时区、导入前备份 |
+| `backup-state.json` / `backup-crypto.salt` / `backup-restore/` | 备份历史、本机实例密钥派生所需的 salt、恢复临时解包区；salt 不随备份包导出，不要删除，详见 [备份与恢复](backup.md) |
 | `runtime/ffmpeg/bin/` | 设置页「媒体工具」下载的 ffmpeg。旧版随包分发的 `ffmpeg` / `ffprobe` 升级后也搬到这里（目标已有则删除旧的），解析链只认这一处 |
 | `runtime/qq-portable/` | 便携 QQ 副本（仅 Windows；约 1.5GB）。旧版本放在程序目录的 `runtime/` 下，升级后启动时自动搬到这里 |
 | `runtime/qq-portable-data/` | 便携 QQ 的隔离登录态，与用户日常 QQ 互不干扰。同上，旧版本在程序目录 |
@@ -252,5 +256,6 @@ node --test tests/volatile-contract.test.mjs   # 只跑一个文件
 |---|---|
 | [README](../README.md) | 功能一览、安装、协议端接入、首次配置 |
 | [CHANGELOG](../CHANGELOG.md) | 各版本面向用户的变更与修复根因 |
+| [备份与恢复](backup.md) | 备份类别、本地 / WebDAV / S3 目标、加密限制与恢复流程 |
 | [doc/extend_development/skill-system.md](extend_development/skill-system.md) | 扩展加载流水线、能力机制、指纹基线 |
 | [doc/extend_development/onebot-capabilities.md](extend_development/onebot-capabilities.md) | 连接排查与 `api.qqCall` 能调什么 |

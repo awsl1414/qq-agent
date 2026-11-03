@@ -190,6 +190,8 @@ pnpm run build           # 打 Windows 包（NSIS 安装包 + zip）
 
 环境变量、网页模式的鉴权与端口规则、数据目录、多实例、常见故障，见 **[doc/running.md](doc/running.md)**。
 
+备份内容、本地目录 / WebDAV / S3 目标、加密限制与恢复流程，见 **[备份与恢复](doc/backup.md)**。
+
 > 首次 `pnpm install` 会下载 Electron 二进制（约 238 MB）。国内网络慢的话先设镜像：
 > `$env:ELECTRON_MIRROR = "https://npmmirror.com/mirrors/electron/"`（PowerShell）
 > 或 `export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/`（bash）。
