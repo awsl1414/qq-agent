@@ -145,13 +145,76 @@ function normalizeBaseUrl(raw) {
   return String(raw || '').trim().replace(/\/+$/, '');
 }
 
-function hostDisplayName(baseUrl) {
+/**
+ * 从 Base URL 里取「端点」：host 含端口，不含路径。
+ *
+ * 为什么是 host 而不是 hostname：hostname 会吞掉端口，于是同时跑着
+ * ollama（:11434）与 LM Studio（:1234）时，两个服务商的显示名都是
+ * 127.0.0.1，删除确认框也分不清删的是哪一个。
+ * URL.host 会保留非默认端口，并对 http/https 的默认端口（80/443）自动省略，
+ * 正常的公网域名不会因此变难看。
+ */
+function endpointHost(baseUrl) {
+  const raw = String(baseUrl || '').trim();
+  if (!raw) return '';
   try {
-    const u = new URL(baseUrl);
-    return u.hostname || '自定义提供商';
+    return new URL(raw).host || '';
   } catch {
-    return '自定义提供商';
+    return '';
   }
+}
+
+/** 按域名兜底的显示名（新建提供商时不填名称，或老数据没有名称）。 */
+function hostDisplayName(baseUrl) {
+  return endpointHost(baseUrl) || '自定义提供商';
+}
+
+/**
+ * 提供商的「显示标识」：用户能认出的那一串字。全仓唯一的拼接规则。
+ *
+ *   · 有名称 + 有端点 → `名称 · 端点`（本地模型 · 127.0.0.1:11434）
+ *   · 只有名称        → `名称`      （老数据 baseURL 为空）
+ *   · 只有端点        → `端点`
+ *   · 都没有          → `id`
+ *
+ * 为什么是「名称 + 端点」而不是强制名称唯一：同厂商多账号是真实场景
+ * （个人号 + 公司号），要求唯一会逼用户编假名字。名称只用于显示，身份始终是 id；
+ * 而破坏性确认框必须能指认具体那一项，所以把端点一起带上。
+ *
+ * 端点取 host（含端口）而不是原始 Base URL：确认框里塞一句 `/v1/chat/completions`
+ * 尾部路径既难读又与本问题无关。
+ *
+ * ⚠️ 前端 `providerLabelOf`（ui/app/00-core.js）是同一规则的镜像实现，
+ *    改这里必须同步改那边；`GET /api/providers` 会直接下发本函数的返回值，
+ *    前端优先用下发的 label，只有老缓存/缺字段时才就地拼。
+ */
+export function providerDisplayLabel(provider) {
+  const p = (provider && typeof provider === 'object') ? provider : {};
+  const name = String(p.displayName ?? '').trim();
+  const host = endpointHost(p.baseURL ?? p.baseUrl);
+  // 名称与端点字面相同（老数据：名称就是域名）时不再拼一遍，
+  // 「127.0.0.1:11434 · 127.0.0.1:11434」既噪音又让人以为有两个服务商。
+  if (name && host && name !== host) return `${name} · ${host}`;
+  if (name) return name;
+  if (host) return host;
+  return String(p.id ?? '') || '未命名提供商';
+}
+
+// 提供商显示名上限：列表项是单行排版，超长会把「管理服务商」左列与页面上的
+// 「当前：…」摘要撑破。前端同名输入框的 maxlength 与此值一致，改一处要改两处。
+const PROVIDER_DISPLAY_NAME_MAX_LEN = 40;
+
+/**
+ * 规范化用户填写的提供商显示名（trim + 长度校验）。
+ * 空串原样返回：新建时要落到域名兜底，改名时要被调用方拒绝，语义不同，
+ * 所以「空名是否合法」留给调用方决定，这里只统一格式。
+ */
+function normalizeDisplayName(raw) {
+  const name = String(raw ?? '').trim();
+  if (name.length > PROVIDER_DISPLAY_NAME_MAX_LEN) {
+    throw new Error(`名称不能超过 ${PROVIDER_DISPLAY_NAME_MAX_LEN} 个字符`);
+  }
+  return name;
 }
 
 function normalizeModelInput(models) {
@@ -381,11 +444,14 @@ export async function testOneProvider({ providerId = '', baseUrl = '', apiKey = 
  * 新建提供商；若同 baseURL 已存在则合并模型。返回 { provider, created }。
  * @param {string} [protocol='openai'] API 协议（openai/openai-responses/anthropic/google/mistral）。
  *   选了带官方默认端点的协议且 Base URL 留空时，自动落默认端点。
+ * @param {string} [displayName] 显示名。新建时留空 → 兜底成域名（旧行为）；
+ *   已存在时只有传了非空名称才更新——不能因为这次没传就把用户起的名字改回域名。
  */
-export function upsertProvider({ baseUrl, apiKey, models = [], protocol = 'openai' }) {
+export function upsertProvider({ baseUrl, apiKey, models = [], protocol = 'openai', displayName = '' }) {
   const proto = normalizeProtocol(protocol);
   const base = normalizeBaseUrl(baseUrl) || PROTOCOL_DEFAULT_BASES[proto] || '';
   if (!base) throw new Error('Base URL 不能为空');
+  const name = normalizeDisplayName(displayName);
   const providers = currentProviders().map((p) => { const { apiKey: _ak, ...rest } = p; return { ...rest, models: [...(p.models || [])] }; });
   const existing = providers.find((p) => normalizeBaseUrl(p.baseURL) === base);
   const entries = normalizeModelInput(models);
@@ -397,6 +463,7 @@ export function upsertProvider({ baseUrl, apiKey, models = [], protocol = 'opena
     if (protocol !== undefined && protocol !== null && String(protocol).trim()) {
       existing.apiProtocol = proto;
     }
+    if (name) existing.displayName = name;
     // ⚠️ modelNames 的合并必须在 updateConfig 之前完成：曾经先 updateConfig
     // （内部 structuredClone 出配置快照落盘）、再改局部 existing.modelNames，
     // 返回值（内存对象）带着新名字，但 currentConfig 与磁盘上都没有，重启后
@@ -417,7 +484,7 @@ export function upsertProvider({ baseUrl, apiKey, models = [], protocol = 'opena
   for (const m of entries) modelNames[m.id] = m.name;
   const provider = {
     id,
-    displayName: hostDisplayName(base),
+    displayName: name || hostDisplayName(base),
     api: 'openai',
     apiProtocol: proto,
     anthropicOrigin: false,
@@ -442,6 +509,26 @@ export function setProviderProtocol(providerId, protocol) {
   const p = providers.find((x) => x.id === String(providerId ?? '').trim());
   if (!p) return null;
   p.apiProtocol = proto;
+  updateConfig({ providers: providers.map((x) => { const { apiKey, ...rest } = x; return rest; }) });
+  return p;
+}
+
+/**
+ * 设置指定提供商的显示名（「管理服务商」右列的改名保存动作）。
+ *
+ * 不走 upsertProvider：那个函数按 baseURL 判重，改名会命中"同一地址只合并模型"
+ * 的分支，改完与其它调用方的语义打架（例如添加同地址提供商时顺带把名字覆盖掉）。
+ *
+ * @returns {object|null} 更新后的提供商；不存在返回 null
+ * @throws 名称为空或超长时抛错——空名称会让列表里出现空白项，必须明确拒绝
+ */
+export function setProviderDisplayName(providerId, displayName) {
+  const name = normalizeDisplayName(displayName);
+  if (!name) throw new Error('名称不能为空');
+  const providers = currentProviders().map((p) => ({ ...p }));
+  const p = providers.find((x) => x.id === String(providerId ?? '').trim());
+  if (!p) return null;
+  p.displayName = name;
   updateConfig({ providers: providers.map((x) => { const { apiKey, ...rest } = x; return rest; }) });
   return p;
 }

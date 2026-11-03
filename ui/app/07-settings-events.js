@@ -1125,7 +1125,7 @@ function bindSettingsEvents(c) {
     let activePid = providers[0].id;
     function renderLeft() {
       left.innerHTML = providers.map((p) =>
-        `<div class="mm-prov ${p.id === activePid ? 'active' : ''}" data-pid="${esc(p.id)}">${esc(p.displayName || p.id)}</div>`).join('');
+        `<div class="mm-prov ${p.id === activePid ? 'active' : ''}" data-pid="${esc(p.id)}">${providerRowHtml(p)}</div>`).join('');
       left.querySelectorAll('.mm-prov').forEach((el) => {
         el.addEventListener('click', () => { activePid = el.dataset.pid; renderLeft(); renderRight(); });
       });
@@ -1167,7 +1167,7 @@ function bindSettingsEvents(c) {
     // 手动再选一遍纯属多余。行内只留 模型点选 + 删除。
     const provNameOf = (pid) => {
       const p = (state.providers || []).find((x) => x.id === pid);
-      return p ? (p.displayName || p.id) : '';
+      return p ? providerLabelOf(p) : '';
     };
     box.innerHTML = `
       <table class="model-rows-table">
@@ -1196,10 +1196,10 @@ function bindSettingsEvents(c) {
     renderFallbackRows();
   });
 
-  // ── 「模型配置」「模型管理」两个入口模态框 ──
-  // 模型目录/baseURL/Key/专用模型/图片视频开关/视频理解方式都在「模型配置」
-  // （mc-* 字段，弹窗内部自带绑定）；删除模型/手动添加提供商在「模型管理」。
-  // Key 的显示/清除也在「模型配置」弹窗（mc-apikey-toggle / mc-apikey-clear）。
+  // ── 「模型设置」「管理服务商」两个入口模态框 ──
+  // 分工：模型设置只管"用哪个服务商、哪个模型"（专用模型 / 图片视频开关 /
+  // 视频理解方式也在这里）；服务商的名称、接口地址、密钥、代理与模型目录
+  // 全在「管理服务商」（mg-* 字段）。
   $('#open-model-config-btn')?.addEventListener('click', () => openModelConfigModal());
   $('#open-model-manage-btn')?.addEventListener('click', () => openModelManageModal());
   // ── 新手引导卡：未配置模型时 api 分区只渲染「接口地址 + 密钥 + 测试并保存」，
@@ -1287,18 +1287,17 @@ function bindSettingsEvents(c) {
     btn.textContent = '测试中…';
     if (out) out.textContent = '';
     try {
-      // 设置页上只剩隐藏字段（cfg-baseurl-value），输入框都搬进了弹窗（mc-*）。
-      // 按「界面实时值优先、隐藏字段兜底、最后用已保存配置」的顺序取值，
-      // 否则健康卡片上的「测试一下」永远拿空 baseUrl，必报"请先填写 Base URL"。
-      const baseUrl = ($('#mc-baseurl')?.value || $('#cfg-baseurl-value')?.value || state.config?.api?.baseUrl || '').trim();
-      const model = ($('#mc-model-pick')?.dataset?.model || $('#cfg-model')?.value || state.config?.api?.model || '').trim();
-      // 只把"用户新输入的明文 Key"传给服务端；若是掩码/空则不传，
-      // 让服务端用自己保存的 Key，不依赖明文读取端点，未设 token 时也能测试。
-      const raw = ($('#mc-apikey')?.value || '').trim();
-      const apiKey = (raw && raw !== '******') ? raw : '';
+      // 连接信息（地址 / 密钥）只在「管理服务商」里维护，页面上只剩隐藏字段。
+      // 按「隐藏字段兜底、最后用已保存配置」的顺序取值，否则健康卡片上的
+      // 「测试一下」永远拿空 baseUrl，必报"请先填写 Base URL"。
+      const baseUrl = ($('#cfg-baseurl-value')?.value || state.config?.api?.baseUrl || '').trim();
+      const model = ($('#cfg-model')?.value || state.config?.api?.model || '').trim();
+      // 不带 apiKey：服务端按 providerId / 已保存配置解析，不依赖明文读取端点，
+      // 未设 token 时也能测试。带上 providerId 才能用对那一家的 Key（多服务商场景）。
+      const providerId = String($('#cfg-provider')?.value || state.config?.api?.provider || '').trim();
       const r = await api('/api/providers/test-chat', {
         method: 'POST',
-        body: JSON.stringify({ baseUrl, apiKey, model })
+        body: JSON.stringify({ baseUrl, providerId, model })
       });
       const res = r.result || {};
       // 思考方言由服务端 model.thinking-detect 能力给出，让用户提前知道这个模型
@@ -2016,7 +2015,7 @@ function bindSettingsEvents(c) {
             ? `本次下载通道：${s.downloadChannel}`
             : '';
           if (!s.downloadProxy) {
-            proxyLine.textContent += '　（未检测到代理；国内可在「连接模型 → 代理」里填地址，或直接用下面的镜像源）';
+            proxyLine.textContent += '　（未检测到代理；国内可在「连接模型 → 管理服务商」里填地址，或直接用下面的镜像源）';
           }
         }
       }

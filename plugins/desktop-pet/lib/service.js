@@ -226,7 +226,7 @@ export function createDesktopPetService(deps) {
       const model = typeof m === 'string' ? m : String(m?.id || '');
       if (!model) continue;
       const verdict = modelImageVerdict(p.id, model);
-      list.push({ providerId: p.id, providerName: p.displayName || p.id, model, name: p.modelNames?.[model] || model, vision: verdict === 'vision' ? 'yes' : verdict === 'no-vision' ? 'no' : 'unknown', configured: Boolean(p.baseURL) });
+      list.push({ providerId: p.id, providerName: p.displayName || p.baseURL || p.id, model, name: p.modelNames?.[model] || model, vision: verdict === 'vision' ? 'yes' : verdict === 'no-vision' ? 'no' : 'unknown', configured: Boolean(p.baseURL) });
     }
     const providerId = cfg.api?.provider || '';
     const currentProvider = providers.find((p) => p.id === providerId);
@@ -235,7 +235,7 @@ export function createDesktopPetService(deps) {
     for (const model of new Set([cfg.api?.model, cfg.api?.visionModel].filter(Boolean))) if (!list.some((m) => m.providerId === providerId && m.model === model)) {
       const verdict = modelImageVerdict(providerId, model);
       const vision = verdict === 'vision' ? 'yes' : verdict === 'no-vision' || (model !== cfg.api?.visionModel && cfg.api?.vision === false) ? 'no' : 'unknown';
-      list.push({ providerId, providerName: currentProvider?.displayName || '当前模型 API', model, name: model, vision, configured: Boolean(currentProvider?.baseURL || cfg.api?.baseUrl) });
+      list.push({ providerId, providerName: currentProvider?.displayName || currentProvider?.baseURL || '当前模型 API', model, name: model, vision, configured: Boolean(currentProvider?.baseURL || cfg.api?.baseUrl) });
     }
     return list;
   }

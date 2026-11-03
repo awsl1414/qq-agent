@@ -19,7 +19,8 @@ import { listModels, chatCompletion, chatCompletionWithRetry, resolveApiKey, est
 import { resolveOfficialPrice, listOfficialPrices } from './model-prices.js';
 import { refreshPriceFeed, priceFeedStatus, initPriceFeed } from './price-feed.js';
 import {
-  currentProviders, setProviderKey, setProviderProtocol, testAllProviders, testOneProvider,
+  currentProviders, setProviderKey, setProviderProtocol, setProviderDisplayName, providerDisplayLabel,
+  testAllProviders, testOneProvider,
   testModelChat, fetchModelsFrom, upsertProvider, addModelsToProvider, removeModelFromProvider, removeProvider
 } from './providers.js';
 import { normalizeProtocol, protocolLabel } from './api-protocols.js';
@@ -2743,7 +2744,11 @@ export function createRoutes(deps) {
       method: 'GET', pattern: '/api/providers',
       handler: async ({ res, json }) => {
         const providers = currentProviders().map((p) => ({
+          // label = 「名称 · 端点」的完整显示标识（规则见 providers.js 的
+          // providerDisplayLabel）。前端列表与破坏性确认框都用它，
+          // 这样同名服务商也能被指认清楚。
           id: p.id, displayName: p.displayName, baseURL: p.baseURL,
+          label: providerDisplayLabel(p),
           apiKey: '', apiKeyFrom: p.apiKeyFrom || '', needsBaseUrl: p.needsBaseUrl === true,
           hasKey: !!p.apiKey, anthropicOrigin: p.anthropicOrigin === true,
           // API 协议：旧数据无 apiProtocol → openai；label 供前端直接显示
@@ -2955,14 +2960,24 @@ export function createRoutes(deps) {
         try {
           const body = await bodyOf(req);
           const submitted = String(body.apiKey ?? '').trim();
-          const apiKey = (submitted && submitted !== '******') ? submitted : resolveApiKey(getConfig());
+          // Key 解析顺序：本次提交的明文 > 按 providerId 查该提供商已保存的 Key > 当前选中提供商的 Key。
+          // 多提供商场景下只看「当前选中的」会拿错 Key（弹窗里选的是另一家时的典型症状：
+          // 配置本身没问题，测试却 401）。providerId 由前端在选中服务商时带上。
+          const pid = String(body.providerId ?? '').trim();
+          let apiKey = (submitted && submitted !== '******') ? submitted : '';
+          if (!apiKey && pid) {
+            const p = currentProviders().find((x) => x.id === pid);
+            apiKey = String(p?.apiKey ?? '').trim();
+          }
+          if (!apiKey) apiKey = resolveApiKey(getConfig());
           const baseUrl = String(body.baseUrl ?? '');
           const model = String(body.model ?? '');
-          // 测试协议必须与实跑同源：显式传入 > 主提供商已存的协议
+          // 测试协议必须与实跑同源：显式传入 > providerId 对应提供商 > 主提供商
           const cfgNow = getConfig();
           const proto = normalizeProtocol(
             body.apiProtocol
-            || (currentProviders().find((x) => x.id === cfgNow.api?.provider)?.apiProtocol)
+            || currentProviders().find((x) => x.id === pid)?.apiProtocol
+            || currentProviders().find((x) => x.id === cfgNow.api?.provider)?.apiProtocol
             || 'openai'
           );
           const result = await testModelChat({ baseUrl, apiKey, model, protocol: proto });
@@ -2987,7 +3002,8 @@ export function createRoutes(deps) {
           const body = await bodyOf(req);
           const r = upsertProvider({
             baseUrl: String(body.baseUrl ?? ''), apiKey: String(body.apiKey ?? ''), models: body.models || [],
-            protocol: body.apiProtocol
+            protocol: body.apiProtocol,
+            displayName: String(body.displayName ?? '')
           });
           return json(res, 200, { ok: true, ...r, provider: sanitizeProvider(r.provider) });
         } catch (error) {
@@ -3038,6 +3054,22 @@ export function createRoutes(deps) {
         const updated = setProviderProtocol(String(body.providerId ?? ''), body.apiProtocol);
         if (!updated) return json(res, 404, { ok: false, error: '提供商不存在' });
         return json(res, 200, { ok: true, apiProtocol: normalizeProtocol(updated.apiProtocol), protocolLabel: protocolLabel(updated.apiProtocol) });
+      }
+    },
+    {
+      // 修改已有提供商的显示名（「管理服务商」右列「名称」的保存按钮）。
+      // 空名称明确拒绝：存空串会让提供商列表里出现一行空白，用户既认不出也点不准。
+      // 想回到"按域名显示"就让用户自己填一个名字，而不是靠清空来隐式恢复。
+      method: 'POST', pattern: '/api/providers/display-name',
+      handler: async ({ req, res, json }) => {
+        const body = await bodyOf(req);
+        try {
+          const updated = setProviderDisplayName(String(body.providerId ?? ''), String(body.displayName ?? ''));
+          if (!updated) return json(res, 404, { ok: false, error: '提供商不存在' });
+          return json(res, 200, { ok: true, displayName: updated.displayName });
+        } catch (error) {
+          return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+        }
       }
     },
     {

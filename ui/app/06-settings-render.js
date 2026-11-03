@@ -512,7 +512,7 @@ function setPageHeadHtml() {
    匹配：输入串的任一字串作为子串出现在 key 里，或 key 包含输入串。
    结果排序按分区优先级权重 w。 */
 const SETTINGS_SEARCH_INDEX = [
-  { keys: ['密钥', 'api key', 'apikey', 'key', 'sk-', '接口地址', 'base url', 'baseurl', '模型', '提供商', '服务商', '地址', 'moxing', 'miyue'], label: '模型与密钥', desc: '接口地址、密钥、选模型、测试连通', section: 'api', target: 'open-model-config-btn', w: 10 },
+  { keys: ['密钥', 'api key', 'apikey', 'key', 'sk-', '接口地址', 'base url', 'baseurl', '模型', '提供商', '服务商', '地址', 'moxing', 'miyue'], label: '模型设置', desc: '选服务商与模型；地址、密钥在「管理服务商」', section: 'api', target: 'open-model-config-btn', w: 10 },
   { keys: ['群', '白名单', '好友', '允许', '谁能', '群号', 'qq号', 'qun', 'baimingdan'], label: '谁能找它（白名单）', desc: '勾选允许的群和好友', section: 'allow', target: 'pick-groups-btn', w: 10 },
   { keys: ['qq', '连接', 'onebot', '启动', '登录', 'snowluma', '令牌', 'token', '连接密码', '一键', 'lianjie', 'qidong'], label: '连接 QQ', desc: '一键启动、连接地址与令牌', section: 'onebot', target: 'quick-start-btn', w: 9 },
   { keys: ['积极度', '活跃', '档位', '回话', '回复', '限速', '发送', '间隔', '峰谷', '高峰', '省钱', '安静', 'jijidu', 'huifu'], label: '回复积极度 · 发送与限速', desc: '什么时候接话、说多快、高峰时段更安静', section: 'allow', target: 'open-active-config-btn', w: 8 },
@@ -527,7 +527,7 @@ const SETTINGS_SEARCH_INDEX = [
   { keys: ['主题', '皮肤', '外观', '数据', '重置', '备份', '更新', '小窗', '颜色', 'zhuti', 'waiguan'], label: '外观与数据', desc: '主题、数据目录、重置（危险区在底部）', section: 'app', w: 7 },
   { keys: ['屏蔽', '拉黑', '禁言', '成员', 'pingbi'], label: '屏蔽名单', desc: '谁的话当没看见', section: 'allow', target: 'blocklist-btn', w: 6 },
   { keys: ['备用模型', '备选', 'fallback', 'beiyong'], label: '备用模型', desc: '主模型失败时自动换', section: 'api', target: 'add-fallback-row-btn', w: 6 },
-  { keys: ['代理', 'proxy', 'daili'], label: '网络代理', desc: '接入国外 API 时用', section: 'api', target: 'open-model-config-btn', w: 6 },
+  { keys: ['代理', 'proxy', 'daili'], label: '网络代理', desc: '接入国外 API 时用', section: 'api', target: 'open-model-manage-btn', w: 6 },
   { keys: ['自动回复', '只读', 'zidong'], label: '自动回复（快捷开关）', desc: '左侧栏「快捷开关」第一个', section: 'api', w: 5 },
   { keys: ['表情', 'sticker', 'biaoqing'], label: '表情包', desc: '在「聊天与权限」分区', section: 'allow', w: 5 },
   { keys: ['价格', '单价', '成本', 'jiage', 'chengben'], label: '成本核算与价格', desc: 'token 单价、自定义价格', section: 'api', w: 5 }
@@ -617,10 +617,11 @@ function renderApiSection(c) {
     <h3 id="settings-api">连接模型</h3>
     <div class="field">
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn" id="open-model-config-btn">⚙ 模型与密钥</button>
+        <button class="btn" id="open-model-config-btn">⚙ 模型设置</button>
         <button class="btn" id="open-model-manage-btn">🗂 管理服务商</button>
       </div>
-      <div class="hint" id="provider-hint" style="margin-top:6px">${currentProvider ? `当前：${esc(currentProvider.displayName)} · ${esc(c.api.model || '未选模型')} @ ${esc(currentProvider.baseURL)}${currentProvider.hasKey ? ' · 已保存密钥（不显示）' : ' · 未保存密钥'}` : '尚未选择模型'}</div>
+      <div class="hint" id="provider-hint" style="margin-top:6px">${currentProvider ? `当前：${esc(providerLabelOf(currentProvider))} · ${esc(c.api.model || '未选模型')}${currentProvider.hasKey ? ' · 已保存密钥' : ' · 未保存密钥'}` : '尚未选择模型'}</div>
+      <div class="hint" style="margin-top:2px">「⚙ 模型设置」里只选服务商和模型；接口地址、密钥、代理在「🗂 管理服务商」里改。</div>
       ${testNote}
       <div class="hint" id="model-vision-hint" style="margin-top:6px"></div>
       ${hiddenIds}
@@ -827,7 +828,7 @@ function renderMemorySettingsSection(c) {
   const providers = state.providers || [];
   const useChat = mem.useChatModel !== false;
   const selP = providers.find((p) => p.id === mem.provider);
-  const currentDisplay = selP ? `${selP.displayName || selP.id} · ${mem.model || '未选模型'}` : (mem.model || '未选模型');
+  const currentDisplay = selP ? `${providerLabelOf(selP)} · ${mem.model || '未选模型'}` : (mem.model || '未选模型');
   return `
     <h3 id="settings-memory">记忆整理</h3>
     <div class="checkbox-row"><input type="checkbox" class="sw" id="cfg-mem-consolidate" ${mem.consolidateEnabled !== false ? 'checked' : ''} />
@@ -841,7 +842,7 @@ function renderMemorySettingsSection(c) {
           <div style="display:flex;gap:8px">
             <input type="text" id="cfg-mem-model-pick" readonly placeholder="点击选择模型" value="${esc(currentDisplay)}" style="flex:1;cursor:pointer" />
           </div>
-          <div class="hint" id="mem-model-hint">${selP ? `当前：${esc(selP.displayName)} @ ${esc(selP.baseURL)}` : '尚未选择专用模型'}</div>
+          <div class="hint" id="mem-model-hint">${selP ? `当前：${esc(providerLabelOf(selP))}` : '尚未选择专用模型'}</div>
           <input type="hidden" id="cfg-mem-provider" value="${esc(mem.provider || '')}" />
           <input type="hidden" id="cfg-mem-model" value="${esc(mem.model || '')}" />
         </div>

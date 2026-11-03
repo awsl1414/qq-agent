@@ -836,6 +836,53 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+/* ── 服务商展示标识 ──────────────────────────────────────────────────────
+   列表项、页面摘要与三处破坏性确认框（删除服务商 / 清除 Key / 删除模型）
+   都必须用同一串字来指认一个服务商，否则同名项在确认框里分不清。
+
+   规则与 src/providers.js 的 providerDisplayLabel 完全一致：
+     · 有名称 + 有端点 → `名称 · 端点`
+     · 只有名称        → `名称`
+     · 只有端点        → `端点`
+     · 都没有          → id
+   端点取 host（含端口），不是原始 Base URL——路径尾巴（/v1）对指认没有帮助。
+
+   优先用后端在 GET /api/providers 里下发的 label；只有老缓存 / 局部对象
+   （如 profile 里只存了 id + displayName）缺这个字段时才就地拼。
+
+   ⚠️ 后端是同一规则的源实现，改这里必须同步改 src/providers.js。 */
+function providerEndpointHost(p) {
+  const raw = String((p && (p.baseURL || p.baseUrl)) || '').trim();
+  if (!raw) return '';
+  try { return new URL(raw).host || ''; } catch { return ''; }
+}
+function providerLabelOf(p) {
+  if (!p || typeof p !== 'object') return '';
+  if (typeof p.label === 'string' && p.label.trim()) return p.label;
+  const name = String(p.displayName ?? '').trim();
+  const host = providerEndpointHost(p);
+  // 名称与端点相同（老数据名称就是域名）时不重复拼，见 src/providers.js 同处注释
+  if (name && host && name !== host) return `${name} · ${host}`;
+  if (name) return name;
+  if (host) return host;
+  return String(p.id ?? '');
+}
+
+/**
+ * 服务商列表项的内层 HTML：主行名称 + 次行端点。
+ *
+ * 为什么分两行而不是拼成一个字符串：左列只有 200px 宽，`名称 · 127.0.0.1:11434`
+ * 这类长串在窄屏下会折行或截断，两行结构更稳，也更容易扫读。
+ * 名称与端点相同时（老数据名称就是域名）只出一行——两行重复内容没有信息量。
+ */
+function providerRowHtml(p) {
+  const host = providerEndpointHost(p);
+  const name = String((p && p.displayName) ?? '').trim();
+  const main = name || host || String((p && p.id) ?? '');
+  const showHost = host && host !== main;
+  return `<div class="mm-prov-name">${esc(main)}</div>${showHost ? `<div class="mm-prov-host">${esc(host)}</div>` : ''}`;
+}
+
 const STATUS_LABEL = { waiting: '等待中', done: '已发言', noreply: '未回复', running: '运行中', error: '出错', aborted: '中止' };
 
 // ── 启动 loading 壳：页面先渲染，等服务可用后自动隐藏 ──

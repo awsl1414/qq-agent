@@ -722,7 +722,7 @@ function openBatchPriceModal() {
   for (const p of (state.providers || [])) for (const m of (p.models || [])) catalogModels.add(m);
   const orphanCustoms = Object.keys(customMap).filter((k) => !catalogModels.has(k)).sort();
   const lefts = (state.providers || []).map((p) => ({
-    id: p.id, name: p.displayName || p.id, models: p.models || [], names: p.modelNames || {}
+    id: p.id, name: providerLabelOf(p), models: p.models || [], names: p.modelNames || {}
   }));
   if (orphanCustoms.length) {
     lefts.push({ id: '__custom__', name: `已自定义（目录外 ${orphanCustoms.length}）`, models: orphanCustoms, names: {} });

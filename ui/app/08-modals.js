@@ -2,7 +2,7 @@
 'use strict';
 
 /* ── API 协议下拉 ─────────────────────────────────────────────────────────
-   「模型管理 → 添加/编辑提供商」里的 API 协议选择。与后端 src/api-protocols.js
+   「管理服务商 → 添加/编辑提供商」里的 API 协议选择。与后端 src/api-protocols.js
    的目录保持一致（id 必须逐一对应）。
    ⚠️ UI 是经典脚本共享全局作用域，本常量名带 QA_ 前缀防撞（ui-globals-check 口径）。 */
 const QA_API_PROTOCOLS = [
@@ -232,7 +232,7 @@ function closeModelModal(overlay) {
   let restored = false;
   if (back && typeof back.focus === 'function' && back.isConnected && back !== document.body) {
     try { back.focus({ preventScroll: true }); restored = true; } catch { /* ignore */ }
-    // ⚠️ back 是 readonly 选择框（#gp-pick / #mc-model-pick / .fb-model-pick /
+    // ⚠️ back 是 readonly 选择框（#gp-pick / .fb-model-pick /
     //    #cfg-mem-model-pick …）时，焦点停在只读框上，之后弹窗/页面里所有
     //    Ctrl+V、Ctrl+C 都被 Chromium 静默吞掉。子弹窗都是点这些只读框打开的，
     //    机械归还必然复现，所以顺延到同一容器内第一个可编辑控件
@@ -451,7 +451,7 @@ function modelModalShell({ head, body, foot = '', danger = false, closeOnBackdro
 let pendingOpenModelManage = false;
 
 /**
- * 关闭当前弹窗后打开「模型管理」。
+ * 关闭当前弹窗后打开「管理服务商」。
  *
  * 不能直接在当前弹窗里再开一个：两个遮罩会同层重叠（.model-modal-overlay
  * 的层号全项目只有一处，见 style.css 0.5 段的 --z-model-modal-overlay），
@@ -849,61 +849,115 @@ function openPersonaCreateModal(target = {}) {
 }
 
 /**
- * 「模型配置」模态框：模型目录 / Base URL / API Key / 图片视频专用模型 /
- * 图片视频开关 / 视频理解方式。
- * 保存按钮 = 把这些字段 PATCH 到 /api/config（掩码 Key 不回传，与主页面同语义）。
+ * 「模型设置」模态框：先选服务商、再选模型，外加图片/视频专用模型与相关开关。
+ *
+ * 连接信息（接口地址、密钥、代理）不在这里改：本弹窗只负责"用哪个"，不负责"怎么连"。
+ * 一个服务商的地址与密钥是它自身的属性，放在"选模型"的地方会让人以为同一个服务商
+ * 可以在这里另配一套地址。空状态与左列底部都给了「管理服务商」的直达入口。
+ *
+ * 保存按钮 = 把这些选择 PATCH 到 /api/config（不再碰 Key：Key 的读写全在
+ * 「管理服务商」里，避免两处写同一个字段、谁后写谁生效的旧坑）。
  */
 function openModelConfigModal() {
   const c = state.config || {};
-  const currentProvider = (state.providers || []).find((p) => p.id === c.api?.provider);
+  // 可变量：refreshProvidersState() 之后 state.providers 是整个新数组，
+  // 捕获成 const 会让重绘继续读旧目录（典型症状：刚加的服务商在弹窗里看不到）。
+  let providers = state.providers || [];
   const displayOf = (modelId) => {
     const m = String(modelId || '').trim();
     if (!m) return '';
-    for (const p of (state.providers || [])) {
+    for (const p of providers) {
       if ((p.modelNames || {})[m]) return p.modelNames[m];
     }
     return m;
   };
+  // 已选服务商：优先当前生效的那个；它已不存在（被删）时落到第一个。
+  let pickedPid = providers.some((p) => p.id === c.api?.provider)
+    ? c.api.provider
+    : (providers[0]?.id || '');
+  // 已选模型：只有它属于当前服务商时才算选中，否则视为"还没选"。
+  // 切换服务商时靠这条规则自动清空，不需要在点击处理里另写一遍。
+  let pickedModel = (() => {
+    const p = providers.find((x) => x.id === pickedPid);
+    const m = String(c.api?.model || '');
+    return p && (p.models || []).includes(m) ? m : '';
+  })();
+
   const overlay = modelModalShell({
-    head: '模型与密钥',
+    head: '模型设置',
     closeOnBackdrop: false,   // 编辑型：点外部不关闭，防误触丢内容
     body: `
-      <div class="field"><label>模型目录（点击选择）</label>
-        <div style="display:flex;gap:8px">
-          <input type="text" id="mc-model-pick" readonly placeholder="点击选择模型" value="${esc(currentProvider ? ((currentProvider.modelNames || {})[c.api.model] || c.api.model || '') : '')}" style="flex:1;cursor:pointer" />
-          <button class="btn btn-small" id="mc-test-btn">测试连通性</button>
-        </div>
-        <div class="hint" id="mc-test-result" style="margin-top:4px"></div></div>
-      <div class="field-row">
-        <div class="field"><label>接口地址（Base URL）</label>
-          <div style="display:flex;gap:8px">
-            <input type="text" id="mc-baseurl" readonly value="${esc(c.api?.baseUrl || '')}" style="flex:1" />
-            <button class="btn btn-small" id="mc-fetch-models" type="button" title="从当前提供商的端点自动拉取可用模型列表（使用已保存的 API Key；新输入未保存的 Key 不参与）">⟳ 拉取模型</button>
-          </div></div>
-        <div class="field"><label>密钥（API Key）</label>
-          <div style="display:flex;gap:8px">
-            <input type="password" id="mc-apikey" value="${esc((currentProvider?.hasKey || c.api?.apiKey) ? '******' : '')}" placeholder="输入新 Key 可替换；留空保持不变" autocomplete="new-password" style="flex:1" />
-            <button class="btn btn-small" id="mc-apikey-toggle" type="button">显示</button>
-            <button class="btn btn-small btn-danger" id="mc-apikey-clear" type="button" title="清除已保存的 API Key（留空保存并不会清除，必须点这个按钮）">清除</button>
-          </div></div>
-      </div>
-      <div class="field"><label>网络代理（可选，接入国外 API 用）</label>
-        <input type="text" id="mc-proxy" placeholder="http://127.0.0.1:7890（留空 = 直连）" value="${esc(c.api?.proxy || '')}" style="width:100%" />
-        <div class="hint" style="margin-top:4px">填本机代理地址后，对话 / 拉取模型 / 连通性测试都会走它。仅支持 http:// 代理；网页阅读与 QQ 协议端不走此项。</div></div>
-      <div class="checkbox-row"><input type="checkbox" class="sw" id="mc-vision" ${c.api?.vision !== false ? 'checked' : ''} />
+      <div class="model-modal-left" id="mc-left"></div>
+      <div class="model-modal-right" id="mc-right"></div>`,
+    foot: `<button class="btn" id="mc-cancel">取消</button>
+           <button class="btn btn-primary" id="mc-save">保存</button>`
+  });
+  const left = overlay.querySelector('#mc-left');
+  const right = overlay.querySelector('#mc-right');
+
+  function renderLeft() {
+    if (!providers.length) {
+      left.innerHTML = '<div class="muted" style="padding:10px;font-size:12px">还没有服务商。<br />先到「管理服务商」添加一个。</div>';
+    } else {
+      left.innerHTML = providers.map((p) =>
+        `<div class="mm-prov ${p.id === pickedPid ? 'active' : ''}" data-pid="${esc(p.id)}">${providerRowHtml(p)}</div>`).join('');
+    }
+    left.insertAdjacentHTML('beforeend', `
+      <div style="margin-top:10px;border-top:1px solid var(--edge);padding-top:8px">
+        <button class="btn btn-small" id="mc-goto-manage" type="button" style="width:100%"
+          title="服务商的名称、接口地址、密钥与网络代理都在「管理服务商」里配置">服务商地址与密钥 →</button>
+      </div>`);
+    left.querySelectorAll('.mm-prov').forEach((el) => el.addEventListener('click', () => {
+      if (el.dataset.pid === pickedPid) return;
+      pickedPid = el.dataset.pid;
+      // 新服务商下没有这个模型 → 清空（见 pickedModel 初始化的同一判定）
+      const p = providers.find((x) => x.id === pickedPid);
+      if (!p || !(p.models || []).includes(pickedModel)) pickedModel = '';
+      renderLeft();
+      renderRight();
+    }));
+    left.querySelector('#mc-goto-manage')?.addEventListener('click', () => scheduleOpenModelManage());
+  }
+
+  function renderRight() {
+    const p = providers.find((x) => x.id === pickedPid);
+    // 这几项与「选中哪个服务商」无关，但右列会因切换服务商整体重建。
+    // 重建若还从 c.api（打开弹窗那一刻的快照）取值，用户先改了图文开关、
+    // 再点另一个服务商，刚改的就被静默还原了。所以重建前先把**当前 DOM 里的值**
+    // 抓成快照，没有 DOM（首次渲染）时才回落到 c.api。
+    // 专用模型多存一个干净 id（dataset.model），保存时用它而不是显示名。
+    const prev = right.querySelector('#mc-vision');
+    const sketch = prev ? {
+      vision: prev.checked,
+      video: right.querySelector('#mc-video')?.checked,
+      videoMode: right.querySelector('#mc-video-mode')?.value,
+      visionModel: right.querySelector('#mc-vision-model-pick')?.dataset.model,
+      videoModel: right.querySelector('#mc-video-model-pick')?.dataset.model
+    } : null;
+    const visionOn = sketch ? sketch.vision : (c.api?.vision !== false);
+    const videoOn = sketch ? sketch.video : (c.api?.video === true);
+    const videoMode = sketch ? sketch.videoMode : (c.api?.videoMode || 'auto');
+    // 专用模型的显示名：快照里有干净 id 就按 id 反查目录名，否则用已存的配置值。
+    const specialDisplay = (which, fallback) => {
+      const id = sketch ? sketch[which] : undefined;
+      if (id === undefined) return esc(displayOf(fallback));
+      return esc(id ? (displayOf(id) || id) : '');
+    };
+    const switches = `
+      <div class="checkbox-row"><input type="checkbox" class="sw" id="mc-vision" ${visionOn ? 'checked' : ''} />
         <label for="mc-vision">图片输入（关闭则移除看图工具）</label>
         <span id="mc-vision-hint" class="muted" style="font-size:12px;align-self:center"></span></div>
-      <div class="checkbox-row"><input type="checkbox" class="sw" id="mc-video" ${c.api?.video === true ? 'checked' : ''} />
+      <div class="checkbox-row"><input type="checkbox" class="sw" id="mc-video" ${videoOn ? 'checked' : ''} />
         <label for="mc-video">视频输入（GIF 转视频发给模型）</label></div>
       <div class="field-row">
         <div class="field"><label>图片输入专用模型（留空用主模型）</label>
           <div style="display:flex;gap:8px">
-            <input type="text" id="mc-vision-model-pick" readonly placeholder="点击选择" value="${esc(displayOf(c.api?.visionModel))}" style="flex:1;cursor:pointer" />
+            <input type="text" id="mc-vision-model-pick" readonly placeholder="点击选择" value="${specialDisplay('visionModel', c.api?.visionModel)}"${sketch?.visionModel ? ` data-model="${esc(sketch.visionModel)}"` : ''} style="flex:1;cursor:pointer" />
             <button class="btn btn-small" id="mc-vision-model-clear" type="button">清空</button>
           </div></div>
         <div class="field"><label>视频输入专用模型（留空用主模型）</label>
           <div style="display:flex;gap:8px">
-            <input type="text" id="mc-video-model-pick" readonly placeholder="点击选择" value="${esc(displayOf(c.api?.videoModel))}" style="flex:1;cursor:pointer" />
+            <input type="text" id="mc-video-model-pick" readonly placeholder="点击选择" value="${specialDisplay('videoModel', c.api?.videoModel)}"${sketch?.videoModel ? ` data-model="${esc(sketch.videoModel)}"` : ''} style="flex:1;cursor:pointer" />
             <button class="btn btn-small" id="mc-video-model-clear" type="button">清空</button>
           </div></div>
       </div>
@@ -914,100 +968,94 @@ function openModelConfigModal() {
             ['native', '原生：把视频直接交给全模态模型（需模型支持）'],
             ['frames', '抽帧：把视频变成若干张图片（任何视觉模型都能用）'],
             ['off', '关闭：只读时长/分辨率等元信息']
-          ].map(([v, l]) => `<option value="${v}" ${(c.api?.videoMode || 'auto') === v ? 'selected' : ''}>${l}</option>`).join('')}
-        </select></div>`,
-    foot: `<button class="btn" id="mc-cancel">取消</button>
-           <button class="btn btn-primary" id="mc-save">保存</button>`
-  });
+          ].map(([v, l]) => `<option value="${v}" ${videoMode === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select></div>`;
 
-  // 模型选择：复用主模型选择器语义，但选完只写本弹窗的表单（不立即 POST）
-  overlay.querySelector('#mc-model-pick').addEventListener('click', async () => {
-    const providers = state.providers || [];
-    // 空目录时给一条**可走的路**：就近关掉本弹窗并打开「模型管理」。
-    // 原先只说"请先用「模型管理」添加提供商"，而这里没有任何按钮能过去，
-    // 用户只能自己猜「模型管理」在哪个菜单里（实测就卡在这一步）。
-    if (!providers.length) {
-      if (await qaConfirm('模型目录还是空的。\n\n现在去「模型管理」添加提供商吗？\n（填 Base URL + API Key 后即可拉取模型列表）')) {
-        scheduleOpenModelManage();
-      }
-      return;
-    }
-    const pickOverlay = modelModalShell({
-      head: '选择模型',
-      body: `
-        <div class="model-modal-left" id="mcp-left"></div>
-        <div class="model-modal-right" id="mcp-right"></div>`,
-      foot: `<button class="btn" id="mcp-cancel">取消</button>`
-    });
-    const pl = pickOverlay.querySelector('#mcp-left');
-    const pr = pickOverlay.querySelector('#mcp-right');
-    let activePid = c.api?.provider || providers[0].id;
-    const renderLeft = () => {
-      pl.innerHTML = providers.map((p) =>
-        `<div class="mm-prov ${p.id === activePid ? 'active' : ''}" data-pid="${esc(p.id)}">${esc(p.displayName || p.id)}</div>`).join('');
-      pl.querySelectorAll('.mm-prov').forEach((el) => el.addEventListener('click', () => { activePid = el.dataset.pid; renderLeft(); renderRight(); }));
-    };
-    const renderRight = () => {
-      const p = providers.find((x) => x.id === activePid);
-      if (!p) { pr.innerHTML = ''; return; }
+    if (!p) {
+      right.innerHTML = `
+        <div class="empty-hint">还没有可选的服务商。<br />接口地址、密钥与模型都在「管理服务商」里配置。</div>
+        <div style="margin-top:10px">
+          <button class="btn" id="mc-goto-manage-2" type="button">去「管理服务商」添加 →</button>
+        </div>
+        ${switches}`;
+    } else {
       const names = p.modelNames || {};
-      pr.innerHTML = (p.models || []).map((m) => `
-        <div class="mm-model" data-model="${esc(m)}">
-          <span>${esc(names[m] || m)}</span>
-          ${(names[m] || m) !== m ? `<span class="muted" style="font-size:11px">${esc(m)}</span>` : ''}
-        </div>`).join('') || '<div class="muted" style="padding:10px">该提供商下没有模型</div>';
-      pr.querySelectorAll('.mm-model').forEach((el) => el.addEventListener('click', () => {
-        overlay.querySelector('#mc-model-pick').value = (names[el.dataset.model] || el.dataset.model);
-        overlay.querySelector('#mc-picked').value = `${activePid}|||${el.dataset.model}`;
-        overlay.querySelector('#mc-baseurl').value = p.baseURL || '';
-        closeModelModal(pickOverlay);
-      }));
-    };
-    renderLeft();
-    renderRight();
-    pickOverlay.querySelector('#mcp-cancel').addEventListener('click', () => closeModelModal(pickOverlay));
-  });
-  // 隐藏字段：选中模型的 pid|||model（未选择时为空 = 保持现状）
-  const hidden = document.createElement('input');
-  hidden.type = 'hidden';
-  hidden.id = 'mc-picked';
-  overlay.querySelector('.model-modal-body').appendChild(hidden);
-
-  // 「⟳ 拉取模型」：从当前提供商的端点自动拉取可用模型列表。
-  // 复用模型管理的整套链路：POST /api/providers/fetch-models 拉列表 →
-  // openModelAddModal 勾选搜索 → 并入提供商目录。之后点「模型目录」即可选到新模型。
-  // ⚠️ Key 口径与模型管理一致：用后端已保存的 Key，弹窗里新输入、还没保存的不参与。
-  overlay.querySelector('#mc-fetch-models').addEventListener('click', async () => {
-    const btn = overlay.querySelector('#mc-fetch-models');
-    const provider = (state.providers || []).find((p) => p.id === state.config?.api?.provider)
-      || (state.providers || [])[0];
-    if (!provider) {
-      if (await qaConfirm('还没有提供商，无法拉取模型。\n\n现在去「模型管理」添加提供商吗？')) scheduleOpenModelManage();
-      return;
+      const modelList = (p.models || []).length
+        ? (p.models || []).map((m) => `
+          <div class="mm-model ${m === pickedModel ? 'active' : ''}" data-model="${esc(m)}"${m === pickedModel ? ' style="box-shadow:var(--inset-edge)"' : ''}>
+            <span class="mm-check">${m === pickedModel ? '✓' : ''}</span>
+            <span>${esc(names[m] || m)}</span>
+            ${(names[m] || m) !== m ? `<span class="muted" style="font-size:11px">${esc(m)}</span>` : ''}
+          </div>`).join('')
+        : '<div class="muted" style="padding:10px">这个服务商下还没有模型。到「管理服务商」里点「拉取模型列表」或手动添加。</div>';
+      right.innerHTML = `
+        <div class="field"><label>服务商</label>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-weight:600">${esc(providerLabelOf(p))}</span>
+            <span class="muted" style="font-size:12px">${p.hasKey ? '· 已保存密钥' : '· 未保存密钥'}</span>
+          </div>
+          <div class="hint" style="margin-top:4px">接口地址与密钥在「管理服务商」里修改。</div></div>
+        <div class="field"><label>模型（点击选择）</label>
+          <div id="mc-model-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:8px">
+            ${modelList}
+          </div>
+          <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
+            <button class="btn btn-small" id="mc-test-btn" type="button" ${pickedModel ? '' : 'disabled'}>测试连通性</button>
+            <span class="hint" id="mc-test-result" style="margin:0"></span>
+          </div></div>
+        ${switches}`;
     }
+
+    right.querySelector('#mc-goto-manage-2')?.addEventListener('click', () => scheduleOpenModelManage());
+    right.querySelectorAll('#mc-model-list .mm-model').forEach((el) => el.addEventListener('click', () => {
+      pickedModel = el.dataset.model;
+      renderRight();
+    }));
+    // 专用模型选择（写 value + dataset.model，保存时带走干净的 id）
+    right.querySelector('#mc-vision-model-pick')?.addEventListener('click', () => pickSpecial('vision'));
+    right.querySelector('#mc-video-model-pick')?.addEventListener('click', () => pickSpecial('video'));
+    right.querySelector('#mc-vision-model-clear')?.addEventListener('click', () => {
+      const el = right.querySelector('#mc-vision-model-pick');
+      el.value = ''; delete el.dataset.model;
+    });
+    right.querySelector('#mc-video-model-clear')?.addEventListener('click', () => {
+      const el = right.querySelector('#mc-video-model-pick');
+      el.value = ''; delete el.dataset.model;
+    });
+    right.querySelector('#mc-test-btn')?.addEventListener('click', runTest);
+  }
+
+  // 连通性测试：用所选服务商**已保存**的配置去测（Key 由后端按 providerId 解析）。
+  // 这里不再有密钥输入框，所以不能把"用户刚输的 Key"传过去——那是「管理服务商」的事。
+  async function runTest() {
+    const p = providers.find((x) => x.id === pickedPid);
+    const btn = right.querySelector('#mc-test-btn');
+    const out = right.querySelector('#mc-test-result');
+    if (!p || !btn) return;
     btn.disabled = true;
-    btn.textContent = '拉取中…';
+    btn.textContent = '测试中…';
+    if (out) out.textContent = '';
     try {
-      const r = await api('/api/providers/fetch-models', {
+      const r = await api('/api/providers/test-chat', {
         method: 'POST',
-        body: JSON.stringify({ baseUrl: provider.baseURL, providerId: provider.id })
+        body: JSON.stringify({
+          baseUrl: p.baseURL || '',
+          providerId: p.id,
+          model: pickedModel || String(c.api?.model || ''),
+          apiProtocol: p.apiProtocol || ''
+        })
       });
-      if (!(r.models || []).length) {
-        qaAlert('端点没有返回任何模型。\n请检查 Base URL / API Key 是否正确（新 Key 要先保存才会用于拉取）。');
-        return;
-      }
-      openModelAddModal(provider.baseURL, '', r.models || [], provider.id);
+      const res = r.result || {};
+      if (out) out.textContent = res.ok ? `✓ 测试通过（${res.latencyMs}ms）` : `✗ ${res.note || '测试失败'}`;
     } catch (e) {
-      qaAlert(`拉取失败：${e.message}`);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = '⟳ 拉取模型';
+      if (out) out.textContent = `测试失败：${e.message}`;
     }
-  });
+    btn.disabled = false;
+    btn.textContent = '测试连通性';
+  }
 
-  // 专用模型选择（写隐藏字段，保存时带走）
+  // 专用模型选择（左服务商 / 右模型）。写回弹窗里的只读框，保存时随主配置一起提交。
   const pickSpecial = (which) => {
-    const providers = state.providers || [];
     if (!providers.length) { qaAlert('模型目录为空。'); return; }
     const fieldId = which === 'vision' ? 'mc-vision-model-pick' : 'mc-video-model-pick';
     const pickOverlay = modelModalShell({
@@ -1019,10 +1067,10 @@ function openModelConfigModal() {
     });
     const pl = pickOverlay.querySelector('#msp-left');
     const pr = pickOverlay.querySelector('#msp-right');
-    let activePid = providers[0].id;
+    let activePid = pickedPid || providers[0].id;
     const renderLeft = () => {
       pl.innerHTML = providers.map((p) =>
-        `<div class="mm-prov ${p.id === activePid ? 'active' : ''}" data-pid="${esc(p.id)}">${esc(p.displayName || p.id)}</div>`).join('');
+        `<div class="mm-prov ${p.id === activePid ? 'active' : ''}" data-pid="${esc(p.id)}">${providerRowHtml(p)}</div>`).join('');
       pl.querySelectorAll('.mm-prov').forEach((el) => el.addEventListener('click', () => { activePid = el.dataset.pid; renderLeft(); renderRight(); }));
     };
     const renderRight = () => {
@@ -1033,10 +1081,11 @@ function openModelConfigModal() {
         <div class="mm-model" data-model="${esc(m)}">
           <span>${esc(names[m] || m)}</span>
           ${(names[m] || m) !== m ? `<span class="muted" style="font-size:11px">${esc(m)}</span>` : ''}
-        </div>`).join('') || '<div class="muted" style="padding:10px">该提供商下没有模型</div>';
+        </div>`).join('') || '<div class="muted" style="padding:10px">该服务商下没有模型</div>';
       pr.querySelectorAll('.mm-model').forEach((el) => el.addEventListener('click', () => {
-        overlay.querySelector('#' + fieldId).value = (names[el.dataset.model] || el.dataset.model);
-        overlay.querySelector('#' + fieldId).dataset.model = el.dataset.model;
+        const field = overlay.querySelector('#' + fieldId);
+        field.value = (names[el.dataset.model] || el.dataset.model);
+        field.dataset.model = el.dataset.model;
         closeModelModal(pickOverlay);
       }));
     };
@@ -1044,158 +1093,51 @@ function openModelConfigModal() {
     renderRight();
     pickOverlay.querySelector('#msp-cancel').addEventListener('click', () => closeModelModal(pickOverlay));
   };
-  overlay.querySelector('#mc-vision-model-pick').addEventListener('click', () => pickSpecial('vision'));
-  overlay.querySelector('#mc-video-model-pick').addEventListener('click', () => pickSpecial('video'));
-  overlay.querySelector('#mc-vision-model-clear').addEventListener('click', () => {
-    const el = overlay.querySelector('#mc-vision-model-pick');
-    el.value = ''; delete el.dataset.model;
-  });
-  overlay.querySelector('#mc-video-model-clear').addEventListener('click', () => {
-    const el = overlay.querySelector('#mc-video-model-pick');
-    el.value = ''; delete el.dataset.model;
-  });
-
-  // Key 显示/清除：与主页面同款（fetchRealKey 走 /api/providers/key）
-  overlay.querySelector('#mc-apikey-toggle').addEventListener('click', async () => {
-    const input = overlay.querySelector('#mc-apikey');
-    const btn = overlay.querySelector('#mc-apikey-toggle');
-    const show = input.type === 'password';
-    if (show) {
-      try {
-        const pid = c.api?.provider;
-        const r = pid ? await api(`/api/providers/key?providerId=${encodeURIComponent(pid)}`) : await api('/api/api-key');
-        input.type = 'text';
-        // 没存过 Key 时不要把「（无）」写进 value：它是给用户看的提示，不是值。
-        // 写进 value 后「显示 → 保存」会把它当成新 Key 提交，
-        // 真实的空状态被写成字面量「（无）」，之后所有请求 401。
-        // 用 placeholder：看得见、但不会被读成用户输入。
-        input.value = String(r.apiKey || '');
-        input.placeholder = r.apiKey ? '' : '（无）';
-        btn.textContent = '隐藏';
-      } catch (e) { qaAlert(`读取密钥失败：${e.message}`); }
-    } else {
-      input.type = 'password';
-      // 不要无条件写 '******'：用户输入新 Key 后点「隐藏」时，把新值覆盖成掩码，
-      // 而保存把 '******' 当"不修改"，新 Key 就静默丢失了。
-      // 只切 type 即可（原值本就显示为圆点）；空串与新输入都保持原样。
-      btn.textContent = '显示';
-    }
-  });
-  overlay.querySelector('#mc-apikey-clear').addEventListener('click', async () => {
-    // 清除凭据 → danger:true
-    if (!await qaConfirm({
-      danger: true,
-      confirmText: '清除 Key',
-      message: '确定清除已保存的 API Key？'
-    })) return;
-    try {
-      const pid = c.api?.provider;
-      if (pid) {
-        await api('/api/providers/set-key', { method: 'POST', body: JSON.stringify({ providerId: pid, apiKey: '' }) });
-      } else {
-        await api('/api/config', { method: 'POST', body: JSON.stringify({ api: { apiKey: '' } }) });
-      }
-      const input = overlay.querySelector('#mc-apikey');
-      input.value = '';
-      input.placeholder = '输入新 Key 可替换';
-      // ⚠️ loadSettings() 里的 providers 在慢路径、没有被 await。不清这一次的话
-      //    state.providers 还认为 hasKey=true，紧接着打开的「模型管理 / 模型配置」
-      //    会显示"已保存密钥"的旧状态。
-      await refreshProvidersState();
-      await loadSettings();
-    } catch (e) { qaAlert(`清除失败：${e.message}`); }
-  });
-
-  // 连通性测试：与主页面 runConnectivityTest 同款逻辑（读弹窗里的表单值）
-  overlay.querySelector('#mc-test-btn').addEventListener('click', async () => {
-    const btn = overlay.querySelector('#mc-test-btn');
-    const out = overlay.querySelector('#mc-test-result');
-    btn.disabled = true;
-    btn.textContent = '测试中…';
-    if (out) out.textContent = '';
-    try {
-      const picked = overlay.querySelector('#mc-picked').value;
-      // 弹窗里选中的模型可能来自另一家提供商（比如主提供商是 openai，这里挑了个
-      // anthropic 的模型）。不把它的协议一起带上，服务端就会拿主提供商的协议去请求，
-      // 端点/鉴权头全错，明明配置没问题也报 4xx。
-      const [pickedPid, pickedModel] = picked ? String(picked).split('|||') : ['', ''];
-      const pickedProv = (state.providers || []).find((x) => x.id === pickedPid);
-      const model = picked ? pickedModel : (c.api?.model || '');
-      const keyInput = overlay.querySelector('#mc-apikey');
-      const raw = (keyInput.value || '').trim();
-      const apiKey = (raw && raw !== '******') ? raw : '';
-      const r = await api('/api/providers/test-chat', {
-        method: 'POST',
-        body: JSON.stringify({
-          baseUrl: overlay.querySelector('#mc-baseurl').value.trim(),
-          apiKey,
-          model,
-          apiProtocol: pickedProv?.apiProtocol || ''
-        })
-      });
-      const res = r.result || {};
-      if (out) out.textContent = res.ok ? `✓ 测试通过（${res.latencyMs}ms）` : `✗ ${res.note || '测试失败'}`;
-    } catch (e) {
-      if (out) out.textContent = `测试失败：${e.message}`;
-    }
-    btn.disabled = false;
-    btn.textContent = '测试连通性';
-  });
 
   overlay.querySelector('#mc-cancel').addEventListener('click', () => closeModelModal(overlay));
   overlay.querySelector('#mc-save').addEventListener('click', async () => {
     const patch = {
-      vision: overlay.querySelector('#mc-vision').checked,
-      video: overlay.querySelector('#mc-video').checked,
-      videoMode: overlay.querySelector('#mc-video-mode').value
+      vision: overlay.querySelector('#mc-vision')?.checked ?? (c.api?.vision !== false),
+      video: overlay.querySelector('#mc-video')?.checked ?? (c.api?.video === true),
+      videoMode: overlay.querySelector('#mc-video-mode')?.value || 'auto'
     };
-    const picked = overlay.querySelector('#mc-picked').value;
-    if (picked) {
-      const [pid, model] = picked.split('|||');
-      patch.provider = pid;
-      patch.model = model;
-      const p = (state.providers || []).find((x) => x.id === pid);
-      if (p?.baseURL) patch.baseUrl = p.baseURL;
-    } else if (overlay.querySelector('#mc-baseurl').value.trim() !== (c.api?.baseUrl || '')) {
-      patch.baseUrl = overlay.querySelector('#mc-baseurl').value.trim();
+    const p = providers.find((x) => x.id === pickedPid);
+    if (p && pickedModel) {
+      patch.provider = pickedPid;
+      patch.model = pickedModel;
+      // baseUrl 跟着提供商走：运行时的主调用只看 api.baseUrl，
+      // 只改 provider 而不改它，请求会发到旧地址（旧版本踩过的坑）。
+      if (p.baseURL) patch.baseUrl = p.baseURL;
     }
-    // 专用模型：dataset.model 里是干净的 id（没选过就删属性 = 走"保持原值"分支）
+    // 专用模型：dataset.model 里是干净的 id（没动过就没有该属性 = 走"保持原值"分支）
     const vEl = overlay.querySelector('#mc-vision-model-pick');
     const dEl = overlay.querySelector('#mc-video-model-pick');
-    if (vEl.dataset.model !== undefined || vEl.value === '') patch.visionModel = vEl.dataset.model || '';
-    if (dEl.dataset.model !== undefined || dEl.value === '') patch.videoModel = dEl.dataset.model || '';
-    // Key：只在用户输入了非掩码明文时才回传（掩码/留空 = 保持）
-    //
-    // ⚠️ 真实生效的 Key 是 `dshProviderKeys[providerId]`（见 llm.js resolveApiKey：
-    //    提供商 Key > 顶层 api.apiKey）。只写 `patch.apiKey` 会落进顶层 api.apiKey，
-    //    运行时根本不读它：输入新 Key → 保存 → 点「显示」还是旧 Key。
-    //    保存与清除两条路径都必须走 providers/set-key。
-    const raw = (overlay.querySelector('#mc-apikey').value || '').trim();
-    // 除掩码外，再把旧版残留的占位符「（无）」一起挡掉：
-    // 即使旧缓存 / 粘贴把它塞进了 value，也不会被当成真 Key 落盘。
-    const newKey = (raw && raw !== '******' && raw !== '（无）') ? raw : '';
-    // 目标提供商：本次新选的模型目录优先（可能换了家），否则用当前生效的那个
-    const keyPid = picked ? String(picked).split('|||')[0] : (c.api?.provider || '');
-    if (newKey && !keyPid) patch.apiKey = newKey;
-    // 网络代理：与 baseUrl 同级回传，空串 = 清除代理恢复直连
-    patch.proxy = (overlay.querySelector('#mc-proxy')?.value || '').trim();
+    if (vEl && (vEl.dataset.model !== undefined || vEl.value === '')) patch.visionModel = vEl.dataset.model || '';
+    if (dEl && (dEl.dataset.model !== undefined || dEl.value === '')) patch.videoModel = dEl.dataset.model || '';
     try {
       await api('/api/config', { method: 'POST', body: JSON.stringify({ api: patch }) });
-      // Key 属于提供商时单独落盘（见上方注释：顶层 api.apiKey 不会被读取）
-      if (newKey && keyPid) {
-        await api('/api/providers/set-key', {
-          method: 'POST',
-          body: JSON.stringify({ providerId: keyPid, apiKey: newKey })
-        });
-        // state.providers 里的 hasKey 要同步，否则下次打开弹窗还显示"未保存"
-        await refreshProvidersState();
-      }
       closeModelModal(overlay);
       loadSettings();
     } catch (e) {
       qaAlert(`保存失败：${e.message}`);
     }
   });
+
+  renderLeft();
+  renderRight();
+  // 静默刷新一次 providers：用户可能刚在「管理服务商」里加过，state 还没跟上。
+  // 刷新到位后原地重绘；弹窗已关则跳过。已选服务商/模型若随刷新失效，重绘会
+  // 由 renderLeft/renderRight 里的兜底判定自动对齐。
+  refreshProvidersState().then(() => {
+    if (!overlay.isConnected) return;
+    providers = state.providers || [];
+    // 目录变了：已选服务商可能被删、已选模型可能被移出，先对齐再重绘
+    if (!providers.some((p) => p.id === pickedPid)) pickedPid = providers[0]?.id || '';
+    const nowP = providers.find((x) => x.id === pickedPid);
+    if (!nowP || !(nowP.models || []).includes(pickedModel)) pickedModel = '';
+    renderLeft();
+    renderRight();
+  }).catch(() => { /* 内部已兜底；这里只保证链上异常不会变成 unhandledRejection */ });
 }
 
 /** 选择模型：左提供商 / 右模型，点击模型后保存到当前 api 配置并关闭。 */
@@ -1217,7 +1159,7 @@ async function refreshProvidersState() {
 /**
  * 还没有主模型、但提供商目录里已经有模型时，把"选模型"这一步收掉。
  *
- * 背景：在「模型管理」里配置完提供商后，还要自己去「模型配置」点「模型目录」
+ * 背景：在「管理服务商」里配置完提供商后，还要自己去「模型设置」点「模型目录」
  * 选一次模型才算能用，萌新根本不知道还有这一步，配置永远停在半路。
  *
  * 规则：
@@ -1248,7 +1190,7 @@ async function autoPickMainModelIfNeeded() {
       await loadSettings();
       // 提示一句"已自动选定"，否则用户不知道模型被谁选的
       const hint = $('#provider-hint');
-      if (hint) hint.textContent = `已自动选用模型：${pick.model}（随时可在「模型配置」里更换）`;
+      if (hint) hint.textContent = `已自动选用模型：${pick.model}（随时可在「模型设置」里更换）`;
     } catch { /* 自动选失败就退回让用户手动选 */ }
     return true;
   }
@@ -1275,7 +1217,7 @@ function openModelPicker() {
   let activePid = current || providers[0].id;
   function renderLeft() {
     left.innerHTML = providers.map((p) =>
-      `<div class="mm-prov ${p.id === activePid ? 'active' : ''}" data-pid="${esc(p.id)}">${esc(p.displayName || p.id)}</div>`).join('');
+      `<div class="mm-prov ${p.id === activePid ? 'active' : ''}" data-pid="${esc(p.id)}">${providerRowHtml(p)}</div>`).join('');
     left.querySelectorAll('.mm-prov').forEach((el) => {
       el.addEventListener('click', () => { activePid = el.dataset.pid; renderLeft(); renderRight(); });
     });
@@ -1343,7 +1285,7 @@ function openModelPicker() {
 }
 
 /**
- * 添加自定义搜索服务：与「模型配置」同款的"入口按钮 → 专门弹窗"形态
+ * 添加自定义搜索服务：与「模型设置」同款的"入口按钮 → 专门弹窗"形态
  * （原来的 <details> 折叠条看着不像能点）。
  * 字段 id 沿用页面时代的 new-sp-* / add-search-provider-btn / add-search-provider-hint。
  * 弹窗内容是点击后才创建的，页面绑定抓不到，所以绑定必须在这里自带。
@@ -1429,7 +1371,7 @@ function openMemoryModelPicker() {
   let activePid = currentProvider || providers[0].id;
   function renderLeft() {
     left.innerHTML = providers.map((p) =>
-      `<div class="mm-prov ${p.id === activePid ? 'active' : ''}" data-pid="${esc(p.id)}">${esc(p.displayName || p.id)}</div>`).join('');
+      `<div class="mm-prov ${p.id === activePid ? 'active' : ''}" data-pid="${esc(p.id)}">${providerRowHtml(p)}</div>`).join('');
     left.querySelectorAll('.mm-prov').forEach((el) => {
       el.addEventListener('click', () => { activePid = el.dataset.pid; renderLeft(); renderRight(); });
     });
@@ -1505,7 +1447,7 @@ function openSpecialModelPicker(which) {
   let activePid = providers[0].id;
   function renderLeft() {
     left.innerHTML = providers.map((p) =>
-      `<div class="mm-prov ${p.id === activePid ? 'active' : ''}" data-pid="${esc(p.id)}">${esc(p.displayName || p.id)}</div>`).join('');
+      `<div class="mm-prov ${p.id === activePid ? 'active' : ''}" data-pid="${esc(p.id)}">${providerRowHtml(p)}</div>`).join('');
     left.querySelectorAll('.mm-prov').forEach((el) => {
       el.addEventListener('click', () => { activePid = el.dataset.pid; renderLeft(); renderRight(); });
     });
@@ -1564,7 +1506,7 @@ function openSpecialModelPicker(which) {
  */
 function openModelAddModal(baseUrl, apiKey, remoteModels, knownProviderId) {
   const providers = state.providers || [];
-  // 已知提供商 id 优先（模型管理里"拉取模型列表"传来的），否则按 baseUrl 匹配
+  // 已知提供商 id 优先（管理服务商里"拉取模型列表"传来的），否则按 baseUrl 匹配
   const existingProvider = providers.find((p) => p.id === knownProviderId)
     || providers.find((p) => (p.baseURL || '').replace(/\/+$/, '') === String(baseUrl || '').replace(/\/+$/, ''));
   const existingIds = new Set(existingProvider?.models || []);
@@ -1708,7 +1650,7 @@ function openModelAddModal(baseUrl, apiKey, remoteModels, knownProviderId) {
 
 /** 删除模型：左提供商 / 右模型（带删除按钮），暗红色调。 */
 /**
- * 「模型管理」模态框：左右两列。
+ * 「管理服务商」模态框：左右两列。
  * 左列 = 提供商列表 + 添加提供商 / 删除提供商按钮；
  * 右列 = 选中提供商的 baseURL、API Key（掩码）、模型列表（ID + 显示名）、
  *        拉取模型列表 / 删除模型按钮。
@@ -1746,7 +1688,7 @@ function openModelManageModal() {
       </div>
       ${providers.map((p) => `
         <div class="mm-prov ${p.id === activePid ? 'active' : ''}" data-pid="${esc(p.id)}">
-          ${esc(p.displayName || p.id)}${p.id === cfgProvider ? ' <span class="muted" style="font-size:11px">（当前）</span>' : ''}
+          ${providerRowHtml(p)}${p.id === cfgProvider ? '<span class="muted" style="font-size:11px">（当前）</span>' : ''}
         </div>`).join('') || '<div class="muted" style="padding:10px;font-size:12px">还没有提供商。<br />点上方「＋ 添加提供商」，只填 Base URL + API Key 也行 —— 添加后就能「拉取模型列表」。</div>'}`;
     left.querySelectorAll('.mm-prov').forEach((el) => {
       el.addEventListener('click', () => { activePid = el.dataset.pid; renderLeft(); renderRight(); });
@@ -1764,7 +1706,7 @@ function openModelManageModal() {
       if (!await qaConfirm({
         danger: true,
         confirmText: '删除提供商',
-        message: `确定删除整个提供商「${p.displayName || p.id}」？\n\n将一并删除它的 API Key 与 ${modelCount} 个模型。此操作不可撤销。`
+        message: `确定删除整个提供商「${providerLabelOf(p)}」？\n\n将一并删除它的 API Key 与 ${modelCount} 个模型。此操作不可撤销。`
       })) return;
       try {
         await api('/api/providers', { method: 'DELETE', body: JSON.stringify({ providerId: p.id }) });
@@ -1786,8 +1728,17 @@ function openModelManageModal() {
     if (!p) { right.innerHTML = '<div class="muted" style="padding:12px;font-size:12px">左侧选中一个提供商后，这里显示它的端点、密钥与模型。</div>'; return; }
     const names = p.modelNames || {};
     right.innerHTML = `
+      <div class="field"><label>名称</label>
+        <div style="display:flex;gap:8px">
+          <input type="text" id="mg-name" value="${esc(p.displayName || '')}" maxlength="40" style="flex:1"
+            placeholder="${esc(p.displayName ? (p.baseURL || '') : (p.baseURL || '给这个服务商起个名字'))}" />
+          <button class="btn btn-small" id="mg-name-save" type="button" title="保存名称（只改显示名，不影响连接）">保存</button>
+          <span id="mg-name-state" style="font-size:11px;align-self:center;white-space:nowrap"></span>
+        </div>
+        <div class="hint" style="margin-top:4px">只给你自己辨认用，不会发往服务商。改完点「保存」（或按回车）生效。</div></div>
       <div class="field"><label>Base URL</label>
-        <input type="text" id="mg-baseurl" value="${esc(p.baseURL || '')}" readonly style="width:100%" /></div>
+        <input type="text" id="mg-baseurl" value="${esc(p.baseURL || '')}" readonly style="width:100%" />
+        <div class="hint" style="margin-top:4px">地址不可就地修改：换地址等于换一个服务商，请删掉旧的重新添加。</div></div>
       <div class="field"><label>API 协议</label>
         <div style="display:flex;gap:8px">
           <select id="mg-protocol" style="flex:1">${qaProtocolSelectHtml(p.apiProtocol || 'openai')}</select>
@@ -1815,9 +1766,79 @@ function openModelManageModal() {
             </label>`).join('') || '<div class="muted" style="padding:10px">该提供商下没有模型，点「拉取模型列表」。</div>'}
         </div></div>`;
 
+    /* ── 保存名称 ────────────────────────────────────────────────────
+       与下方「API 协议保存」同一套形态：输入框 + 保存按钮 + 状态提示。
+       ⚠️ 保存后不整页 loadSettings()：弹窗开着时整页重建会把当前节点换掉，
+         既有的焦点/滚动位置与后续绑定都会乱（仓库里多处注释踩过这个坑）。
+         只做「显式拉 providers → 原地重绘左右列」，页面摘要等下次自然刷新。 */
+    const nameInput = right.querySelector('#mg-name');
+    const nameSaveBtn = right.querySelector('#mg-name-save');
+    const paintNameTip = (text, color) => {
+      const tip = right.querySelector('#mg-name-state');
+      if (!tip) return;
+      tip.textContent = text;
+      tip.style.color = color;
+      clearTimeout(right.__nameTipTimer);
+      if (text) {
+        right.__nameTipTimer = setTimeout(() => {
+          const t = right.querySelector('#mg-name-state');
+          if (t) t.textContent = '';
+        }, 2600);
+      }
+    };
+    async function commitName() {
+      const want = nameInput.value.trim();
+      if (!want) {
+        // 空名称后端会拒绝（列表里会出现空白项），这里先说清楚原因，不必绕一趟网络
+        paintNameTip('名称不能为空', 'var(--red, #e5484d)');
+        nameInput.focus();
+        return;
+      }
+      if (want === String(p.displayName || '')) { paintNameTip('已是当前值', 'var(--muted)'); return; }
+      nameSaveBtn.disabled = true;
+      const oldText = nameSaveBtn.textContent;
+      nameSaveBtn.textContent = '保存中…';
+      try {
+        const r = await api('/api/providers/display-name', {
+          method: 'POST',
+          body: JSON.stringify({ providerId: p.id, displayName: want })
+        });
+        await refreshProvidersState();
+        // 原地重绘：左列列表与右列标题都要跟着变；重绘后旧输入框已被替换
+        renderLeft();
+        renderRight();
+        const btn = right.querySelector('#mg-name-save');
+        if (btn) { btn.disabled = false; btn.textContent = oldText; }
+        const tip = right.querySelector('#mg-name-state');
+        if (tip) {
+          tip.textContent = '已保存 ✓';
+          tip.style.color = 'var(--green)';
+          clearTimeout(right.__nameTipTimer);
+          right.__nameTipTimer = setTimeout(() => {
+            const t = right.querySelector('#mg-name-state');
+            if (t) t.textContent = '';
+          }, 2600);
+        }
+        // 页面上的「当前：…」摘要后台对齐（不 await，不挡这次交互）
+        loadSettings();
+        if (r && r.displayName && r.displayName !== want) {
+          // 后端归一化过（理论上不会变），如实告知而不是假装存下了用户的原值
+          const tip2 = right.querySelector('#mg-name-state');
+          if (tip2) { tip2.textContent = `已保存为 ${r.displayName}`; tip2.style.color = 'var(--muted)'; }
+        }
+      } catch (e) {
+        paintNameTip('保存失败', 'var(--red, #e5484d)');
+        if (nameSaveBtn.isConnected) { nameSaveBtn.disabled = false; nameSaveBtn.textContent = oldText; }
+        qaAlert(`保存名称失败：${e.message}`);
+      }
+    }
+    nameSaveBtn.addEventListener('click', commitName);
+    nameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); commitName(); }
+    });
+
     // Key 显示/隐藏：走 /api/providers/key 取明文（与主页面同款）
-    right.querySelector('#mg-apikey-toggle').addEventListener('click', async () => {
-      const input = right.querySelector('#mg-apikey');
+    right.querySelector('#mg-apikey-toggle').addEventListener('click', async () => {      const input = right.querySelector('#mg-apikey');
       const btn = right.querySelector('#mg-apikey-toggle');
       const show = input.type === 'password';
       try {
@@ -1842,7 +1863,7 @@ function openModelManageModal() {
       if (!await qaConfirm({
         danger: true,
         confirmText: '清除 Key',
-        message: `确定清除「${p.displayName || p.id}」的 API Key？`
+        message: `确定清除「${providerLabelOf(p)}」的 API Key？`
       })) return;
       try {
         await api('/api/providers/set-key', { method: 'POST', body: JSON.stringify({ providerId: p.id, apiKey: '' }) });
@@ -1955,7 +1976,7 @@ function openModelManageModal() {
       if (!await qaConfirm({
         danger: true,
         confirmText: '删除模型',
-        message: `确定从「${p.displayName || p.id}」删除模型 ${model}？`
+        message: `确定从「${providerLabelOf(p)}」删除模型 ${model}？`
       })) return;
       try {
         await api('/api/providers/models', {
@@ -1995,7 +2016,7 @@ function openModelManageModal() {
 /**
  * 新手引导「测试并保存」。
  *
- * 未配置模型时，旧路径要把「模型与密钥 →（空目录 confirm）→ 管理服务商 →
+ * 未配置模型时，旧路径要把「模型设置 →（空目录 confirm）→ 管理服务商 →
  * 添加提供商 → 拉取 → 勾选 → 添加 →（有时还要再选一次主模型）」走一遍，
  * 5 个入口概念、3 个弹窗。这个函数把整条路压成两个输入框 + 一次点击：
  *
@@ -2046,7 +2067,7 @@ async function runFirstTimeGuide() {
     const pid = up.provider?.id || '';
     // 慢路径时序坑（见 refreshProvidersState）：loadSettings 不保证 providers 已更新
     await refreshProvidersState();
-    // 自动选第一个：达到"一次点击全自动"；想换随时进「模型与密钥」
+    // 自动选第一个：达到"一次点击全自动"；想换随时进「模型设置」
     const chosen = models[0];
     await api('/api/config', {
       method: 'POST',
@@ -2062,8 +2083,8 @@ async function runFirstTimeGuide() {
       // 写 state 而不是直接塞 DOM：loadSettings 的慢路径还会再渲染一次
       // （渲染函数读 state.__modelTestNote，换模型后按 model 比对自动失效）
       state.__modelTestNote = res.ok
-        ? { ok: true, model: chosen.id, text: `✓ 已连接：${chosen.name || chosen.id} · 测试通过（${res.latencyMs}ms）。不合适？点「⚙ 模型与密钥」更换。` }
-        : { ok: false, model: chosen.id, text: `已保存 ${chosen.name || chosen.id}，但测试没通过：${res.note || '未知错误'}。密钥或地址可能不对，点「⚙ 模型与密钥」检查。` };
+        ? { ok: true, model: chosen.id, text: `✓ 已连接：${chosen.name || chosen.id} · 测试通过（${res.latencyMs}ms）。不合适？点「⚙ 模型设置」更换。` }
+        : { ok: false, model: chosen.id, text: `已保存 ${chosen.name || chosen.id}，但测试没通过：${res.note || '未知错误'}。密钥或地址可能不对，点「⚙ 模型设置」检查。` };
     } catch (e) {
       state.__modelTestNote = { ok: false, model: chosen.id, text: `已保存 ${chosen.name || chosen.id}（连通性测试没跑起来：${e.message}）。` };
     }
@@ -2076,12 +2097,15 @@ async function runFirstTimeGuide() {
   }
 }
 
-/** 模型管理里的「添加提供商」子模态框：Base URL + Key → 拉取勾选模型 → 添加。 */
+/** 管理服务商里的「添加提供商」子模态框：名称 + Base URL + Key → 拉取勾选模型 → 添加。 */
 function openProviderAddModal(onDone) {
   const overlay = modelModalShell({
     head: '添加提供商',
     closeOnBackdrop: false,   // 编辑型：点外部不关闭，防误触丢内容
     body: `
+      <div class="field"><label>名称（选填）</label>
+        <input type="text" id="pa-name" placeholder="例如：DeepSeek 官方、公司中转" maxlength="40" style="width:100%" />
+        <div class="hint" style="margin-top:4px">只给你自己辨认用，之后随时能在「管理服务商」里改。留空则用端点（如 <span id="pa-name-fallback">api.deepseek.com</span>）。</div></div>
       <div class="field"><label>API 协议</label>
         <select id="pa-protocol" style="width:100%">${qaProtocolSelectHtml('openai')}</select>
         <div class="hint" style="margin-top:4px">默认 OpenAI (Chat Completions)，多数中转站对各家模型都提供该兼容协议。此项不总与模型相关联——直连 Claude / Gemini 官方端点时才需要选对应协议，选中会自动填官方地址。Mistral 官方 API 本身就是 OpenAI 兼容格式。</div></div>
@@ -2101,7 +2125,7 @@ function openProviderAddModal(onDone) {
   });
   let rows = [{ id: '', name: '' }];
   // 「拉取模型」就在本弹窗里：新用户填完 Base URL + Key 就能原地拉列表勾选，
-  // 不必"先建提供商 → 去模型管理 → 再拉取"绕一圈。
+  // 不必"先建提供商 → 去管理服务商 → 再拉取"绕一圈。
   let fetched = []; // [{ id, name, checked }]
   const fetchedBox = overlay.querySelector('#pa-fetched-box');
   function renderFetched() {
@@ -2129,8 +2153,22 @@ function openProviderAddModal(onDone) {
     const baseInput = overlay.querySelector('#pa-baseurl');
     if (!baseInput.value.trim() && QA_PROTOCOL_DEFAULT_BASES[proto]) {
       baseInput.value = QA_PROTOCOL_DEFAULT_BASES[proto];
+      syncNameFallbackHint();
     }
   });
+  // 名称留空时最终会用端点兜底 → 提示里实时显示那个端点。
+  // 不写出来用户会以为"名称必须填"，或者填完发现列表里的名字不是自己写的。
+  // 用 host（含端口）而不是 hostname：两个本地服务同机不同端口时，
+  // 提示若都显示 127.0.0.1，用户会以为留空就能区分开。
+  function syncNameFallbackHint() {
+    const hint = overlay.querySelector('#pa-name-fallback');
+    if (!hint) return;
+    const base = overlay.querySelector('#pa-baseurl')?.value.trim() || '';
+    let host = '';
+    try { host = base ? new URL(base).host : ''; } catch { host = ''; }
+    hint.textContent = host || '该地址的端点';
+  }
+  overlay.querySelector('#pa-baseurl').addEventListener('input', syncNameFallbackHint);
   overlay.querySelector('#pa-fetch').addEventListener('click', async () => {
     const btn = overlay.querySelector('#pa-fetch');
     const baseUrl = overlay.querySelector('#pa-baseurl').value.trim();
@@ -2186,6 +2224,7 @@ function openProviderAddModal(onDone) {
     const baseUrl = overlay.querySelector('#pa-baseurl').value.trim();
     const apiKey = overlay.querySelector('#pa-apikey').value.trim();
     const apiProtocol = overlay.querySelector('#pa-protocol').value;
+    const displayName = overlay.querySelector('#pa-name').value.trim();
     // 勾选的拉取模型在前、手填行在后，按 id 去重（重复手填同一 id 不产生两份）
     const seen = new Set();
     const models = [
@@ -2200,19 +2239,19 @@ function openProviderAddModal(onDone) {
     //    后端 upsertProvider 的 models 默认就是 []，允许空目录没有任何问题，
     //    改为放行，并在添加成功后直接把用户送到「拉取模型列表」。
     try {
-      await api('/api/providers', { method: 'POST', body: JSON.stringify({ baseUrl, apiKey, models, apiProtocol }) });
+      await api('/api/providers', { method: 'POST', body: JSON.stringify({ baseUrl, apiKey, models, apiProtocol, displayName }) });
       // 先显式刷新 providers：loadSettings 的慢路径不保证时序，不刷新的话
       // 下面的 onDone（左栏渲染）和自动选模型都会读到旧空数组（见 refreshProvidersState）。
       await refreshProvidersState();
       closeModelModal(overlay);
-      // ⚠️ 必须**先等 loadSettings 完成**再回调 onDone：onDone 是模型管理的
+      // ⚠️ 必须**先等 loadSettings 完成**再回调 onDone：onDone 是管理服务商的
       //    renderLeft/renderRight，它们读的是 state.providers。旧写法把
       //    loadSettings() 放在 onDone() 之后（且都没 await），回调渲染时
       //    state.providers 还是空数组，表现为"添加成功了，但左列看不到它、
       //    右列也没有「拉取模型列表」按钮"，用户以为没添加成功。
       await loadSettings();
       if (onDone) onDone();
-      // 一个模型都没带（既没勾拉取的、也没手填）才送去「模型管理」补拉；
+      // 一个模型都没带（既没勾拉取的、也没手填）才送去「管理服务商」补拉；
       // 现在拉取入口就在本弹窗里，多数添加会直接带着勾选的模型落地。
       if (!models.length) { scheduleOpenModelManage(); return; }
       // 把"还要再选一次主模型"这一步收掉：单个模型直接选定，多个模型弹选择器
@@ -2449,8 +2488,8 @@ async function saveConfig({ quiet = false } = {}) {
         patch.api.modelPrices = { __replace__: nextMap };
       }
     }
-    // 当前 API Key：Key 输入框在「模型配置」弹窗里自带保存逻辑
-    // （mc-apikey → providers/set-key），表单里没有 #cfg-apikey。
+    // 当前 API Key：Key 只在「管理服务商」里维护（走 providers/set-key），
+    // 设置页表单没有 #cfg-apikey，也没有任何隐藏 Key 字段需要带出。
   }
 
   if (sec === 'api' || sec === 'search') {
