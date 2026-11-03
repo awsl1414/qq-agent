@@ -16,7 +16,23 @@
  * compareSemver 按段数取最大值比较，少一段会让第四段的更新永远检测不到。
  * 改版本号属于改业务语义，不该由打包层做。
  *
- * 用法：node scripts/run-builder.mjs --win [--dir]
+ * 各平台的版本字段来源不同，extraMetadata 之外不能共用同一套参数：
+ *
+ *   Windows  exe 的版本资源由 electron-builder 从 buildVersion / buildNumber 拼装。
+ *            -c.buildVersion 决定 FileVersion，-c.buildNumber 决定 ProductVersion
+ *            的第四段（不设的话四段会被截成 0.4.9.0）。
+ *
+ *   macOS    Info.plist 的 CFBundleShortVersionString / CFBundleVersion 直接取
+ *            appInfo.version / appInfo.buildVersion，而这两者都来自（被
+ *            extraMetadata 覆盖后的）package.json。不需要额外参数；四段版本
+ *            在这里是合法的（Chrome、Spotify 等直分发的应用都用四段）。
+ *            刻意不写 -c.buildVersion：那是 Windows 语义，在 mac 上只会让
+ *            CFBundleVersion 被重复指定，反而绕开 extraMetadata 的单一来源。
+ *
+ *   Linux    deb / AppImage 的包元数据版本取自同一个 version 字段，四段没有问题。
+ *            不做额外映射。
+ *
+ * 用法：node scripts/run-builder.mjs --win|--mac|--linux [--dir]
  */
 
 import fs from 'node:fs';
@@ -45,8 +61,39 @@ function toSemverVersion(version) {
   return `${parts[0]}.${parts[1]}.${parts[2]}-${parts[3]}`;
 }
 
+/**
+ * 各平台需要的「版本字段映射」参数。
+ *
+ * extraMetadata 是三个平台共用的（把真实版本写回包内 package.json），
+ * 其余参数按平台给：Windows 的 exe 版本资源要靠 buildVersion / buildNumber 拼装，
+ * mac 与 Linux 的版本字段直接读 package.json，额外传参只会绕开单一来源。
+ */
+function versionArgsFor(platform, version) {
+  const common = [`-c.extraMetadata.version=${version}`];
+  if (platform !== 'win') return common;
+  return [
+    ...common,
+    // buildVersion 决定 exe 的 FileVersion；显式给四段，避免被 buildNumber 追加
+    `-c.buildVersion=${version}`,
+    // buildNumber 决定 exe 的 ProductVersion（getVersionInWeirdWindowsForm 的第四段），
+    // 不设的话四段版本会被截成 0.4.9.0
+    `-c.buildNumber=${version.split('.')[3]}`
+  ];
+}
+
+/** 从 builder 参数里认出目标平台。未指定时 electron-builder 按当前平台出包。 */
+function detectPlatform(builderArgs) {
+  if (builderArgs.includes('--win') || builderArgs.includes('-w')) return 'win';
+  if (builderArgs.includes('--mac') || builderArgs.includes('-m')) return 'mac';
+  if (builderArgs.includes('--linux') || builderArgs.includes('-l')) return 'linux';
+  if (process.platform === 'darwin') return 'mac';
+  if (process.platform === 'linux') return 'linux';
+  return 'win';
+}
+
 function main() {
   const builderArgs = process.argv.slice(2);
+  const platform = detectPlatform(builderArgs);
 
   const originalText = fs.readFileSync(PACKAGE_JSON, 'utf8');
   const version = String(JSON.parse(originalText).version ?? '').trim();
@@ -69,14 +116,7 @@ function main() {
   }
 
   const tempVersion = toSemverVersion(version);
-  const extraArgs = [
-    `-c.extraMetadata.version=${version}`,
-    // buildVersion 决定 exe 的 FileVersion；显式给四段，避免被 buildNumber 追加
-    `-c.buildVersion=${version}`,
-    // buildNumber 决定 exe 的 ProductVersion（getVersionInWeirdWindowsForm 的第四段），
-    // 不设的话四段版本会被截成 0.4.9.0
-    `-c.buildNumber=${version.split('.')[3]}`
-  ];
+  const extraArgs = versionArgsFor(platform, version);
 
   console.log(`run-builder：版本 ${version} 不是 semver，构建期间临时写为 ${tempVersion}`);
 

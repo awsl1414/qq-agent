@@ -4,6 +4,27 @@
 
 ---
 
+## 未发布
+
+### 新增：macOS 与 Linux 打包
+
+- **macOS 现在能出安装包**：`pnpm run build:mac` 产出 `.dmg` 与 `.zip`，arm64 与 x64 各一份。应用走 ad-hoc 签名（`identity: "-"`），这是 arm64 上能启动的最低要求 —— 未签名的二进制会被内核直接杀掉（`killed: 9`）。不做公证，首次打开需要在 Finder 里右键 →「打开」，或执行 `xattr -dr com.apple.quarantine`。持有 Developer ID 证书时配 `CSC_LINK` / `CSC_KEY_PASSWORD` 即可换成正式签名
+- **Linux 现在能出安装包**：`pnpm run build:linux` 产出 `.AppImage` 与 `.deb`（x64）。AppImage 需要先 `chmod +x`；缺 FUSE 运行时的系统会报 `error loading libfuse.so.2`，README 里按发行版给了安装命令
+- **三个平台各自独立构建**：`build` / `build:dir` 仍是 Windows（与之前完全一致），新增 `build:mac` / `build:mac:dir` / `build:linux` / `build:linux:dir`。mac 与 Linux 目标必须在对应平台上构建，CI 与发布流程各加了独立作业
+
+### 修复
+
+- **macOS / Linux 上应用启动即退出，报「数据目录不可写」**：`resolveDataDir()` 在打包态把所有平台的数据目录都定成「exe 同级/data」。macOS 上那是 `QQ Agent.app/Contents/MacOS/data`，往 `.app` 包内写会被 Gatekeeper 的 App Translocation 与签名校验拒绝；Linux 上 AppImage 的挂载点是只读 squashfs，deb 装的 `/opt/<name>` 普通用户也没有写权限。这两个平台改用 `app.getPath('userData')`（macOS `~/Library/Application Support/qq-agent/`，Linux `~/.config/qq-agent/`），多实例的 `data-<N>` 后缀保留，Windows 行为不变
+- **macOS / Linux 上 GPU 反复崩溃却不降级、启动闪退时日志里一行没有**：`RENDER_DATA_DIR` 与 `fallbackLog` 各自抄了一份「exe 同级/data」的推导，与 `resolveDataDir` 的规则重复。三处共用同一个 `packagedDataDir()`，平台分支只写在一处，避免主数据目录修好了、GPU 回退标志和兜底日志还在往只读目录写
+- **macOS 包里的应用图标是 Electron 默认图标**：仓库只有 `assets/icon.png`（256×256）与 `.ico`，没有 macOS 需要的 `.icns`。新增 `assets/icon.icns` 与 `assets/icons/`（Linux 多尺寸目录）。两者都由 256×256 源图放大生成，1024 档是插值，高分屏下会偏软 —— 这是仓库里没有更大源图时的取舍，见 `assets/README-icons.md`
+
+### 变更
+
+- **构建前校验按目标平台检查图标**：`scripts/prepack-check.mjs` 原来只查 `assets/icon.ico`，在 macOS / Linux 上构建时这项没有意义，而真正需要的 icns 或图标目录缺了反而不会被发现。现在按 `--win` / `--mac` / `--linux` 分别校验，Linux 还要求图标目录里有 ≥512px 的档位
+- **发布产物的 artifact 名带平台后缀**：三个平台的产物都有 `.zip`，同名 artifact 会互相覆盖
+
+---
+
 ## 0.5.1.2 · 修复 macOS 菜单栏托盘图标过大（2026-11-03，需重启）
 
 ### 修复

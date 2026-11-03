@@ -26,9 +26,25 @@ const REQUIRED_FILES = [
   ['src/server.js', 'headless 入口'],
   ['ui/index.html', '控制台界面'],
   ['builtin-modules.json', '内置模块指纹基线（缺失会让全部内置扩展被拒载）'],
-  ['prices.json', '内置价格表'],
-  ['assets/icon.ico', '应用图标']
+  ['prices.json', '内置价格表']
 ];
+
+/**
+ * 各平台各自的图标资源。
+ *
+ * 分开列而不是并进 REQUIRED_FILES：图标是平台专属的，Windows 构建不该因为
+ * macOS 的 icns 没生成而失败（反之亦然）。但「本平台该有的那份缺了」必须失败 ——
+ * 缺图标时 electron-builder 不报错，只会静默改用 Electron 的默认图标，
+ * 装出来的应用长得像别的软件。
+ *
+ * 平台由构建命令决定，不按当前操作系统猜：在 macOS 上跑 build:dir 出的是 Windows 包，
+ * 缺的应该是 ico 而不是 icns。
+ */
+const PLATFORM_ICONS = {
+  win: [['assets/icon.ico', 'Windows 应用图标（含 16~256 全套尺寸）']],
+  mac: [['assets/icon.icns', 'macOS 应用图标（由 assets/icon.png 放大生成，见 assets/README-icons.md）']],
+  linux: [['assets/icons', 'Linux 多尺寸图标目录（electron-builder 需要 512px 以上，单张 png 不够）']]
+};
 
 /**
  * 存在时必须在 files 排除项里的目录。
@@ -43,6 +59,24 @@ const MUST_EXCLUDE_IF_PRESENT = [
 
 /** 其它包管理器留下的锁文件会误导贡献者，见 .npmrc */
 const FORBIDDEN_LOCKFILES = ['package-lock.json', 'yarn.lock'];
+
+/** Linux 桌面图标的最高档：低于这个尺寸时桌面环境会把小图拉大，显示发糊 */
+const LINUX_ICON_MIN_SIZE = 512;
+
+/**
+ * 从命令行参数认出目标平台。
+ *
+ * 显式参数优先（build:mac 在 macOS 上也可能构建 Windows 包），
+ * 都没有时按当前平台推断 —— 与 electron-builder 自己的默认行为一致。
+ */
+function detectPlatform(argv) {
+  if (argv.includes('--win') || argv.includes('-w')) return 'win';
+  if (argv.includes('--mac') || argv.includes('-m')) return 'mac';
+  if (argv.includes('--linux') || argv.includes('-l')) return 'linux';
+  if (process.platform === 'darwin') return 'mac';
+  if (process.platform === 'linux') return 'linux';
+  return 'win';
+}
 
 const failures = [];
 const passes = [];
@@ -152,6 +186,36 @@ function checkRequiredFiles() {
   }
 }
 
+/**
+ * 只校验本次要构建的平台的图标。
+ *
+ * 目标平台从脚本参数里读（`--win` / `--mac` / `--linux`），与 package.json 的
+ * build:xxx 脚本一致；没传时按当前平台推断，因为 electron-builder 默认也是这么做的。
+ */
+function checkPlatformIcons(platform) {
+  const icons = PLATFORM_ICONS[platform];
+  if (!icons) {
+    fail(`无法识别目标平台 "${platform}"，图标校验跳过`);
+    return;
+  }
+  for (const [rel, why] of icons) {
+    if (exists(rel)) pass(`${rel} 存在（${why}）`);
+    else fail(`缺少 ${rel}（${why}）`);
+  }
+
+  // Linux 用目录形式时，electron-builder 要求目录里有 ≥512px 的 PNG：
+  // 只有小图时它不会报错，而是把 16px 的图标塞进 hicolor 的 512 目录，桌面环境显示成糊图。
+  if (platform === 'linux' && exists('assets/icons')) {
+    const sizes = fs.readdirSync(path.join(REPO_ROOT, 'assets', 'icons'))
+      .map((name) => /^(\d+)x\d+\.png$/i.exec(name))
+      .filter(Boolean)
+      .map((match) => Number(match[1]));
+    const max = sizes.length > 0 ? Math.max(...sizes) : 0;
+    if (max >= LINUX_ICON_MIN_SIZE) pass(`assets/icons 最大尺寸 ${max}px（≥${LINUX_ICON_MIN_SIZE}px）`);
+    else fail(`assets/icons 最大尺寸只有 ${max}px，electron-builder 要求至少 ${LINUX_ICON_MIN_SIZE}px`);
+  }
+}
+
 function checkLockfiles() {
   for (const name of FORBIDDEN_LOCKFILES) {
     if (exists(name)) fail(`发现 ${name}：本项目只用 pnpm，请删除该文件`);
@@ -160,9 +224,11 @@ function checkLockfiles() {
 }
 
 function main() {
-  console.log('== 构建前校验 ==');
+  const platform = detectPlatform(process.argv.slice(2));
+  console.log(`== 构建前校验（目标平台：${platform}）==`);
   checkBuilderConfig();
   checkRequiredFiles();
+  checkPlatformIcons(platform);
   checkLockfiles();
 
   for (const line of passes) console.log(`  [ok]   ${line}`);

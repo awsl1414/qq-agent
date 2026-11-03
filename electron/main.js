@@ -32,6 +32,27 @@ import {
 } from './window-state.js';
 
 
+// ── 数据目录推导（三处共用，见函数注释）────────────────────────────────
+/**
+ * 不含 env 覆盖的数据目录，与 resolveDataDir 的推导规则逐字一致。
+ *
+ * 三处共用：RENDER_DATA_DIR（模块顶层）、fallbackLog（pre-ready 兜底日志）、
+ * resolveDataDir。它们原本各抄一份「exe 同级/data」，那条规则在 macOS / Linux
+ * 上指向 .app 包内与 AppImage 挂载点 —— 只读，且改包内容会被签名校验判为损坏。
+ * 平台分支写在一处，才不会出现「主数据目录修好了，日志还在往只读目录写」。
+ *
+ * 开发态一并在这里处理：原先 RENDER_DATA_DIR 在开发态也按 exe 同级算，
+ * 实际落到 node_modules/electron/dist/data，与 resolveDataDir 的项目内 data/
+ * 不是同一个目录 —— GPU 回退标志写进去，业务侧永远读不到。
+ *
+ * 函数声明而非箭头常量：RENDER_DATA_DIR 在模块顶层就调用它，必须靠提升。
+ */
+function packagedDataDir() {
+  if (!app.isPackaged) return path.resolve(fileURLToPath(import.meta.url), '..', '..', dataDirName());
+  if (process.platform !== 'win32') return path.join(app.getPath('userData'), dataDirName());
+  return path.join(path.dirname(app.getPath('exe')), dataDirName());
+}
+
 // ── GPU 硬件加速：默认启用（壁纸套件）────────────────────────────────────
 // 无条件 disableHardwareAcceleration() 时，壁纸毛玻璃 / 视频背景 / 整窗合成全走 CPU，
 // 开壁纸必卡（切页、滚动每帧全窗软件合成）。现在默认启用 + 四层安全网：
@@ -43,10 +64,14 @@ import {
 //      之后每次启动都直接软件模式，好驱动不受牵连。
 //   4) 本块位于 whenReady 之前，满足 disableHardwareAcceleration() 的调用时序。
 // data 目录此时还没解析（resolveDataDir 在下面），所以用同一套规则先算出来。
+// 这条规则与 resolveDataDir 必须逐字一致，否则 GPU 回退标志（render-gpu-off.flag）
+// 与启动日志会写到另一个目录：macOS / Linux 上那正是只读的 .app 包内与 AppImage 挂载点，
+// 写入失败被 catch 吞掉后，表现为「GPU 反复崩溃却永远不降级」「启动闪退但日志里一行没有」。
+// 三处（这里、fallbackLog、resolveDataDir）共用 packagedDataDir()，就是为了不再各抄一份。
 const RENDER_DATA_DIR = (() => {
   const env = String(process.env.QQ_AGENT_DATA_DIR || '').trim();
   if (env) return env;
-  try { return path.join(path.dirname(app.getPath('exe')), 'data'); } catch { return ''; }
+  try { return packagedDataDir(); } catch { return ''; }
 })();
 const RENDER_GPU_OFF_FLAG = RENDER_DATA_DIR ? path.join(RENDER_DATA_DIR, 'render-gpu-off.flag') : '';
 
@@ -177,10 +202,7 @@ async function bindCoreLogger() {
  */
 function fallbackLog(level, module, text) {
   try {
-    const base = process.env.QQ_AGENT_DATA_DIR
-      || (app.isPackaged
-        ? path.join(path.dirname(app.getPath('exe')), dataDirName())
-        : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', dataDirName()));
+    const base = process.env.QQ_AGENT_DATA_DIR || packagedDataDir();
     const file = path.join(base, 'logs', 'boot-fallback.log');
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.appendFileSync(file, `[${new Date().toISOString()}] [${level}] [${module}] ${text}\r\n`, 'utf8');
@@ -421,21 +443,35 @@ process.on('uncaughtException', (error) => {
 // 否则 dev 模式下会被当成裸 electron.exe，钉任务栏变成 electron 图标
 app.setAppUserModelId('cn.awsl1414.qq-agent');
 
-// ── 数据目录：始终固定在「应用根目录/data」──
-// 所有数据都存在安装目录下，不往 %APPDATA% 塞。
+// ── 数据目录：Windows 固定在「应用根目录/data」，macOS / Linux 走系统用户目录 ──
+//
+// Windows：所有数据都存在安装目录下，不往 %APPDATA% 塞。
 //   压缩包用户：data 本来就在压缩包目录里，直接用（项目内 data/）；
 //   安装版用户：安装目录/exe 旁边的 data/。选压缩包目录当安装目录时
 //   天然接管里面的 data/（config、记忆、聊天记录、telemetry id 全保留），零迁移零 bug。
-// NSIS 覆盖安装只替换它自己装的文件，运行时生成的 data/ 不在清单里 → 升级不丢数据。
-// 兼容兜底：外置 %APPDATA% 时期的数据自动搬回安装目录。
+//   NSIS 覆盖安装只替换它自己装的文件，运行时生成的 data/ 不在清单里 → 升级不丢数据。
+//   兼容兜底：外置 %APPDATA% 时期的数据自动搬回安装目录。
+//
+// macOS / Linux：同样的规则在这两个平台上是错的，不是「不够优雅」而是必然失败 ——
+//   · macOS 的 exe 在 QQ Agent.app/Contents/MacOS/ 里，往同级写 data/ 等于往 .app 包
+//     内写。Gatekeeper 的 App Translocation 会把下载来的应用挂到一个随机只读路径上跑，
+//     包内写入直接失败；即便绕过，签名校验也会因为包内容被改动而判为已损坏。
+//   · Linux 的 AppImage 运行时挂在只读 squashfs 上；deb 装到 /opt/<name>，普通用户
+//     没有写权限。probeDataDirWritable 会把这两种情况判成「数据目录不可写」，
+//     用户看到的是启动即退出的错误框。
+//   所以这两个平台改用 app.getPath('userData')（macOS 是 ~/Library/Application Support/
+//   <name>，Linux 是 ~/.config/<name>），并保留 data-<N> 多实例后缀。
 function resolveDataDir() {
   if (process.env.QQ_AGENT_DATA_DIR) return process.env.QQ_AGENT_DATA_DIR;
-  // 开发模式（.bat 直起 node_modules 里的 electron.exe + 项目目录）：项目内 data/
-  if (!app.isPackaged) return path.resolve(fileURLToPath(import.meta.url), '..', '..', dataDirName());
-  const portable = path.join(path.dirname(app.getPath('exe')), dataDirName());
+  // 开发模式与 macOS / Linux 打包态都直接返回：前者是项目内 data/，后者是
+  // userData/data（天然可写，且按 profile 分目录后两个实例不会抢同一份配置）。
+  // 这两个平台此前从未发布过桌面版，磁盘上不存在需要迁移的旧数据。
+  if (!app.isPackaged || process.platform !== 'win32') return packagedDataDir();
+  const portable = packagedDataDir();
   try {
     if (!fs.existsSync(portable)) {
       // 仅主实例接管旧版遗留；第二实例绝不能把主实例旧数据复制进 data-2。
+      // 下面整段只有 Windows 打包态会走到（上面的 return 已挡掉其它情况）。
       if (dataDirName() !== 'data') return portable;
       // 接管旧版遗留：%APPDATA%/qq-agent/data（外置期版本）→ 搬回安装目录
       const legacy = path.join(app.getPath('userData'), 'data');

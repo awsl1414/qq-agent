@@ -1,6 +1,6 @@
 # QQ Agent（桌面端）
 
-![平台](https://img.shields.io/badge/platform-Windows%20%7C%20Electron-lightgrey)
+![平台](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Electron-lightgrey)
 ![技术栈](https://img.shields.io/badge/stack-Node.js%20%7C%20原生前端-orange)
 ![测试](https://img.shields.io/badge/tests-122%20cases-brightgreen)
 
@@ -129,6 +129,28 @@ plugins/my-plugin/            skills/my-skill/
 
 ## 安装与使用
 
+### 下载安装包
+
+| 平台 | 产物 | 安装方式 |
+|---|---|---|
+| Windows | `.exe`（安装版）/ `.zip`（免安装） | 双击安装；zip 解压即用 |
+| macOS | `.dmg` / `.zip`（arm64 与 x64 各一份） | 打开 dmg 把应用拖进「应用程序」；zip 解压后拖入 |
+| Linux | `.AppImage` / `.deb` | AppImage：`chmod +x` 后直接运行；deb：`sudo apt install ./qq-agent_*.deb` |
+
+macOS 与 Linux 的产物**未经 Apple 公证**，首次打开会被系统拦一下：
+
+- **macOS**：提示「无法验证开发者」时，在 Finder 里右键应用 →「打开」，或执行
+  `xattr -dr com.apple.quarantine "/Applications/qq-agent.app"`
+- **Linux AppImage**：先 `chmod +x qq-agent-*.AppImage` 再双击/运行。若报
+  `dlopen(): error loading libfuse.so.2`，装一下运行时：Debian/Ubuntu 用
+  `sudo apt install libfuse2`（Ubuntu 24.04+ 是 `libfuse2t64`），Fedora 用
+  `sudo dnf install fuse-libs`
+
+数据目录：Windows 在安装目录旁的 `data/`；macOS 在 `~/Library/Application Support/qq-agent/data/`；
+Linux 在 `~/.config/qq-agent/data/`。多实例后缀 `data-<N>` 三个平台一致。
+
+### 从源码运行
+
 ```bash
 git clone https://github.com/awsl1414/qq-agent.git
 cd qq-agent
@@ -156,7 +178,15 @@ pnpm install         # 装依赖（含 electron）
 pnpm start           # 桌面端启动
 pnpm run server      # headless 模式：浏览器打开 http://127.0.0.1:3210（实际端口见 data/console-port）
 pnpm test            # 全量测试（等价于 pnpm run check）
+
+pnpm run build:mac       # 打 macOS 包（dmg + zip，arm64 与 x64）
+pnpm run build:linux     # 打 Linux 包（AppImage + deb，x64）
+pnpm run build           # 打 Windows 包（NSIS 安装包 + zip）
 ```
+
+打包目标必须在对应平台上构建：mac 包只能在 macOS 上出，Linux 包只能在 Linux 上出。
+只想验证配置能不能产出可运行的应用时用 `build:mac:dir` / `build:linux:dir` / `build:dir`，
+它们只解包、不生成安装包，快很多。
 
 环境变量、网页模式的鉴权与端口规则、数据目录、多实例、常见故障，见 **[doc/running.md](doc/running.md)**。
 
