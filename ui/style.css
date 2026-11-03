@@ -58,6 +58,11 @@
   --btn-normal: #e7f3ff;   /* PCL MyButton 默认色型 */
   --topbar-h: 46px;
   --r: 9px;
+  /* 复用现有表单的 4 / 8 / 12 / 16px 留白节奏。 */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
 
   /* ── 旧令牌别名（保持全站引用有效）── */
   --layer-0: var(--page-bg);
@@ -9271,11 +9276,57 @@ input.mig-input:focus-visible,
 /* 原生 fieldset 的 min-content 宽度与长备份路径不能撑开窄屏设置页。 */
 #backup-panel, #backup-panel fieldset, #backup-panel .field { min-width: 0; }
 #backup-panel { overflow-wrap: anywhere; color: var(--text); }
-#backup-panel fieldset { margin: 1em 0; }
-#backup-panel .checkbox-row { display: flex; align-items: center; gap: .5em; }
+#backup-panel fieldset { margin: var(--space-md) 0; padding: var(--space-md); }
+#backup-panel legend { font-weight: 700; padding-inline: var(--space-xs); }
+#backup-panel p, #backup-panel ul { margin: var(--space-xs) 0 var(--space-sm); }
+#backup-panel ul { padding-left: var(--space-lg); }
+#backup-panel .set-hint { display: block; margin-block: var(--space-sm); padding: var(--space-sm) var(--space-md); }
+#backup-panel .set-hint ul { margin: 0; color: inherit; }
+#backup-panel .field { border: 0; margin: 0; }
+#backup-panel .field > label { margin-bottom: var(--space-xs); }
+#backup-panel .field input { display: block; margin-top: var(--space-xs); }
+#backup-panel .field-row { gap: var(--space-sm); margin: 0; align-items: end; }
+#backup-panel .checkbox-row { display: flex; align-items: center; gap: var(--space-sm); margin: 0; }
 #backup-panel .checkbox-row input.sw { flex-shrink: 0; }
-#backup-panel .backup-actions, #backup-rollbacks { display: flex; flex-wrap: wrap; gap: .5em; }
-#backup-panel .backup-file { display: flex; align-items: center; flex-wrap: wrap; gap: .5em; }
+#backup-global > .backup-actions { margin-bottom: var(--space-sm); }
+#backup-panel .backup-actions, #backup-rollbacks { display: flex; flex-wrap: wrap; gap: var(--space-sm); }
+#backup-panel .backup-target-fields, #backup-panel .backup-categories { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-sm) var(--space-md); }
+#backup-panel .backup-categories { margin-top: var(--space-sm); }
+#backup-panel .backup-categories .checkbox-row { align-items: flex-start; }
+#backup-panel .backup-categories small { display: block; line-height: 1.5; }
+#backup-panel .backup-directory { grid-column: 1 / -1; display: flex; align-items: end; gap: var(--space-sm); }
+#backup-panel .backup-directory .btn { flex-shrink: 0; margin-bottom: var(--space-xs); }
+#backup-panel .backup-file { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-sm); }
 #backup-panel .backup-file span { flex: 1; min-width: 0; }
 #backup-panel .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 #backup-panel input, #backup-panel select { max-width: 100%; min-width: 0; }
+#backup-panel #backup-feedback:empty { display: none; }
+#backup-panel #backup-feedback { color: var(--muted); }
+#backup-panel #backup-export-options { margin-block: var(--space-md); }
+@media (max-width: 760px) {
+  #backup-panel .backup-target-fields, #backup-panel .backup-categories { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* 窄窗下固定侧栏与表单最小宽度会互相挤压；保持导航可用并让控件换行。 */
+@media (max-width: 560px) {
+  #topbar { grid-template-columns: auto minmax(0, 1fr) auto; padding-inline: var(--space-sm); gap: var(--space-xs); }
+  #topbar .brand { font-size: 0; gap: 0; }
+  #topbar .brand-sub { display: none; }
+  #tabs { min-width: 0; overflow-x: auto; justify-content: flex-start; }
+  #tabs .nav-item { flex-shrink: 0; padding-inline: var(--space-sm); }
+  .sidebar.is-set { --side-w: calc(var(--space-lg) * 6); padding-inline: var(--space-xs); }
+  .sidebar.is-set .settings-runstate { padding: var(--space-xs); }
+  .sidebar.is-set .settings-menu-item { padding-inline: var(--space-xs); gap: var(--space-xs); }
+  .sidebar.is-set .settings-menu-item .sm-ico { display: none; }
+  .sidebar.is-set .checkbox-row { flex-wrap: wrap; }
+  #view-settings > #settings-form { padding: var(--space-sm); }
+  #settings-form .set-card { padding-inline: var(--space-sm); }
+  #settings-form .field-row { flex-direction: column; align-items: stretch; }
+  #settings-form .field { min-width: 0; width: 100%; }
+  #settings-form .sel { min-width: 0; max-width: 100%; }
+  #settings-form input, #settings-form select, #settings-form textarea { max-width: 100%; }
+  #settings-form .module-split { flex-direction: column; gap: var(--space-md); }
+  #settings-form .module-split-right { position: static; flex: auto; max-width: none; min-width: 0; height: auto; }
+  #settings-form .tool-actions { flex-wrap: wrap; }
+  #settings-form code { overflow-wrap: anywhere; }
+}

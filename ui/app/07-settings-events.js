@@ -2280,21 +2280,31 @@ async function bindBackupSettings() {
     const field = (key, label, value = '', type = 'text', placeholder = '') => '<div class="field"><label>' + esc(label) + '<input data-bk="' + key + '" type="' + type + '" value="' + esc(String(value)) + '" placeholder="' + esc(placeholder) + '"' + (credentialFields.has(key) ? ' autocomplete="off"' : '') + (type === 'number' ? ' min="' + (key === 'retention' ? '1' : '0.01') + '" step="' + (key === 'retention' ? '1' : 'any') + '" required' : '') + '></label></div>';
     const toggle = (key, label, on) => '<label class="checkbox-row"><input class="sw" type="checkbox" data-bk="' + key + '" ' + (on ? 'checked' : '') + '> ' + esc(label) + '</label>';
     const targetLabels = { local: '本地目录', webdav: 'WebDAV', s3: 'S3 兼容' };
+    const targetHelp = {
+      local: ['适合：本机副本、移动硬盘或局域网共享盘。', '填写：一个可写目录；桌面端可点「浏览…」选择。', '特点：本机磁盘速度快，无需网络；与机器放一起仍有丢失风险。', '注意：OneDrive / 坚果云的「仅在线」目录读回可能很慢。'],
+      webdav: ['适合：群晖 WebDAV Server、Nextcloud、坚果云等 NAS / 网盘。', '填写：服务地址（如 https://nas.local:5006/backup）、用户名和密码。', '特点：跨设备访问；使用 HTTPS 加密传输。', '注意：自签证书需开启「允许不安全 TLS」，仅用于信任的服务。'],
+      s3: ['适合：AWS S3、Cloudflare R2、Backblaze B2、自建 MinIO。', '填写：Endpoint、Region、Bucket、Access Key 和 Secret Key。', '特点：可靠的异地副本；云服务通常按存储量与流量计费。', '注意：MinIO 等自建服务通常需要开启 Path style。']
+    };
+    const helpList = (type) => '<ul class="hint">' + targetHelp[type].map((line) => '<li>' + esc(line) + '</li>').join('') + '</ul>';
     const categorySize = (item) => item.error ? '体积读取失败：' + item.error : fmtBytes(item.bytes);
-    const legacyWarning = '此备份包为旧格式，无法验证是否被篡改';
+    let exportCategories = status.categories.filter((item) => item.defaultOn !== false).map((item) => item.key);
+    const categoryOptions = (selected, attr) => '<div class="backup-categories">' + status.categories.map((item) => '<label class="checkbox-row"><input class="sw" type="checkbox" ' + attr + '="' + esc(item.key) + '" ' + (selected.includes(item.key) ? 'checked' : '') + '><span>' + esc(item.label) + ' · <span data-category-size="' + esc(item.key) + '">' + esc(categorySize(item)) + '</span><small class="muted">' + esc(item.desc) + '</small></span></label>').join('') + '</div>';
     const draw = () => {
-      panel.innerHTML = '<p><button type="button" class="btn btn-small" id="backup-restore-link">前往恢复 / 回滚</button></p><p class="muted">恢复：刷新下方备份列表后选择「预览与恢复」；恢复后可在回滚区域撤销。</p><p class="muted" id="backup-status"></p><p class="muted">默认排除配置和扩展数据中的密钥。凭据加密存储，留空保留原值。修改后请保存。</p>' +
-        '<div id="backup-global">' + toggle('enabled', '定时备份', config.enabled) + field('intervalHours', '间隔（小时）', config.intervalHours, 'number') + field('retention', '保留份数', config.retention, 'number') + toggle('includeSecrets', '包含密钥', config.includeSecrets) + '</div>' +
+      panel.innerHTML = '<div class="backup-actions"><button type="button" class="btn btn-small" id="backup-restore-link">前往恢复 / 回滚</button></div><ul class="hint"><li>默认排除配置和扩展数据中的密钥；包含密钥时整包加密。</li><li>目标凭据加密存储；留空保留原值，修改后请保存。</li><li>恢复时先刷新备份列表，再选择「预览与恢复」；恢复后可回滚。</li></ul><div class="set-hint" id="backup-status" role="status"></div>' +
+        '<fieldset id="backup-global"><legend>备份设置</legend><div class="backup-actions">' + toggle('enabled', '定时备份', config.enabled) + toggle('includeSecrets', '包含密钥', config.includeSecrets) + '</div><div class="field-row">' + field('intervalHours', '间隔（小时）', config.intervalHours, 'number') + field('retention', '保留份数', config.retention, 'number') + '</div></fieldset>' +
+        '<div class="backup-actions"><button type="button" class="btn" id="backup-save">保存备份设置</button><button type="button" class="btn" id="backup-run">立即备份</button><button type="button" class="btn" id="backup-export">导出到本地</button><button type="button" class="btn" id="backup-list">刷新备份列表</button></div><p id="backup-feedback" role="status" aria-atomic="true"></p>' +
+        '<details class="collapsible" id="backup-export-options"><summary>本地导出内容</summary><p class="hint">无需配置目标，勾选什么就导出什么；导出不上传，也不计入备份历史。恢复时可以只选其中一部分。</p>' + categoryOptions(exportCategories, 'data-export-category') + '</details>' +
         '<div id="backup-targets">' + (config.targets || []).map((target) => {
           const fields = field('name', '名称', target.name) + toggle('enabled', '启用目标', target.enabled);
-          const specific = target.type === 'local' ? field('dir', '本地目录', target.dir) : target.type === 'webdav' ?
-            field('url', 'WebDAV URL', target.url) + field('username', '用户名', target.username, 'password', target.hasUsername ? '••••••（留空保留）' : '') + field('password', '密码', target.password, 'password', target.hasCredentials ? '••••••（留空保留）' : '') :
+          const specific = target.type === 'local' ? '<div class="backup-directory">' + field('dir', '目录路径', target.dir) + (typeof window.qqaDesktop?.pickDirectory === 'function' ? '<button type="button" class="btn btn-small" data-browse>浏览…</button>' : '') + '</div>' : target.type === 'webdav' ?
+            field('url', 'WebDAV URL', target.url) + field('username', '用户名', target.username, 'password', target.hasUsername ? '••••••（留空保留）' : '') + field('password', '密码', target.password, 'password', target.hasCredentials ? '••••••（留空保留）' : '') + toggle('allowInsecureTLS', '允许不安全 TLS（仅用于信任的自签证书服务）', target.allowInsecureTLS === true) :
             field('endpoint', 'S3 Endpoint', target.endpoint) + field('region', 'Region', target.region || 'us-east-1') + field('bucket', 'Bucket', target.bucket) + field('accessKeyId', 'Access Key ID', target.accessKeyId, 'password', target.hasAccessKeyId ? '••••••（留空保留）' : '') + field('secretAccessKey', 'Secret Access Key', target.secretAccessKey, 'password', target.hasSecretAccessKeyCipher ? '••••••（留空保留）' : '') + toggle('forcePathStyle', 'Path style', target.forcePathStyle !== false);
-          const categories = status.categories.map((item) => '<label class="checkbox-row"><input class="sw" type="checkbox" data-category="' + esc(item.key) + '" ' + ((Array.isArray(target.categories) ? target.categories.includes(item.key) : item.defaultOn !== false) ? 'checked' : '') + '><span>' + esc(item.label) + ' · <span data-category-size="' + esc(item.key) + '">' + esc(categorySize(item)) + '</span><br><small class="muted">' + esc(item.desc) + '</small></span></label>').join('');
-          return '<fieldset data-target="' + esc(target.id) + '"><legend>' + esc(target.name || targetLabels[target.type] || target.type) + '</legend>' + fields + specific + '<fieldset><legend>备份内容</legend><p class="muted">体积为当前实际内容的未压缩大小；空类别显示 0 B。包含密钥时另加加密配置。</p>' + categories + '</fieldset><p class="muted">每个目标只备份自己勾选的类别；类别相同的目标共用一个包。</p><button type="button" class="btn btn-small" data-test="' + esc(target.id) + '">测试连接</button> <button type="button" class="btn btn-small" data-remove="' + esc(target.id) + '">删除目标</button></fieldset>';
-        }).join('') + '</div><div class="field"><label>添加目标<select id="backup-type"><option value="local">本地目录</option><option value="webdav">WebDAV</option><option value="s3">S3 兼容</option></select></label><button type="button" class="btn" id="backup-add">添加目标</button></div>' +
-        '<div class="backup-actions"><button type="button" class="btn" id="backup-save">保存备份设置</button><button type="button" class="btn" id="backup-run">立即备份</button><button type="button" class="btn" id="backup-list">刷新备份列表</button></div><p id="backup-feedback" role="status" aria-atomic="true"></p><h4 id="backup-restore-title" tabindex="-1">恢复与回滚</h4><div id="backup-files"><p class="muted">请刷新备份列表，选择备份进行预览与恢复。</p></div><h4>恢复回滚</h4><div id="backup-rollbacks"></div>';
+          const categories = categoryOptions(Array.isArray(target.categories) ? target.categories : status.categories.filter((item) => item.defaultOn !== false).map((item) => item.key), 'data-category');
+          return '<fieldset data-target="' + esc(target.id) + '"><legend>' + esc(targetLabels[target.type] || target.type) + (target.name ? ' · ' + esc(target.name) : '') + '</legend><div class="backup-target-fields">' + fields + specific + '</div><fieldset><legend>备份内容</legend><p class="hint">勾选什么就备份什么，恢复时可以只选其中一部分。</p><p class="hint">体积为当前实际内容的未压缩大小；空类别显示 0 B。包含密钥时另加加密配置。</p>' + categories + '</fieldset><p class="hint">每个目标只备份自己勾选的类别；类别相同的目标共用一个包。</p><div class="backup-actions"><button type="button" class="btn btn-small" data-test="' + esc(target.id) + '">测试连接</button><button type="button" class="btn btn-small" data-remove="' + esc(target.id) + '">删除目标</button></div></fieldset>';
+        }).join('') + '</div><fieldset><legend>添加备份目标</legend><div class="field-row"><div class="field"><label for="backup-type">备份方式</label><select id="backup-type" aria-describedby="backup-type-help"><option value="local">本地目录</option><option value="webdav">WebDAV</option><option value="s3">S3 兼容</option></select></div><button type="button" class="btn" id="backup-add">添加目标</button></div><div class="set-hint" id="backup-type-help">' + helpList('local') + '</div></fieldset>' +
+        '<h4 id="backup-restore-title" tabindex="-1">恢复与回滚</h4><div id="backup-files"><p class="hint">请刷新备份列表，选择备份进行预览与恢复。</p></div><h4>恢复回滚</h4><div id="backup-rollbacks"></div>';
       const collect = () => {
+        exportCategories = [...panel.querySelectorAll('[data-export-category]:checked')].map((el) => el.dataset.exportCategory);
         panel.querySelectorAll('#backup-global [data-bk]').forEach((el) => { config[el.dataset.bk] = el.type === 'checkbox' ? el.checked : Number(el.value); });
         config.targets = [...panel.querySelectorAll('[data-target]')].map((row) => {
           const old = config.targets.find((target) => target.id === row.dataset.target);
@@ -2308,6 +2318,8 @@ async function bindBackupSettings() {
         });
       };
       const feedback = (text) => { panel.querySelector('#backup-feedback').textContent = text; };
+      panel.querySelector('#backup-type').addEventListener('change', (event) => { panel.querySelector('#backup-type-help').innerHTML = helpList(event.target.value); });
+      panel.querySelectorAll('[data-bk], [data-category]').forEach((el) => el.addEventListener('input', () => feedback('备份设置已修改，请保存')));
       panel.querySelector('#backup-restore-link').addEventListener('click', () => {
         const title = panel.querySelector('#backup-restore-title');
         title.scrollIntoView({ block: 'start' });
@@ -2322,7 +2334,7 @@ async function bindBackupSettings() {
         const last = status.lastRun;
         const failures = (last?.targets || []).filter((item) => !item.ok).map((item) => item.id + '：' + item.error);
         const partial = failures.length && last.targets.some((item) => item.ok);
-        panel.querySelector('#backup-status').textContent = (status.running ? '备份或恢复正在运行，请稍后刷新。' : '') + (last ? '最近备份：' + (partial ? '部分成功' : last.ok ? '成功' : '失败') + (last.error ? '；' + last.error : '') + (failures.length ? '；' + failures.join('；') : '') : '尚未执行备份');
+        panel.querySelector('#backup-status').textContent = (status.running ? '备份或恢复正在运行，请稍后刷新。' : '') + (last ? '最近备份：' + (partial ? '部分成功' : last.ok ? '成功' : '失败') + (last.error ? '；' + last.error : '') + (failures.length ? '；' + failures.join('；') : '') : '还没有备份。添加并保存目标后点「立即备份」，或直接「导出到本地」留一份离线副本。');
         panel.querySelector('#backup-run').disabled = busy || status.running;
         panel.querySelectorAll('[data-restore], [data-rollback]').forEach((el) => { el.disabled = busy || status.running; });
       };
@@ -2392,6 +2404,40 @@ async function bindBackupSettings() {
         }
       });
       action(panel.querySelector('#backup-save'), save);
+      panel.querySelectorAll('[data-browse]').forEach((button) => action(button, async () => {
+        const result = await window.qqaDesktop.pickDirectory();
+        if (result?.canceled) { feedback('已取消选择目录'); return; }
+        if (!result?.ok || !result.path) throw new Error(result?.error || '无法选择目录');
+        const input = button.closest('[data-target]').querySelector('[data-bk="dir"]');
+        input.value = result.path;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }, '正在选择…'));
+      action(panel.querySelector('#backup-export'), async () => {
+        const categories = [...panel.querySelectorAll('[data-export-category]:checked')].map((el) => el.dataset.exportCategory);
+        if (!categories.length) throw new Error('请展开「本地导出内容」，至少勾选一项');
+        const response = await fetch('/api/backup/export', { method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-console-token': CONSOLE_AUTH_TOKEN || CONSOLE_MARKER },
+          body: JSON.stringify({ categories, includeSecrets: secretSwitch.checked }) });
+        if (!response.ok) { const error = await response.json(); throw new Error(error.error || '导出失败'); }
+        const blob = await response.blob();
+        const name = response.headers.get('content-disposition')?.match(/filename="([^"]+)"/)?.[1] || 'qq-agent-backup.zip';
+        let message;
+        if (typeof window.qqaDesktop?.saveBackup === 'function') {
+          const result = await window.qqaDesktop.saveBackup(name, new Uint8Array(await blob.arrayBuffer()));
+          if (result?.canceled) { feedback('已取消导出保存'); return; }
+          if (!result?.ok) throw new Error(result?.error || '保存失败');
+          message = '已导出到本地：' + name;
+        } else {
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a'); link.href = url; link.download = name;
+          document.body.append(link); link.click(); link.remove();
+          const DOWNLOAD_URL_TTL_MS = 60_000; // 留出浏览器接管下载的时间。
+          setTimeout(() => URL.revokeObjectURL(url), DOWNLOAD_URL_TTL_MS);
+          message = '已开始下载：' + name;
+        }
+        const skipped = JSON.parse(decodeURIComponent(response.headers.get('x-backup-skipped') || '%5B%5D'));
+        feedback(message + '；未上传，不计入备份历史。' + (skipped.length ? '已跳过：' + skipped.map((item) => (item.label || item.key) + '：' + item.reason).join('；') : ''));
+      }, '正在导出…');
       action(panel.querySelector('#backup-add'), async () => { collect(); config.targets.push({ id: crypto.randomUUID(), type: panel.querySelector('#backup-type').value, name: '', enabled: true, categories: status.categories.filter((item) => item.defaultOn !== false).map((item) => item.key) }); draw(); feedback('目标已添加，请填写并保存'); return '[data-target]:last-child [data-bk="name"]'; });
       panel.querySelectorAll('[data-remove]').forEach((button) => action(button, async () => { collect(); config.targets = config.targets.filter((target) => target.id !== button.dataset.remove); draw(); feedback('目标已移除，请保存设置'); return '#backup-add'; }));
       panel.querySelectorAll('[data-test]').forEach((button) => action(button, async () => { await save(); feedback('正在测试连接…'); const result = await post('test', { targetId: button.dataset.test }); if (!result.ok) throw new Error(result.message || result.error || '连接失败'); feedback(result.message || '连接成功'); }, '正在测试…'));
@@ -2404,16 +2450,15 @@ async function bindBackupSettings() {
           if (target.ok && !target.backups.length) { const empty = document.createElement('p'); empty.textContent = '暂无备份'; container.append(empty); }
           for (const item of target.backups) {
             const row = document.createElement('div'); row.className = 'field backup-file';
-            const label = document.createElement('span'); label.textContent = item.key + ' · ' + fmtBytes(item.size) + (item.authenticated === false ? ' · ' + legacyWarning : '') + ' '; row.append(label);
+            const label = document.createElement('span'); label.textContent = item.key + ' · ' + fmtBytes(item.size) + ' '; row.append(label);
             const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-small'; button.dataset.restore = ''; button.disabled = busy || status.running; button.textContent = '预览与恢复'; button.setAttribute('aria-label', '预览与恢复 ' + (target.name || target.id) + ' / ' + item.key); row.append(button);
             action(button, async () => {
               const input = { targetId: target.id, key: item.key };
               const preview = await post('preview', input);
               const encryption = preview.manifest?.encrypted ? '已加密备份。' : '未加密备份（不含密钥）。';
-              if (preview.authenticated === false) label.textContent = item.key + ' · ' + fmtBytes(item.size) + ' · ' + legacyWarning + ' ';
               const scan = preview.scan;
               const modules = scan.modules || [];
-              const warning = (preview.authenticated === false ? '\n' + legacyWarning + '。' : '') + (modules.length ? '\n包含 ' + modules.length + ' 个扩展，恢复时需逐个确认安装。扩展先进入锻造台暂存区，通过安全检查后再由你确认。' : '');
+              const warning = modules.length ? '\n包含 ' + modules.length + ' 个扩展，恢复时需逐个确认安装。扩展先进入锻造台暂存区，通过安全检查后再由你确认。' : '';
               if (!await qaConfirm({ danger: true, confirmText: '执行恢复', message: (target.name || target.id) + ' / ' + item.key + '\n' + encryption + warning + '\n恢复会合并数据，并可能覆盖当前文件；恢复前会生成可回滚快照。回滚也会撤销恢复后对相关文件的修改。预览：\n' + JSON.stringify(scan, null, 2) })) { feedback('已取消恢复'); return; }
               try {
                 feedback('正在恢复，请等待完成…');

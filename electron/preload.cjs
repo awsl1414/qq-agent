@@ -71,6 +71,8 @@ contextBridge.exposeInMainWorld('qqaDesktop', {
   pickModuleFiles: () => ipcRenderer.invoke('dialog:pick-modules'),
   /** 选一个文件夹，只回路径（不读不写）：返回 { ok, path } 或 { ok:false, canceled:true }。 */
   pickDirectory: () => ipcRenderer.invoke('dialog:pick-dir'),
+  /** 用户选定位置后保存备份 ZIP：返回 { ok, canceled?, error? }。 */
+  saveBackup: (name, bytes) => ipcRenderer.invoke('backup:save-file', name, bytes),
   /** 拖放反查路径：传入 dataTransfer 里的 File，返回 { ok, path }。 */
   pathForFile: (file) => ipcRenderer.invoke('file:path-for', file),
 

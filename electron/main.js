@@ -1,6 +1,6 @@
 // Electron 桌面壳：启动核心服务器（同一进程），打开会话式控制台窗口。
 // 托盘常驻、关窗不退出、可选开机自启。
-// dialog 只用于 showOpenDialog（选文件等用户主动触发、带父窗口的框）。
+// dialog 用于选文件与保存文件等用户主动触发、带父窗口的框。
 // 原生消息框一律走 ./dialog-safe.js 的 showDialog（挂父窗口 + 超时自消）。
 import { app, BrowserWindow, Tray, Menu, nativeImage, session, shell, dialog, ipcMain } from 'electron';
 // webUtils 绝不能走具名导入：ESM 的具名导入在导出名不存在时是 SyntaxError，
@@ -1210,6 +1210,23 @@ ipcMain.handle('dialog:pick-dir', async (event) => {
   });
   if (canceled || !filePaths?.length) return { ok: false, canceled: true };
   return { ok: true, path: filePaths[0] };
+});
+
+// 保存位置必须由用户在原生对话框中选择，不接受渲染进程指定的写入路径。
+ipcMain.handle('backup:save-file', async (event, name, bytes) => {
+  const win = windowOf(event);
+  if (!win || win !== mainWindow) return { ok: false, error: '仅主窗口可导出备份' };
+  try {
+    if (!(bytes instanceof Uint8Array) || !bytes.length) return { ok: false, error: '备份文件为空或格式无效' };
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+      title: '导出备份到本地',
+      defaultPath: path.basename(String(name || 'qq-agent-backup.zip')),
+      filters: [{ name: '备份 ZIP', extensions: ['zip'] }]
+    });
+    if (canceled || !filePath) return { ok: false, canceled: true };
+    await fs.promises.writeFile(filePath, bytes);
+    return { ok: true };
+  } catch (error) { return { ok: false, error: '保存备份失败：' + error.message }; }
 });
 
 // 拖放反查路径：渲染进程只有 File 对象，拿不到 path（安全沙箱 + File.path 已废弃）。

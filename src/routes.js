@@ -41,6 +41,7 @@ import { listAccounts, removeAccount, loginAccount, publishModule, verifyInstall
 import { importModules } from './module-import.js';
 import { applyImport, rollbackImport, listBackups } from './migrate.js';
 import * as backup from './backup/index.js';
+import { buildBackup } from './backup/archive.js';
 import { encryptCredential } from './backup/crypto.js';
 import { TARGET_TYPES } from './backup/targets/index.js';
 import { collect as collectBackupSources, listBackupCategories } from './backup/sources/index.js';
@@ -53,7 +54,7 @@ import { toOpenAiTools, executeTool } from './tools.js';
 import { publicView as protocolDetectView } from './protocol-detect.js';
 
 const BACKUP_SECRET_FIELDS = ['credentials', 'secretAccessKeyCipher', 'accessKeyId', 'username', 'password', 'secretAccessKey'];
-const BACKUP_TARGET_FIELDS = ['id', 'name', 'type', 'enabled', 'dir', 'url', 'endpoint', 'region', 'bucket', 'forcePathStyle', 'categories'];
+const BACKUP_TARGET_FIELDS = ['id', 'name', 'type', 'enabled', 'dir', 'url', 'endpoint', 'region', 'bucket', 'forcePathStyle', 'allowInsecureTLS', 'categories'];
 function publicBackupConfig(config = {}) {
   return { ...config, targets: (config.targets || []).map((target) => {
     const out = Object.fromEntries(BACKUP_TARGET_FIELDS.filter((key) => key in target).map((key) => [key, target[key]]));
@@ -235,6 +236,31 @@ export function createRoutes(deps) {
       } catch { return json(res, 400, { ok: false, error: '备份配置无效，保存失败' }); }
     } },
     { method: 'GET', pattern: '/api/backup/targets', handler: async ({ res, json }) => json(res, 200, { ...backup.getStatus(), categories: backupCategories(), rollbacks: listBackups() }) },
+    { method: 'POST', pattern: '/api/backup/export', handler: async ({ req, res, json }) => {
+      try {
+        const body = await bodyOf(req);
+        const available = listBackupCategories();
+        const categories = body.categories ?? available.filter((item) => item.defaultOn !== false).map((item) => item.key);
+        if (!Array.isArray(categories) || !categories.length || categories.some((key) => !available.some((item) => item.key === key))) {
+          return json(res, 400, { ok: false, error: '请至少选择一项有效的导出内容' });
+        }
+        if ('includeSecrets' in body && typeof body.includeSecrets !== 'boolean') {
+          return json(res, 400, { ok: false, error: '包含密钥必须是布尔值' });
+        }
+        // 只构建包；上传、保留策略与运行历史仍由 runBackup 独占。
+        const built = buildBackup({ categories, includeSecrets: body.includeSecrets === true,
+          appVersion: JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version });
+        if (!built.ok) return json(res, 400, built);
+        res.writeHead(200, {
+          'Content-Type': 'application/zip',
+          'Content-Disposition': 'attachment; filename="' + path.parse(built.name).name + '.zip"',
+          'Content-Length': built.buffer.length,
+          'Cache-Control': 'no-store',
+          'X-Backup-Skipped': encodeURIComponent(JSON.stringify(built.skippedCategories))
+        });
+        res.end(built.buffer);
+      } catch (error) { return json(res, 400, { ok: false, error: String(error?.message ?? error) }); }
+    } },
     { method: 'GET', pattern: '/api/backup/list', handler: async ({ res, json, url }) => {
       const targetId = url.searchParams.get('targetId');
       return json(res, 200, await backup.listBackups({ targetIds: targetId ? [targetId] : null }));
