@@ -186,6 +186,7 @@ export class OneBotClient {
   }
 
   #connectLoop() {
+    this.selfInfo = null;
     // 单连接互斥：同一时刻只允许一个连接循环存活。
     // 为什么需要它（401 风暴复盘）：
     // 旧实现里每个 socket 的 close handler 都 setTimeout 一轮新的 connectLoop，
@@ -261,13 +262,16 @@ export class OneBotClient {
       this.#failedAttempts = 0;   // 连上了，退避计数清零
       this.#setStatus(true);
       try {
-        this.selfInfo = await this.call('get_login_info');
+        const selfInfo = await this.call('get_login_info');
+        if (!isCurrent(socket) || !this.connected) return;
+        this.selfInfo = selfInfo;
       } catch (error) {
+        if (!isCurrent(socket) || !this.connected) return;
         console.error('[onebot] 获取登录信息失败:', error?.message ?? error);
         // get_login_info 失败不代表连接不可用（可能是 SnowLuma 还在启动中）。
         // 挂一个延迟补拉：连着但 selfInfo 一直空 → /api/status 的 self 恒为 null，
         // UI 就"检测不到账号信息"。
-        this.#refreshSelfInfoLater();
+        this.#refreshSelfInfoLater(socket);
       }
     });
     socket.on('message', (data) => {
@@ -279,6 +283,8 @@ export class OneBotClient {
     });
     socket.on('close', () => {
       if (!isCurrent(socket)) return; // 旧连接的迟到 close：新连接已在处理
+      this.selfInfo = null;
+      if (this.#selfInfoTimer) { clearTimeout(this.#selfInfoTimer); this.#selfInfoTimer = null; }
       this.#setStatus(false);
       if (!this.#closedByUs) {
         // 指数退避：长断线时 3 秒一次的重试风暴既刷屏又占资源；
@@ -302,22 +308,26 @@ export class OneBotClient {
    *  原来只补拉一次：SnowLuma 挂账号超过 15 秒时 selfId 会一直为空
    *  （@判定按 QQ 号、自我消息过滤都依赖它），直到下一次重连才恢复。
    *  现在改为：只要还连着且没拿到，就按固定间隔一直补拉。 */
-  #refreshSelfInfoLater() {
+  #refreshSelfInfoLater(socket) {
     if (this.#selfInfoTimer) return;
     const timer = setTimeout(async () => {
       this.#selfInfoTimer = null;
-      if (!this.connected || this.selfInfo) return;   // 断线 / 已拿到：都不再补
+      if (this.socket !== socket || !this.connected || this.selfInfo) return;
       try {
-        this.selfInfo = await this.call('get_login_info');
+        const selfInfo = await this.call('get_login_info');
+        // HTTP 响应可能晚于重连或关闭；身份只属于发起查询的连接。
+        if (this.socket !== socket || !this.connected) return;
+        this.selfInfo = selfInfo;
         if (this.selfInfo) this.#setStatus(true);   // 触发一次状态广播，UI 拿到账号信息
       } catch { /* 还没就绪：继续按固定间隔补拉，直到拿到或断线 */ }
-      if (this.connected && !this.selfInfo) this.#refreshSelfInfoLater();
+      if (this.socket === socket && this.connected && !this.selfInfo) this.#refreshSelfInfoLater(socket);
     }, SELF_INFO_RETRY_MS);
     this.#selfInfoTimer = timer;
   }
 
   close() {
     this.#closedByUs = true;
+    this.selfInfo = null;
     if (this.#reconnectTimer) { clearTimeout(this.#reconnectTimer); this.#reconnectTimer = null; }
     if (this.#selfInfoTimer) { clearTimeout(this.#selfInfoTimer); this.#selfInfoTimer = null; }
     const old = this.socket;

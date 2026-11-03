@@ -41,6 +41,7 @@ const DEFAULT_SETTINGS = { follow: true, allowMature: false, intervalSec: 8, sof
 
 let cfg = () => DEFAULT_SETTINGS;
 let timer = null;
+let generation = 0;
 let lastError = '';
 
 // ── 小工具 ─────────────────────────────────────────────────────────────────
@@ -188,10 +189,11 @@ function imageWidth(file) {
   let buf;
   try {
     const fd = fs.openSync(file, 'r');
-    buf = Buffer.alloc(64 * 1024);
-    const n = fs.readSync(fd, buf, 0, buf.length, 0);
-    fs.closeSync(fd);
-    buf = buf.subarray(0, n);
+    try {
+      buf = Buffer.alloc(64 * 1024);
+      const n = fs.readSync(fd, buf, 0, buf.length, 0);
+      buf = buf.subarray(0, n);
+    } finally { fs.closeSync(fd); }
   } catch { return 0; }
 
   try {
@@ -314,18 +316,21 @@ export async function syncOnce({ force = false } = {}) {
 
 // ── 生命周期 ───────────────────────────────────────────────────────────────
 
-function scheduleNext() {
+function scheduleNext(cycle) {
+  if (cycle !== generation) return;
   const conf = { ...DEFAULT_SETTINGS, ...(cfg() || {}) };
   const sec = Math.min(120, Math.max(5, Number(conf.intervalSec) || 8));
   timer = setTimeout(async () => {
+    if (cycle !== generation) return;
     timer = null;
     try { await syncOnce(); } catch (error) { lastError = String(error?.message ?? error); }
-    scheduleNext();
+    scheduleNext(cycle);
   }, sec * 1000);
   timer.unref?.();   // 不因为一个定时器把进程钉住（退出时不用等它）
 }
 
 function stop() {
+  generation++;
   if (timer) { clearTimeout(timer); timer = null; }
 }
 
@@ -336,11 +341,13 @@ export function setup(api) {
 
 export async function activate() {
   stop();
+  const cycle = generation;
   // 启动后 3 秒再干活：避开开屏高峰（技能加载/价格表/遥测都挤在前几秒）
   timer = setTimeout(async () => {
+    if (cycle !== generation) return;
     timer = null;
     try { await syncOnce(); } catch (error) { lastError = String(error?.message ?? error); }
-    scheduleNext();
+    scheduleNext(cycle);
   }, 3000);
   timer.unref?.();
 }

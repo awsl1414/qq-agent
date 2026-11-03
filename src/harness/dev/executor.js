@@ -10,7 +10,7 @@
 //   · dev_run 在项目根**启动 shell 执行任意命令**。
 //     cwd 只是**起始目录，不是沙箱**：命令能 cd 到别处、按绝对路径读写项目外文件、
 //     执行任意程序、连任意主机。所以"不越出项目目录"只对文件工具有效。
-//   · 文件工具还缺 realpath 校验（junction 可绕过），属已知缺口。
+//   · 文件工具同时检查实际路径；符号链接与 junction 不能指向项目外。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -182,6 +182,20 @@ function resolveInRoot(root, rel) {
   const abs = path.resolve(root, ...segs);
   const r = path.relative(root, abs);
   if (r.startsWith('..') || path.isAbsolute(r)) return null;
+  try {
+    const realRoot = fs.realpathSync(root);
+    let current = root;
+    for (const segment of segs) {
+      current = path.join(current, segment);
+      try { fs.lstatSync(current); }
+      catch (error) {
+        if (error.code === 'ENOENT') break; // 后续尚不存在的路径由已验证的父目录创建。
+        throw error;
+      }
+      const relative = path.relative(realRoot, fs.realpathSync(current));
+      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
+    }
+  } catch { return null; }
   return abs;
 }
 

@@ -2131,20 +2131,6 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     }, 2000);
     obPortPollTimer.unref?.();
 
-    // ── WS 就绪后的账号信息兜底
-    // 协议端重启/换号后，QQ Agent 侧的 WS 可能先于 OneBot 实例完全就绪连上，
-    // open 时的 get_login_info 失败 → selfInfo 恒空 → UI"检测不到账号"。
-    // onebot.js 里已有 15 秒延迟补拉；这里再挂一道 45 秒后的终检。
-    setTimeout(() => {
-      if (!onebot.connected || onebot.selfInfo) return;
-      onebot.call('get_login_info').then((info) => {
-        if (info) {
-          onebot.selfInfo = info;
-          emit('onebot-status', { connected: true, everConnected: true, error: '' });
-          log('[onebot] 账号信息延迟恢复成功');
-        }
-      }).catch(() => { /* 仍失败：连接层已尽力，UI 状态如实反映 */ });
-    }, 45_000).unref?.();
     if (getConfig().proactive?.enabled) orchestrator.startProactiveLoop();
     orchestrator.startReminderLoop();   // 提醒（闹钟）调度：到点往群里发提醒
     log(`控制台已就绪：http://127.0.0.1:${port}`);
@@ -3541,7 +3527,7 @@ async function buildUsageStats({ range = '7', force = false } = {}) {
   // 覆盖掉前一个，于是切 range 时前后两个 range 会同时全量重算，把刚做的缓存优化
   // 全还回去。改成 Map：每个 key 各有各的在途 Promise，互不覆盖。
   const inflight = usageStatsInflight.get(key);
-  if (inflight) return infight;
+  if (inflight) return inflight;
   const promise = (async () => {
     let stats = null;
     try {

@@ -79,6 +79,7 @@ const FILE_RESTORE_CATEGORIES = {
 const MESSAGES_DIR = path.join(DATA_DIR, 'messages');
 const MEMORY_DIR = path.join(DATA_DIR, 'memory');
 const BACKUP_ROOT = path.join(DATA_DIR, 'import-backups');
+const BACKUP_ID_PATTERN = /^\d{4}-\d{2}-\d{2}_\d{6}-\d{3}$/;
 
 // ── 基础工具 ─────────────────────────────────────────────────────────────
 
@@ -448,7 +449,7 @@ function backupFile(backupDir, absTarget) {
 export function listBackups() {
   try {
     return fs.readdirSync(BACKUP_ROOT)
-      .filter((f) => /^\d{4}-\d{2}-\d{2}_\d{6}-\d{3}$/.test(f))
+      .filter((f) => BACKUP_ID_PATTERN.test(f))
       .sort()
       .reverse()
       .map((id) => {
@@ -1177,8 +1178,29 @@ export async function rollbackImport(backupId, hooks = {}) {
 
 async function rollbackImportInner(backupId, hooks = {}) {
   const id = String(backupId || '').trim();
-  const dir = path.join(BACKUP_ROOT, id);
-  const manifest = readJson(path.join(dir, 'manifest.json'), null);
+  if (!BACKUP_ID_PATTERN.test(id)) return { ok: false, error: '非法备份 id' };
+  let dir, manifest;
+  const rollbackPath = (root, relative) => {
+    if (typeof relative !== 'string' || !relative.trim() || path.isAbsolute(relative)
+        || path.win32.isAbsolute(relative) || relative.split(/[\\/]/).includes('..')) {
+      throw new Error('回滚路径必须是边界内的相对文件路径');
+    }
+    const file = checkedSourcePath(root, relative);
+    if (file === path.resolve(root)) throw new Error('回滚路径不能是根目录');
+    return file;
+  };
+  try {
+    dir = checkedSourcePath(DATA_DIR, 'import-backups', id);
+    manifest = readJson(checkedSourcePath(dir, 'manifest.json'), null);
+    // 清单整体预检后才执行：后面的恶意路径不能让前面的合法文件先被删除。
+    for (const action of manifest?.actions ?? []) {
+      if (action.type === 'modules') continue;
+      rollbackPath(DATA_DIR, action.target);
+      if (action.backup) rollbackPath(dir, action.backup);
+    }
+  } catch (error) {
+    return { ok: false, error: `回滚清单不安全：${error.message}` };
+  }
   if (!manifest || !Array.isArray(manifest.actions)) {
     return { ok: false, error: `备份不存在或缺少 manifest：${id}` };
   }
@@ -1208,9 +1230,9 @@ async function rollbackImportInner(backupId, hooks = {}) {
         removed += 1;
         continue;
       }
-      const target = path.join(DATA_DIR, a.target);
+      const target = rollbackPath(DATA_DIR, a.target);
       if (a.backup) {
-        const src = path.join(dir, a.backup);
+        const src = rollbackPath(dir, a.backup);
         if (!fs.existsSync(src)) { failed += 1; continue; }
         fs.mkdirSync(path.dirname(target), { recursive: true });
         // 原文件即使损坏也须逐字节还原；原子写的底层同样接受 Buffer。

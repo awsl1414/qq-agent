@@ -782,7 +782,7 @@ export async function chatCompletion({ messages, tools = null, toolChoice = 'aut
       dispatcher: dispatcherFor()
     });
     logger.info('req-fp', `[${tag}] status=${res.status} ${fp}`);
-    const text = await res.text().catch(() => '');
+    const text = await res.text();
     return { ok: res.ok, status: res.status, text, contentType: res.headers.get('content-type') || '' };
   };
 

@@ -13,6 +13,32 @@ import { SKILL_API_VERSION } from './skills/manifest.js';
 const BANNED_EXT = /\.(exe|dll|bat|cmd|com|msi|scr|ps1|vbs|sh|lnk)$/i;
 const MAX_FILES = 100;
 const MAX_TOTAL = 32 * 1024 * 1024;
+const MAX_DIRECTORY_SUFFIX = 100;
+
+/** 独占创建新扩展目录；写入失败只清理本次拥有的目录，绝不合并现有扩展。 */
+export function writeModuleDirectory(baseDir, name, writeFiles) {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) throw new Error('非法扩展目录名');
+  fs.mkdirSync(baseDir, { recursive: true });
+  for (let suffix = 0; suffix <= MAX_DIRECTORY_SUFFIX; suffix++) {
+    const id = suffix ? `${name}_${suffix}` : name;
+    const dir = path.join(baseDir, id);
+    try { fs.mkdirSync(dir); }
+    catch (error) {
+      if (error.code === 'EEXIST') continue;
+      throw error;
+    }
+    try { writeFiles(dir); }
+    catch (error) {
+      try { fs.rmSync(dir, { recursive: true, force: true }); }
+      catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], `扩展写入失败且清理 ${dir} 失败：${error.message}；${cleanupError.message}`);
+      }
+      throw error;
+    }
+    return { id, dir };
+  }
+  throw new Error(`扩展目录 ${name} 的同名候选均已占用，未覆盖现有扩展`);
+}
 
 /**
  * 结构校验（抛错 = 拒绝安装）：
@@ -161,26 +187,19 @@ export async function unzipToModuleDir(buffer, { root, type, preferId = '' }) {
   // 未校验的 preferId，回退等于没回退，还把未校验的值放进了路径拼接。
   // market.js 的 installByCode 现在也校验 id，这里是第二道防线。
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(dirName)) dirName = 'module';
-  // 冲突递增
-  let finalName = dirName;
-  for (let n = 1; n <= 100; n++) {
-    if (!fs.existsSync(path.join(baseDir, finalName))) break;
-    finalName = `${dirName}_${n}`;
-  }
-  const target = path.join(baseDir, finalName);
-  fs.mkdirSync(target, { recursive: true });
-
-  for (const item of kept) {
-    // 二次防线：拼接结果必须仍在 target 内（解析后 path.relative 检查）
-    const dest = path.join(target, ...item.rel.split('/'));
-    const relCheck = path.relative(target, dest);
-    if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
-      throw new Error(`安装包包含非法路径：${item.rel}`);
+  const installed = writeModuleDirectory(baseDir, dirName, (target) => {
+    for (const item of kept) {
+      // 二次防线：拼接结果必须仍在 target 内（解析后 path.relative 检查）
+      const dest = path.join(target, ...item.rel.split('/'));
+      const relCheck = path.relative(target, dest);
+      if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
+        throw new Error(`安装包包含非法路径：${item.rel}`);
+      }
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, item.data);
     }
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.writeFileSync(dest, item.data);
-  }
-  return finalName;
+  });
+  return installed.id;
 }
 
 /** 极简 zip 读取器：中央目录定位 + 解压全部文件条目。不支持的特性直接抛错。
