@@ -2280,6 +2280,8 @@ async function bindBackupSettings() {
     const field = (key, label, value = '', type = 'text', placeholder = '') => '<div class="field"><label>' + esc(label) + '<input data-bk="' + key + '" type="' + type + '" value="' + esc(String(value)) + '" placeholder="' + esc(placeholder) + '"' + (credentialFields.has(key) ? ' autocomplete="off"' : '') + (type === 'number' ? ' min="' + (key === 'retention' ? '1' : '0.01') + '" step="' + (key === 'retention' ? '1' : 'any') + '" required' : '') + '></label></div>';
     const toggle = (key, label, on) => '<label class="checkbox-row"><input class="sw" type="checkbox" data-bk="' + key + '" ' + (on ? 'checked' : '') + '> ' + esc(label) + '</label>';
     const targetLabels = { local: '本地目录', webdav: 'WebDAV', s3: 'S3 兼容' };
+    const categorySize = (item) => item.error ? '体积读取失败：' + item.error : fmtBytes(item.bytes);
+    const legacyWarning = '此备份包为旧格式，无法验证是否被篡改';
     const draw = () => {
       panel.innerHTML = '<p><button type="button" class="btn btn-small" id="backup-restore-link">前往恢复 / 回滚</button></p><p class="muted">恢复：刷新下方备份列表后选择「预览与恢复」；恢复后可在回滚区域撤销。</p><p class="muted" id="backup-status"></p><p class="muted">默认排除配置和扩展数据中的密钥。凭据加密存储，留空保留原值。修改后请保存。</p>' +
         '<div id="backup-global">' + toggle('enabled', '定时备份', config.enabled) + field('intervalHours', '间隔（小时）', config.intervalHours, 'number') + field('retention', '保留份数', config.retention, 'number') + toggle('includeSecrets', '包含密钥', config.includeSecrets) + '</div>' +
@@ -2288,8 +2290,8 @@ async function bindBackupSettings() {
           const specific = target.type === 'local' ? field('dir', '本地目录', target.dir) : target.type === 'webdav' ?
             field('url', 'WebDAV URL', target.url) + field('username', '用户名', target.username, 'password', target.hasUsername ? '••••••（留空保留）' : '') + field('password', '密码', target.password, 'password', target.hasCredentials ? '••••••（留空保留）' : '') :
             field('endpoint', 'S3 Endpoint', target.endpoint) + field('region', 'Region', target.region || 'us-east-1') + field('bucket', 'Bucket', target.bucket) + field('accessKeyId', 'Access Key ID', target.accessKeyId, 'password', target.hasAccessKeyId ? '••••••（留空保留）' : '') + field('secretAccessKey', 'Secret Access Key', target.secretAccessKey, 'password', target.hasSecretAccessKeyCipher ? '••••••（留空保留）' : '') + toggle('forcePathStyle', 'Path style', target.forcePathStyle !== false);
-          const categories = status.categories.map((item) => '<label class="checkbox-row"><input class="sw" type="checkbox" data-category="' + esc(item.key) + '" ' + (!Array.isArray(target.categories) || target.categories.includes(item.key) ? 'checked' : '') + '> ' + esc(item.label) + '</label>').join('');
-          return '<fieldset data-target="' + esc(target.id) + '"><legend>' + esc(target.name || targetLabels[target.type] || target.type) + '</legend>' + fields + specific + '<fieldset><legend>备份内容</legend>' + categories + '</fieldset><p class="muted">同次备份会合并所有启用目标选中的类别，并写入各目标。</p><button type="button" class="btn btn-small" data-test="' + esc(target.id) + '">测试连接</button> <button type="button" class="btn btn-small" data-remove="' + esc(target.id) + '">删除目标</button></fieldset>';
+          const categories = status.categories.map((item) => '<label class="checkbox-row"><input class="sw" type="checkbox" data-category="' + esc(item.key) + '" ' + ((Array.isArray(target.categories) ? target.categories.includes(item.key) : item.defaultOn !== false) ? 'checked' : '') + '><span>' + esc(item.label) + ' · <span data-category-size="' + esc(item.key) + '">' + esc(categorySize(item)) + '</span><br><small class="muted">' + esc(item.desc) + '</small></span></label>').join('');
+          return '<fieldset data-target="' + esc(target.id) + '"><legend>' + esc(target.name || targetLabels[target.type] || target.type) + '</legend>' + fields + specific + '<fieldset><legend>备份内容</legend><p class="muted">体积为当前实际内容的未压缩大小；空类别显示 0 B。包含密钥时另加加密配置。</p>' + categories + '</fieldset><p class="muted">每个目标只备份自己勾选的类别；类别相同的目标共用一个包。</p><button type="button" class="btn btn-small" data-test="' + esc(target.id) + '">测试连接</button> <button type="button" class="btn btn-small" data-remove="' + esc(target.id) + '">删除目标</button></fieldset>';
         }).join('') + '</div><div class="field"><label>添加目标<select id="backup-type"><option value="local">本地目录</option><option value="webdav">WebDAV</option><option value="s3">S3 兼容</option></select></label><button type="button" class="btn" id="backup-add">添加目标</button></div>' +
         '<div class="backup-actions"><button type="button" class="btn" id="backup-save">保存备份设置</button><button type="button" class="btn" id="backup-run">立即备份</button><button type="button" class="btn" id="backup-list">刷新备份列表</button></div><p id="backup-feedback" role="status" aria-atomic="true"></p><h4 id="backup-restore-title" tabindex="-1">恢复与回滚</h4><div id="backup-files"><p class="muted">请刷新备份列表，选择备份进行预览与恢复。</p></div><h4>恢复回滚</h4><div id="backup-rollbacks"></div>';
       const collect = () => {
@@ -2326,6 +2328,10 @@ async function bindBackupSettings() {
       };
       const refreshStatus = async () => {
         Object.assign(status, await api('/api/backup/targets'));
+        panel.querySelectorAll('[data-category-size]').forEach((el) => {
+          const item = status.categories.find((category) => category.key === el.dataset.categorySize);
+          if (item) el.textContent = categorySize(item);
+        });
         updateStatus();
         panel.querySelector('#backup-rollbacks').replaceChildren();
         for (const item of status.rollbacks || []) addRollback(item.id || item.backupId);
@@ -2386,7 +2392,7 @@ async function bindBackupSettings() {
         }
       });
       action(panel.querySelector('#backup-save'), save);
-      action(panel.querySelector('#backup-add'), async () => { collect(); config.targets.push({ id: crypto.randomUUID(), type: panel.querySelector('#backup-type').value, name: '', enabled: true, categories: status.categories.map((item) => item.key) }); draw(); feedback('目标已添加，请填写并保存'); return '[data-target]:last-child [data-bk="name"]'; });
+      action(panel.querySelector('#backup-add'), async () => { collect(); config.targets.push({ id: crypto.randomUUID(), type: panel.querySelector('#backup-type').value, name: '', enabled: true, categories: status.categories.filter((item) => item.defaultOn !== false).map((item) => item.key) }); draw(); feedback('目标已添加，请填写并保存'); return '[data-target]:last-child [data-bk="name"]'; });
       panel.querySelectorAll('[data-remove]').forEach((button) => action(button, async () => { collect(); config.targets = config.targets.filter((target) => target.id !== button.dataset.remove); draw(); feedback('目标已移除，请保存设置'); return '#backup-add'; }));
       panel.querySelectorAll('[data-test]').forEach((button) => action(button, async () => { await save(); feedback('正在测试连接…'); const result = await post('test', { targetId: button.dataset.test }); if (!result.ok) throw new Error(result.message || result.error || '连接失败'); feedback(result.message || '连接成功'); }, '正在测试…'));
       const refreshFiles = async () => {
@@ -2398,16 +2404,32 @@ async function bindBackupSettings() {
           if (target.ok && !target.backups.length) { const empty = document.createElement('p'); empty.textContent = '暂无备份'; container.append(empty); }
           for (const item of target.backups) {
             const row = document.createElement('div'); row.className = 'field backup-file';
-            const label = document.createElement('span'); label.textContent = item.key + ' · ' + item.size + ' bytes '; row.append(label);
+            const label = document.createElement('span'); label.textContent = item.key + ' · ' + fmtBytes(item.size) + (item.authenticated === false ? ' · ' + legacyWarning : '') + ' '; row.append(label);
             const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-small'; button.dataset.restore = ''; button.disabled = busy || status.running; button.textContent = '预览与恢复'; button.setAttribute('aria-label', '预览与恢复 ' + (target.name || target.id) + ' / ' + item.key); row.append(button);
             action(button, async () => {
               const input = { targetId: target.id, key: item.key };
               const preview = await post('preview', input);
               const encryption = preview.manifest?.encrypted ? '已加密备份。' : '未加密备份（不含密钥）。';
-              if (!await qaConfirm({ danger: true, confirmText: '执行恢复', message: (target.name || target.id) + ' / ' + item.key + '\n' + encryption + '恢复会合并数据，并可能覆盖当前文件；恢复前会生成可回滚快照。回滚也会撤销恢复后对相关文件的修改。预览：\n' + JSON.stringify(preview.scan, null, 2) })) { feedback('已取消恢复'); return; }
+              if (preview.authenticated === false) label.textContent = item.key + ' · ' + fmtBytes(item.size) + ' · ' + legacyWarning + ' ';
+              const scan = preview.scan;
+              const modules = scan.modules || [];
+              const warning = (preview.authenticated === false ? '\n' + legacyWarning + '。' : '') + (modules.length ? '\n包含 ' + modules.length + ' 个扩展，恢复时需逐个确认安装。扩展先进入锻造台暂存区，通过安全检查后再由你确认。' : '');
+              if (!await qaConfirm({ danger: true, confirmText: '执行恢复', message: (target.name || target.id) + ' / ' + item.key + '\n' + encryption + warning + '\n恢复会合并数据，并可能覆盖当前文件；恢复前会生成可回滚快照。回滚也会撤销恢复后对相关文件的修改。预览：\n' + JSON.stringify(scan, null, 2) })) { feedback('已取消恢复'); return; }
               try {
                 feedback('正在恢复，请等待完成…');
                 const restored = await post('restore', input); feedback('恢复完成，可在下方回滚：' + restored.backupId);
+                for (const module of restored.report?.modules || []) {
+                  if (!module.ok || !module.draftId) continue;
+                  const install = document.createElement('button'); install.type = 'button'; install.className = 'btn btn-small'; install.dataset.restore = ''; install.textContent = '确认安装 ' + module.key;
+                  row.append(install);
+                  action(install, async () => {
+                    if (!await qaConfirm({ danger: true, confirmText: '安装此扩展', message: '安装扩展 ' + module.key + '？安装后默认关闭。\n安全检查：\n' + JSON.stringify(module.gate, null, 2) })) { feedback('扩展仍在锻造台暂存区，尚未安装'); return; }
+                    const result = await api('/api/bundle/install', { method: 'POST', body: JSON.stringify({ items: [{ draftId: module.draftId, confirmIssues: true }], enable: false }) });
+                    if (!result.ok) throw new Error(result.results?.map((item) => item.error).filter(Boolean).join('；') || result.error || '安装失败');
+                    install.remove(); feedback('已安装 ' + module.key + '，默认关闭；可在扩展页启用');
+                  }, '正在安装…');
+                }
+                if (restored.report?.modules?.length) feedback('数据恢复完成，可回滚：' + restored.backupId + '；扩展已暂存，请逐个确认安装');
               } finally {
                 // 导入失败也可能已产生快照，必须让用户能找到回滚入口。
                 await refreshStatus().catch((error) => feedback(panel.querySelector('#backup-feedback').textContent + '；刷新回滚快照失败：' + error.message));
@@ -2428,7 +2450,8 @@ async function bindBackupSettings() {
           const result = await post('run', {});
           const failed = (result.targets || []).filter((item) => !item.ok).map((item) => item.id + '：' + item.error);
           const skipped = (result.skippedCategories || []).map((item) => (item.label || item.key) + '：' + item.reason);
-          message = (failed.length ? '备份部分成功：' : '备份完成：') + result.key + (failed.length ? '；失败目标：' + failed.join('；') : '') + (skipped.length ? '。已跳过：' + skipped.join('；') : '');
+          const packages = result.keys?.length > 1 ? result.keys.length + ' 个包（各目标按所选类别备份）：' + result.targets.filter((item) => item.ok).map((item) => item.id + ' → ' + item.key).join('；') : result.key || result.keys?.[0] || '';
+          message = (failed.length ? '备份部分成功：' : '备份完成：') + packages + (failed.length ? '；失败目标：' + failed.join('；') : '') + (skipped.length ? '。已跳过：' + skipped.join('；') : '');
         } catch (error) { message = '备份失败：' + error.message; }
         try { await refreshStatus(); const listed = await refreshFiles(); if (!listed.ok) message += '；部分目标列表读取失败，详情见下方'; }
         catch (error) { message += '；刷新状态或列表失败：' + error.message; }

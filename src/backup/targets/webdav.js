@@ -3,6 +3,11 @@
 import { fetch, Agent, ProxyAgent } from 'undici';
 import { dispatcherFor } from '../../proxy-agent.js';
 import { getConfig } from '../../config.js';
+import {
+  BACKUP_DOWNLOAD_MAX_BYTES, BACKUP_LIST_PAGE_MAX_BYTES, BACKUP_LIST_MAX_PAGES_COUNT,
+  BACKUP_LIST_MAX_ENTRIES_COUNT, BACKUP_LIST_MAX_DEPTH_LEVELS, BACKUP_LIMIT_ERROR_CODE,
+  backupLimitError, readBoundedResponse
+} from './limits.js';
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_RETRY_COUNT = 2;
@@ -77,11 +82,12 @@ export function createWebdavTarget(entry = {}) {
           await response.body?.cancel();
           return format === 'text' ? '' : undefined;
         }
-        if (format === 'buffer') return Buffer.from(await response.arrayBuffer());
-        if (format === 'text') return await response.text();
+        if (format === 'buffer') return await readBoundedResponse(response, BACKUP_DOWNLOAD_MAX_BYTES);
+        if (format === 'text') return (await readBoundedResponse(response, BACKUP_LIST_PAGE_MAX_BYTES)).toString('utf8');
         await response.body?.cancel();
         return;
       } catch (error) {
+        if (error.code === BACKUP_LIMIT_ERROR_CODE) throw error;
         if (response) throw new Error(`WebDAV ${method} 状态码 ${response.status} 路径 ${url.pathname}（请求失败）`);
         if (attempt === MAX_RETRY_COUNT) throw new Error(`WebDAV ${method} 状态码 unavailable 路径 ${url.pathname}（网络或超时错误）`);
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
@@ -107,7 +113,10 @@ export function createWebdavTarget(entry = {}) {
     const queue = [base];
     const visited = new Set();
     const files = new Map();
+    const queued = new Set([base.href]);
+    let entriesCount = 0;
     while (queue.length) {
+      if (visited.size >= BACKUP_LIST_MAX_PAGES_COUNT) throw backupLimitError();
       const directory = queue.shift();
       if (visited.has(directory.href)) continue;
       visited.add(directory.href);
@@ -116,6 +125,7 @@ export function createWebdavTarget(entry = {}) {
       if (!xml) continue;
       if (!/<(?:[\w.-]+:)?multistatus\b/i.test(xml)) throw new Error(`WebDAV PROPFIND 状态码 207 路径 ${directory.pathname}（无效 XML）`);
       for (const item of elements(xml, 'response')) {
+        if (++entriesCount > BACKUP_LIST_MAX_ENTRIES_COUNT) throw backupLimitError();
         const href = elements(item, 'href')[0];
         if (!href) continue;
         const url = new URL(decodeXml(href.trim()), directory);
@@ -123,12 +133,16 @@ export function createWebdavTarget(entry = {}) {
         if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname) || url.search || url.hash) continue;
         const relative = decodeURIComponent(url.pathname.slice(base.pathname.length)).replace(/\/$/, '');
         if (!relative) continue;
-        keyParts(relative);
+        if (keyParts(relative).length > BACKUP_LIST_MAX_DEPTH_LEVELS) throw backupLimitError();
         const props = elements(item, 'propstat').filter(block => /HTTP\/\S+\s+200\b/.test(elements(block, 'status')[0] || '')).join('');
         if (!props) continue;
         if (/<(?:[\w.-]+:)?collection\b/i.test(props)) {
           if (!url.pathname.endsWith('/')) url.pathname += '/';
-          queue.push(url);
+          if (!queued.has(url.href)) {
+            if (queued.size >= BACKUP_LIST_MAX_PAGES_COUNT) throw backupLimitError();
+            queued.add(url.href);
+            queue.push(url);
+          }
         } else {
           const size = Number(elements(props, 'getcontentlength')[0]);
           const mtimeMs = Date.parse(decodeXml(elements(props, 'getlastmodified')[0] || ''));

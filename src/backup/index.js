@@ -1,12 +1,11 @@
 // 数据备份与恢复：对外 API。
 //
 // 调用链：
-//   runBackup   archive.buildBackup（一次构建，多目标共用）→ target.put → 保留策略
-//   runRestore  target.get → archive.parseBackup（sha256 校验）→ 临时解包
+//   runBackup   archive.buildBackup（同类别集合共用）→ target.put → 保留策略
+//   runRestore  target.get → archive.parseBackup（清单认证、sha256 校验）→ 临时解包
 //               → migrate.applyImport（唯一的落地路径）→ 丢弃临时区
 //
-// 为什么一次构建多目标共用：同一轮所有目标写的是同一份内容，逐目标重建会
-// 让每个目标的包都有不同的 sha256 与时间戳，目标之间无法互相校验，也白白多读一遍盘。
+// 按类别集合复用包，避免类别并集把目标未勾选的数据也上传出去。
 //
 // 恢复绝不直接覆盖文件：备份包的 data/ 结构等同另一个实例的 data 目录，
 // 直接交给 migrate.applyImport，合并/去重/导入前备份/回滚全部沿用既有逻辑。
@@ -18,7 +17,7 @@ import { applyImport, scanSource } from '../migrate.js';
 import { encryptPayload, decryptPayload } from './crypto.js';
 import { parseZip } from '../zip-install.js';
 import {
-  buildBackup, parseBackup, extractEntries, listBackupCategories, isBackupKey
+  buildBackup, parseBackup, extractEntries, listBackupCategories, normalizeCategories, isBackupKey
 } from './archive.js';
 import { createTarget } from './targets/index.js';
 import { applyRetention } from './schedule.js';
@@ -83,9 +82,8 @@ function instanceId() {
  *
  * @param {{trigger?:string, targetIds?:string[], categories?:string[], now?:Date}} opts
  *   targetIds 省略 = 所有 enabled 的目标。
- *   categories 省略 = 这些目标 categories 的并集。包是整体的，做不到"每类只写给
- *   勾了它的目标"，所以按并集构建一份包、所有目标共用同一份内容。
- * @returns {Promise<{ok:boolean, runId:string, key?:string, bytes?:number,
+ *   categories 显式指定时覆盖本次类别；省略时各目标只接收自己配置的类别。
+ * @returns {Promise<{ok:boolean, runId:string, keys?:string[], packages?:Array, key?:string, bytes?:number,
  *                    targets:Array<{id,type,ok,key?,bytes?,error?}>, error?:string}>}
  */
 export async function runBackup({ trigger = 'manual', targetIds = null, categories = null, now = new Date() } = {}, { encryptPayload: encryptData = encryptPayload } = {}) {
@@ -123,16 +121,15 @@ async function runBackupInner({ trigger, targetIds, categories, now, encryptData
     return { ok: false, runId: '', targets: [], error: '没有启用的备份目标' };
   }
 
-  // 类别：显式指定 > 所有目标 categories 的并集 > 全部可用类别。
-  // 用并集而不是逐目标构建，是因为包内容一旦不同，目标之间就无法互相比对/取最新。
-  let cats = Array.isArray(categories) && categories.length ? categories : null;
-  if (!cats) {
-    const union = new Set();
-    for (const t of targets) {
-      for (const c of Array.isArray(t.categories) ? t.categories : []) union.add(String(c));
-    }
-    cats = union.size ? [...union] : listBackupCategories().map((c) => c.key);
+  const defaults = listBackupCategories().filter(c => c.defaultOn !== false).map(c => c.key);
+  const groups = new Map();
+  for (const entry of targets) {
+    const cats = normalizeCategories(categories ?? entry.categories ?? defaults);
+    const groupKey = JSON.stringify(cats);
+    if (!groups.has(groupKey)) groups.set(groupKey, { categories: cats, targets: [] });
+    groups.get(groupKey).targets.push(entry);
   }
+  const cats = normalizeCategories([...groups.values()].flatMap(group => group.categories));
 
   const run = markRunStarted({
     trigger,
@@ -143,13 +140,29 @@ async function runBackupInner({ trigger, targetIds, categories, now, encryptData
   const results = [];
   try {
     const includeSecrets = cfg.includeSecrets === true;
-    const built = buildBackup({ categories: cats, appVersion: appVersion(), instanceId: instanceId(), now, includeSecrets, encrypt: includeSecrets }, { encryptPayload: encryptData });
-    if (!built.ok) {
-      markRunFinished(run.id, { ok: false, error: built.error });
-      return { ok: false, runId: run.id, targets: [], error: built.error, skippedCategories: built.skippedCategories };
+    const packages = [];
+    const skippedCategories = [];
+    const builtByTarget = new Map();
+    for (const group of groups.values()) {
+      const built = buildBackup({ categories: group.categories, appVersion: appVersion(), instanceId: instanceId(), now, includeSecrets, encrypt: includeSecrets }, { encryptPayload: encryptData });
+      for (const entry of group.targets) builtByTarget.set(entry.id, built);
+      for (const skipped of built.skippedCategories) {
+        if (!skippedCategories.some(item => item.key === skipped.key)) skippedCategories.push(skipped);
+      }
+      if (built.ok) packages.push({ key: built.key, bytes: built.bytes, manifest: built.manifest, categories: group.categories, skippedCategories: built.skippedCategories });
+    }
+    if (!packages.length) {
+      const error = [...new Set([...builtByTarget.values()].map(built => built.error))].join('；');
+      markRunFinished(run.id, { ok: false, error });
+      return { ok: false, runId: run.id, targets: [], error, skippedCategories };
     }
 
     for (const entry of targets) {
+      const built = builtByTarget.get(entry.id);
+      if (!built.ok) {
+        results.push({ id: entry.id, type: String(entry.type), ok: false, error: built.error });
+        continue;
+      }
       const row = { id: entry.id, type: String(entry.type), key: built.key, bytes: built.bytes, ok: false, error: '' };
       let target = null;
       try {
@@ -172,8 +185,9 @@ async function runBackupInner({ trigger, targetIds, categories, now, encryptData
     const ok = results.some((r) => r.ok);
     const error = ok ? '' : results.map((row) => `${row.id}：${row.error || '写入失败'}`).join('；');
     markRunFinished(run.id, { ok, targets: results, error });
-    logger.info('backup', `备份完成（${trigger}）：${built.key}，${results.filter((r) => r.ok).length}/${results.length} 个目标成功`);
-    return { ok, runId: run.id, key: built.key, bytes: built.bytes, manifest: built.manifest, targets: results, skippedCategories: built.skippedCategories, ...(error ? { error } : {}) };
+    logger.info('backup', `备份完成（${trigger}）：${packages.length} 个包，${results.filter((r) => r.ok).length}/${results.length} 个目标成功`);
+    const single = packages.length === 1 ? packages[0] : {};
+    return { ok, runId: run.id, ...single, keys: packages.map(pkg => pkg.key), packages, targets: results, skippedCategories, ...(error ? { error } : {}) };
   } catch (error) {
     const msg = String(error?.message ?? error);
     markRunFinished(run.id, { ok: false, targets: results, error: msg });
@@ -185,6 +199,9 @@ async function runBackupInner({ trigger, targetIds, categories, now, encryptData
 /** 预览、恢复与详情检查共用外层校验和解密入口。 */
 function parseRestoreBackup(buffer) {
   const parsed = parseBackup(buffer);
+  if (parsed.code === 'authentication') {
+    return { ok: false, error: '备份包已损坏、被篡改，或来自另一台机器（清单 HMAC 认证失败；加密密钥绑定本机实例，换机后无法解密）' };
+  }
   if (!parsed.ok || parsed.manifest.encrypted !== true) return parsed;
   try {
     const plainEntries = parseZip(decryptPayload(parsed.ciphertext), RESTORE_ZIP_LIMITS);
@@ -213,10 +230,16 @@ async function withRestoreSource({ targetId, key }, action) {
     extractDir = fs.mkdtempSync(path.join(RESTORE_ROOT, 'restore-'));
     const extracted = extractEntries(parsed.entries, extractDir);
     if (!extracted.ok) return extracted;
+    // 包根与 data 子目录是两个不同的概念，必须都传下去：
+    //   data/          旧式业务数据（messages/memory/usage/…）
+    //   config-fields/ 从 config.json 抽出的字段
+    //   modules/       用户扩展
+    //   drafts/        锻造台草稿
+    // 只传 data/ 会让后三者被 scanSource 忽略，恢复时静默丢失。
     const sourceDir = path.join(extractDir, 'data');
-    const scan = scanSource(sourceDir);
+    const scan = scanSource(extractDir);
     if (!scan.ok) return scan;
-    return await action({ sourceDir, scan, manifest: parsed.manifest, key: k });
+    return await action({ packageRoot: extractDir, sourceDir, scan, authenticated: parsed.authenticated, manifest: parsed.manifest, key: k });
   } catch (error) {
     return { ok: false, error: String(error?.message ?? error) };
   } finally {
@@ -228,24 +251,45 @@ async function withRestoreSource({ targetId, key }, action) {
   }
 }
 
+/**
+ * 未显式给 selection 时的默认勾选：包里有什么就恢复什么。
+ *
+ * 按包内实际存在的条目判断，而不是按配置里的类别列表 —— 用户可能用另一个
+ * 实例的备份包，那边的类别选择与本机配置无关。
+ */
+function defaultRestoreSelection(packageRoot, sourceDir, scan) {
+  const has = (rel) => fs.existsSync(path.join(packageRoot, rel));
+  const hasData = (rel) => fs.existsSync(path.join(sourceDir, rel));
+  const hasCategory = (key) => (scan.configFields?.[key]?.available === true);
+  return {
+    messages: { chatKeys: scan.messages.map((m) => m.chatKey), strategy: 'merge' },
+    memory: scan.memory.available,
+    stats: Object.fromEntries(scan.stats.map((stat) => [stat.id, true])),
+    reminders: hasData('reminders.json'),
+    stickers: hasData('stickers.json'),
+    wallpaper: hasData('wallpaper-static') || hasData('wallpaper-state.json') || hasData('ui'),
+    desktopPet: hasData('desktop-pet'),
+    drafts: has('drafts'),
+    persona: hasCategory('persona'),
+    customPersonas: hasCategory('customPersonas'),
+    lists: hasCategory('lists'),
+    configSafe: hasCategory('configSafe'),
+    extensions: (scan.modules?.length ?? 0) > 0
+  };
+}
+
 /** options.selection / options.hooks 传给 migrate；第二参数仅用于注入导入实现测试。 */
 export async function runRestore({ targetId, key, options = {}, selection, hooks } = {}, { applyImport: importData = applyImport } = {}) {
   if (operationsStopped) return { ok: false, error: '应用正在停止，无法开始恢复' };
   if (restoreInFlight || backupInFlight) return { ok: false, error: '已有一个备份或恢复正在进行，请等它完成' };
   restoreInFlight = true;
   try {
-    restoreTask = withRestoreSource({ targetId, key }, async ({ sourceDir, scan, manifest, key: k }) => {
-      const picked = options.selection ?? selection ?? {
-        messages: { chatKeys: scan.messages.map((m) => m.chatKey), strategy: 'merge' },
-        memory: scan.memory.available,
-        stats: Object.fromEntries(scan.stats.map((stat) => [stat.id, true])),
-        reminders: fs.existsSync(path.join(sourceDir, 'reminders.json')),
-        stickers: fs.existsSync(path.join(sourceDir, 'stickers.json'))
-      };
-      const report = await importData(sourceDir, picked, options.hooks ?? hooks ?? {});
+    restoreTask = withRestoreSource({ targetId, key }, async ({ packageRoot, sourceDir, scan, authenticated, manifest, key: k }) => {
+      const picked = options.selection ?? selection ?? defaultRestoreSelection(packageRoot, sourceDir, scan);
+      const report = await importData(packageRoot, picked, options.hooks ?? hooks ?? {});
       if (!report.ok) return { ok: false, backupId: report.backupId, error: report.error || '导入失败', report };
       logger.info('backup', `恢复完成：${targetId} / ${k}`);
-      return { ok: true, backupId: report.backupId, source: `${targetId}:${k}`, manifest, report };
+      return { ok: true, backupId: report.backupId, source: `${targetId}:${k}`, authenticated, manifest, report };
     });
     return await restoreTask;
   } finally { restoreInFlight = false; restoreTask = null; }
@@ -253,9 +297,9 @@ export async function runRestore({ targetId, key, options = {}, selection, hooks
 
 /** scanSource 提供包内、本机和预计新增消息数；预览结束立即清理临时数据。 */
 export async function restorePreview({ targetId, key } = {}) {
-  return withRestoreSource({ targetId, key }, ({ scan, manifest }) => {
+  return withRestoreSource({ targetId, key }, ({ scan, authenticated, manifest }) => {
     const { sourceDir, ...preview } = scan;
-    return { ok: true, manifest, scan: preview };
+    return { ok: true, authenticated, manifest, scan: preview };
   });
 }
 
@@ -331,7 +375,7 @@ export async function inspectBackup({ targetId, key } = {}) {
   try {
     const buffer = await createTarget(entry).get(String(key || ''));
     const parsed = parseRestoreBackup(buffer);
-    return parsed.ok ? { ok: true, manifest: parsed.manifest, bytes: buffer.length } : parsed;
+    return parsed.ok ? { ok: true, authenticated: parsed.authenticated, manifest: parsed.manifest, bytes: buffer.length } : parsed;
   } catch (error) {
     return { ok: false, error: String(error?.message ?? error) };
   }

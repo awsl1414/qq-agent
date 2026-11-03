@@ -86,12 +86,16 @@ test('stop during scheduled work prevents rearming; logging failures are contain
   f.scheduler.stop();
 });
 
-function key(day) { return `qq-agent/backup-202611${String(day).padStart(2, '0')}-0300.qqab`; }
+function key(day) { return `qq-agent/backup-202611${String(day).padStart(2, '0')}-030000000-abcdef01.qqab`; }
 
 test('retention deletes oldest keys regardless of mtime and preserves unrelated files', async () => {
   const deleted = [];
   const entries = [4, 1, 5, 2, 3].map((day) => ({ key: key(day), mtimeMs: 10 - day }));
-  const target = { list: async () => [...entries, { key: 'other.txt' }], remove: async (value) => deleted.push(value) };
+  const target = {
+    list: async () => [...entries, { key: 'other.txt' },
+      { key: 'qq-agent/backup-20260101-1200.qqab' }, { key: 'qq-agent/我的备份.qqab' }],
+    remove: async (value) => deleted.push(value)
+  };
   assert.deepEqual(await applyRetention(target, 2), { removed: 3, kept: 2 });
   assert.deepEqual(deleted, [key(1), key(2), key(3)]);
 });

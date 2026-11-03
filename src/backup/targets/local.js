@@ -12,6 +12,10 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { logger } from '../../logger.js';
+import {
+  BACKUP_DOWNLOAD_MAX_BYTES, BACKUP_READ_CHUNK_BYTES, BACKUP_LIST_MAX_PAGES_COUNT,
+  BACKUP_LIST_MAX_ENTRIES_COUNT, BACKUP_LIST_MAX_DEPTH_LEVELS, backupLimitError
+} from './limits.js';
 
 /** 临时文件后缀：downloads/list 必须忽略，否则恢复列表里会混进 .tmp 条目。 */
 const TEMP_SUFFIX = '.part';
@@ -121,13 +125,18 @@ export function createLocalTarget(entry = {}) {
         if (error.code === 'ENOENT') return out;
         throw error;
       }
-      const walk = async (cur) => {
-        let ents = [];
-        try { ents = await fsp.readdir(cur, { withFileTypes: true }); } catch (error) {
+      let pagesCount = 0;
+      let entriesCount = 0;
+      const walk = async (cur, depth = 0) => {
+        if (depth > BACKUP_LIST_MAX_DEPTH_LEVELS || ++pagesCount > BACKUP_LIST_MAX_PAGES_COUNT) throw backupLimitError();
+        let ents;
+        try { ents = await fsp.opendir(cur); } catch (error) {
           if (error.code === 'ENOENT') return;
           throw error;
         }
-        for (const e of ents) {
+        for await (const e of ents) {
+          if (++entriesCount > BACKUP_LIST_MAX_ENTRIES_COUNT) throw backupLimitError();
+          if (depth + 1 > BACKUP_LIST_MAX_DEPTH_LEVELS) throw backupLimitError();
           const abs = path.join(cur, e.name);
           // 共享目录中的联接不属于备份树；列表不能跟随它访问其他目录。
           if (e.isSymbolicLink()) continue;
@@ -135,7 +144,7 @@ export function createLocalTarget(entry = {}) {
             if (error.code === 'ENOENT' || error.code === PATH_ESCAPE_CODE) continue;
             throw error;
           }
-          if (e.isDirectory()) { await walk(abs); continue; }
+          if (e.isDirectory()) { await walk(abs, depth + 1); continue; }
           if (!e.isFile() || e.name.endsWith(TEMP_SUFFIX)) continue;
           let st = null;
           try { st = await fsp.stat(abs); } catch (error) {
@@ -180,7 +189,23 @@ export function createLocalTarget(entry = {}) {
     async get(key) {
       const dir = requireDir();
       const abs = resolveRealInside(anchorRoot(), resolveInside(dir, key));
-      return fsp.readFile(abs);
+      const file = await fsp.open(abs, 'r');
+      try {
+        const stat = await file.stat();
+        if (!stat.isFile()) throw new Error('备份目标不是文件');
+        if (stat.size > BACKUP_DOWNLOAD_MAX_BYTES) throw backupLimitError();
+        const chunks = [];
+        let bytes = 0;
+        while (true) {
+          // stat 之后文件仍可能增长，因此实际读取也必须受限。
+          const chunk = Buffer.alloc(Math.min(BACKUP_READ_CHUNK_BYTES, BACKUP_DOWNLOAD_MAX_BYTES - bytes + 1));
+          const { bytesRead } = await file.read(chunk);
+          if (!bytesRead) return Buffer.concat(chunks, bytes);
+          if (bytesRead > BACKUP_DOWNLOAD_MAX_BYTES - bytes) throw backupLimitError();
+          bytes += bytesRead;
+          chunks.push(chunk.subarray(0, bytesRead));
+        }
+      } finally { await file.close(); }
     },
 
     async remove(key) {

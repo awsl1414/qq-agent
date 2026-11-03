@@ -54,8 +54,10 @@ test('sha256: valid package reaches injected applyImport without direct data wri
   const result = await runRestore({ ...args, options: { hooks } }, { applyImport: async (dir, selection, actualHooks) => {
     called += 1;
     source = dir;
-    assert.equal(fs.existsSync(path.join(dir, 'memory', 'group_123', '42.json')), true);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'messages', 'group_123.json'))).messages.length, 2);
+    // applyImport 收到的是包根（config-fields/ 与 modules/ 也在这一层），
+    // 业务数据在它下面的 data/ 子目录。
+    assert.equal(fs.existsSync(path.join(dir, 'data', 'memory', 'group_123', '42.json')), true);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'data', 'messages', 'group_123.json'))).messages.length, 2);
     assert.deepEqual(selection.messages, { chatKeys: ['group:123'], strategy: 'merge' });
     assert.equal(selection.memory, true);
     assert.equal(actualHooks, hooks);
@@ -99,7 +101,8 @@ test('encrypted payload validates outer sha256 then decrypts through B2', async 
   let calls = 0;
   const result = await runRestore(args, { applyImport: async (dir) => {
     calls += 1;
-    assert.equal(fs.existsSync(path.join(dir, 'messages', 'group_123.json')), true);
+    // 包根：业务数据在 data/ 子目录下，与 config-fields/、modules/ 同级。
+    assert.equal(fs.existsSync(path.join(dir, 'data', 'messages', 'group_123.json')), true);
     return { ok: true, backupId: 'encrypted-id' };
   } });
   assert.equal(result.ok, true, result.error);

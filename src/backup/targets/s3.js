@@ -2,6 +2,11 @@ import { createHash, createHmac } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fetch } from 'undici';
 import { dispatcherFor } from '../../proxy-agent.js';
+import {
+  BACKUP_DOWNLOAD_MAX_BYTES, BACKUP_LIST_PAGE_MAX_BYTES, BACKUP_LIST_MAX_PAGES_COUNT,
+  BACKUP_LIST_MAX_ENTRIES_COUNT, BACKUP_LIST_MAX_DEPTH_LEVELS, BACKUP_LIMIT_ERROR_CODE,
+  backupLimitError, readBoundedResponse
+} from './limits.js';
 
 
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -68,7 +73,7 @@ export function buildS3Url(entry, key = '', query = {}) {
 }
 
 export function createS3Target(entry = {}) {
-  async function request(method, key = '', query = {}, body) {
+  async function request(method, key = '', query = {}, body, maxBytes = BACKUP_DOWNLOAD_MAX_BYTES) {
     // 凭据由 targets/index.js 的 createTarget 统一解封后以 secretAccessKey 传入。
     // 这里不再自己解密：两处都解会让"改了解密口径"变成要改两个地方。
     if (entry.__credentialError) throw new Error(entry.__credentialError);
@@ -81,9 +86,14 @@ export function createS3Target(entry = {}) {
       let response;
       try {
         response = await fetch(url, { method, headers, body, dispatcher: dispatcherFor(), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), redirect: 'manual' });
-        if (response.ok) return Buffer.from(await response.arrayBuffer());
+        if (response.ok) {
+          if (method === 'GET') return await readBoundedResponse(response, maxBytes);
+          await response.body?.cancel();
+          return Buffer.alloc(0);
+        }
         await response.body?.cancel();
-      } catch {
+      } catch (error) {
+        if (error.code === BACKUP_LIMIT_ERROR_CODE) throw error;
         // 网络中断和超时可能是外部瞬态故障；不传递底层错误，避免回显凭据。
         if (attempt === MAX_RETRIES) throw new Error('S3 请求失败或超时');
       }
@@ -95,13 +105,17 @@ export function createS3Target(entry = {}) {
     const result = [];
     const seen = new Set();
     let token = '';
+    let pagesCount = 0;
     do {
+      if (++pagesCount > BACKUP_LIST_MAX_PAGES_COUNT) throw backupLimitError();
       const query = { 'list-type': '2', prefix: String(entry.prefix || '') };
       if (token) query['continuation-token'] = token;
-      const xml = (await request('GET', '', query)).toString('utf8');
+      const xml = (await request('GET', '', query, undefined, BACKUP_LIST_PAGE_MAX_BYTES)).toString('utf8');
       if (!/<(?:[\w-]+:)?ListBucketResult(?:\s|>)/.test(xml)) throw new Error('S3 列表响应无效');
       for (const match of xml.matchAll(/<(?:[\w-]+:)?Contents(?:\s[^>]*)?>([\s\S]*?)<\/(?:[\w-]+:)?Contents>/g)) {
+        if (result.length >= BACKUP_LIST_MAX_ENTRIES_COUNT) throw backupLimitError();
         const key = tag(match[1], 'Key');
+        if (key.split('/').length > BACKUP_LIST_MAX_DEPTH_LEVELS) throw backupLimitError();
         const size = Number(tag(match[1], 'Size'));
         if (!key || !Number.isFinite(size) || size < 0) throw new Error('S3 列表响应无效');
         result.push({ key, size, mtimeMs: Date.parse(tag(match[1], 'LastModified')) || 0 });

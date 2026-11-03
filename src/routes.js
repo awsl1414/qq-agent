@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { getConfig, updateConfig, deepMerge as deepMergeConfig, DATA_DIR, ROOT } from './config.js';
+import { getConfig, updateConfig, loadConfig, setRuntimeConfig, deepMerge as deepMergeConfig, DATA_DIR, ROOT } from './config.js';
 // 从 wsUrl 取端口探测目标（host + port）。以前各处只取端口、主机写死 127.0.0.1，
 // 协议端在局域网另一台机器时状态永远是"端口未监听"。
 import { parseProbeTarget } from './protocol-endpoint.js';
@@ -43,6 +43,7 @@ import { applyImport, rollbackImport, listBackups } from './migrate.js';
 import * as backup from './backup/index.js';
 import { encryptCredential } from './backup/crypto.js';
 import { TARGET_TYPES } from './backup/targets/index.js';
+import { collect as collectBackupSources, listBackupCategories } from './backup/sources/index.js';
 
 import { listBundleOptions, exportBundle, inspectBundle, moduleZipOf, dataDirOf, discardBundle } from './bundle.js';
 import { SKILLS_DIR, PLUGINS_DIR, isBuiltinModuleDir } from './plugin-loader.js';
@@ -199,11 +200,28 @@ export function createRoutes(deps) {
   const backupHooks = {
     storeInvalidate: (key) => store?.invalidate(key),
     memoryInvalidate: (key) => memory?.invalidate(key),
+    configReload: () => { setRuntimeConfig(loadConfig()); emit('status', { configUpdated: true }); },
+    forgeImportZip: (input) => backupForge('forge.import-zip', input),
+    forgeGate: (input) => backupForge('forge.gate', input),
+    forgeDiscard: (input) => backupForge('forge.discard', input),
     rebuildChat: async (chatKey) => {
       const providers = skillManager.getCapabilityProviders('memory.rebuild', skillRuntimeContext());
       return providers.length ? providers[0].fn({ chatKey }) : null;
     }
   };
+  const backupForge = (capability, input) => {
+    const provider = skillManager.getCapabilityProviders(capability, skillRuntimeContext())[0];
+    if (!provider) throw new Error('扩展锻造台未就绪：' + capability);
+    return provider.fn(input);
+  };
+  const backupCategories = () => listBackupCategories().map((category) => {
+    const meta = { key: category.key, label: category.label, defaultOn: category.defaultOn !== false,
+      desc: category.key === 'configSafe' ? category.desc + '（不含 API Key 与账号凭据）' : category.desc };
+    try {
+      const { entries } = collectBackupSources([category.key]);
+      return { ...meta, files: entries.length, bytes: entries.reduce((sum, entry) => sum + entry.data.length, 0) };
+    } catch (error) { return { ...meta, bytes: null, error: String(error?.message ?? error) }; }
+  });
   const sanitizedConfig = (config) => ({ ...sanitizeConfig(config), backup: publicBackupConfig(config.backup) });
   return [
     // app.js 在路由分发前统一执行 authorize 和 originAllowed，与其他写接口相同。
@@ -216,7 +234,7 @@ export function createRoutes(deps) {
         return json(res, 200, { ok: true, config: publicBackupConfig(getConfig().backup) });
       } catch { return json(res, 400, { ok: false, error: '备份配置无效，保存失败' }); }
     } },
-    { method: 'GET', pattern: '/api/backup/targets', handler: async ({ res, json }) => json(res, 200, { ...backup.getStatus(), rollbacks: listBackups() }) },
+    { method: 'GET', pattern: '/api/backup/targets', handler: async ({ res, json }) => json(res, 200, { ...backup.getStatus(), categories: backupCategories(), rollbacks: listBackups() }) },
     { method: 'GET', pattern: '/api/backup/list', handler: async ({ res, json, url }) => {
       const targetId = url.searchParams.get('targetId');
       return json(res, 200, await backup.listBackups({ targetIds: targetId ? [targetId] : null }));
@@ -230,13 +248,13 @@ export function createRoutes(deps) {
           if (action === 'test') result = await backup.testTarget(String(body.targetId || ''));
           if (action === 'run') result = await backup.runBackup({ targetIds: body.targetIds });
           if (action === 'preview') result = await backup.restorePreview({ targetId: body.targetId, key: body.key });
-          if (action === 'restore') result = await backup.runRestore({ targetId: body.targetId, key: body.key, hooks: backupHooks });
+          if (action === 'restore') result = await backup.runRestore({ targetId: body.targetId, key: body.key, selection: body.selection, hooks: backupHooks });
           if (action === 'rollback') result = await rollbackImport(body.backupId, backupHooks);
           const targetErrors = (result.targets || []).filter((target) => !target.ok)
             .map((target) => `${target.id}：${target.error || '操作失败'}`).join('；');
           if (action === 'run' && result.ok) result = { ...result, partial: Boolean(targetErrors) };
           return json(res, result.ok ? 200 : 400, result.ok ? result : { ...result, error: result.error || result.message || targetErrors || '备份操作失败' });
-        } catch { return json(res, 400, { ok: false, error: '备份操作失败，请检查目标配置' }); }
+        } catch (error) { return json(res, 400, { ok: false, error: String(error?.message ?? error) }); }
       }
     })),
     // ── 系统自检（self-doctor 插件提供的 doctor.report 能力）────────────────

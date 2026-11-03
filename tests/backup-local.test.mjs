@@ -216,14 +216,16 @@ test('端到端：构建 → 本地目标 → 取回 → 解包回原结构', as
   assert.equal(restored.messages.length, 2);
 });
 
-test('文件名与 key：高精度排序且不覆盖，isBackupKey 兼容旧命名', () => {
+test('文件名与 key：高精度排序且不覆盖，isBackupKey 只认当前命名', () => {
   const date = new Date(2026, 10, 3, 3, 0);
   const { name, key } = archive.backupKeyFor(date);
   assert.match(name, /^backup-20261103-030000000-[a-f0-9]{8}\.qqab$/);
-  assert.ok(key > 'qq-agent/backup-20261103-0300.qqab');
+  assert.ok(key < archive.backupKeyFor(new Date(date.getTime() + 1)).key);
   assert.equal(key, `qq-agent/${name}`);
   assert.notEqual(archive.backupKeyFor(date).key, key);
-  assert.equal(archive.isBackupKey('qq-agent/backup-20261103-0300.qqab'), true);
+  assert.equal(archive.isBackupKey('qq-agent/backup-20260101-1200.qqab'), false);
+  assert.equal(archive.isBackupKey('qq-agent/我的备份.qqab'), false);
+  assert.equal(archive.isBackupKey('qq-agent/backup-20260101-120000123-abcdef01.qqab'), true);
   assert.equal(archive.isBackupKey('qq-agent/personal.qqab'), false);
   assert.equal(archive.isBackupKey('qq-agent/sub/backup-20261103-0300.qqab'), false);
   assert.equal(archive.isBackupKey(key), true);

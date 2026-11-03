@@ -10,6 +10,9 @@ const { createRoutes } = await import('../src/routes.js');
 const { getConfig } = await import('../src/config.js');
 const { decryptCredential } = await import('../src/backup/crypto.js');
 const { registerTarget } = await import('../src/backup/targets/index.js');
+const { buildZip } = await import('../src/zip-build.js');
+const { BACKUP_FORMAT, computePayloadSha256 } = await import('../src/backup/archive.js');
+const { skillManager } = await import('../src/skills/manager.js');
 const routes = createRoutes({ readBody: async (body) => body, emit() {}, sanitizeConfig: (config) => config });
 after(() => fs.rmSync(temp, { recursive: true, force: true }));
 
@@ -77,4 +80,75 @@ test('backup connection failures provide error text consumable by the shared api
   assert.equal(failed.status, 400);
   assert.equal(failed.data.ok, false);
   assert.match(failed.data.error, /目录/);
+});
+
+test('backup categories expose all 13 choices, default flags and actual collected sizes', async () => {
+  const pet = Buffer.alloc(4096, 1);
+  fs.mkdirSync(path.join(temp, 'desktop-pet'), { recursive: true });
+  fs.writeFileSync(path.join(temp, 'desktop-pet', 'model.bin'), pet);
+  const response = await request('GET', '/api/backup/targets');
+  assert.equal(response.status, 200);
+  const categories = response.data.categories;
+  assert.deepEqual(categories.map((item) => item.key).sort(), ['messages', 'memory', 'usage', 'reminders', 'stickers', 'persona', 'customPersonas', 'lists', 'configSafe', 'wallpaper', 'desktopPet', 'extensions', 'drafts'].sort());
+  for (const item of categories) {
+    assert.equal(item.defaultOn, item.key !== 'drafts', item.key);
+    assert.equal(typeof item.bytes, 'number', item.key);
+    assert.ok(item.bytes >= 0);
+  }
+  assert.equal(categories.find((item) => item.key === 'desktopPet').bytes, pet.length);
+  assert.match(categories.find((item) => item.key === 'configSafe').desc, /不含 API Key 与账号凭据/);
+});
+
+test('backup routes preserve per-target package keys when target categories differ', async () => {
+  fs.mkdirSync(path.join(temp, 'memory'), { recursive: true });
+  fs.writeFileSync(path.join(temp, 'memory', 'friend.json'), '{"impression":"friend"}');
+  registerTarget('route-multi', () => ({ async put() {}, async list() { return []; } }));
+  await request('POST', '/api/backup/config', { targets: [
+    { id: 'messages-only', type: 'route-multi', enabled: true, categories: ['messages'] },
+    { id: 'memory-only', type: 'route-multi', enabled: true, categories: ['memory'] }
+  ] });
+  const result = await request('POST', '/api/backup/run');
+  assert.equal(result.status, 200, JSON.stringify(result.data));
+  assert.equal(result.data.key, undefined);
+  assert.equal(result.data.keys.length, 2);
+  assert.equal(result.data.packages.length, 2);
+  assert.notEqual(result.data.targets[0].key, result.data.targets[1].key);
+  assert.ok(result.data.targets.every((target) => result.data.keys.includes(target.key)));
+});
+
+test('backup restore routes forward selection and forge hooks with the recorded draft id, reload config and allow rollback', async (t) => {
+  const entries = [
+    { name: 'config-fields/customPersonas.json', data: Buffer.from(JSON.stringify({ customPersonas: [{ id: 'restored-route-persona', name: 'route persona' }] })) },
+    { name: 'modules/plugins/route-demo/plugin.json', data: Buffer.from(JSON.stringify({ id: 'route-demo', entry: 'index.js' })) },
+    { name: 'modules/plugins/route-demo/index.js', data: Buffer.from('export default {};') }
+  ];
+  const manifest = { format: BACKUP_FORMAT, version: 1, encrypted: false, categories: [{ key: 'customPersonas' }, { key: 'extensions' }], sha256: computePayloadSha256(entries) };
+  const zip = buildZip([{ name: 'manifest.json', data: JSON.stringify(manifest) }, ...entries]);
+  registerTarget('route-restore', () => ({ async get() { return zip; } }));
+  await request('POST', '/api/backup/config', { targets: [{ id: 'restore', type: 'route-restore', enabled: true }] });
+  const imported = [];
+  const discarded = [];
+  t.mock.method(skillManager, 'getCapabilityProviders', (capability) => {
+    const handlers = {
+      'forge.import-zip': (input) => { imported.push(input); return { ok: true, draftId: input.draftId }; },
+      'forge.gate': ({ draftId }) => ({ ok: true, draftId }),
+      'forge.discard': ({ draftId }) => { discarded.push(draftId); return { ok: true }; }
+    };
+    return handlers[capability] ? [{ fn: handlers[capability] }] : [];
+  });
+  const input = { targetId: 'restore', key: 'route-backup.zip' };
+  const preview = await request('POST', '/api/backup/preview', input);
+  assert.equal(preview.status, 200, JSON.stringify(preview.data));
+  assert.equal(preview.data.authenticated, false);
+  assert.equal(preview.data.scan.modules.length, 1);
+  const restored = await request('POST', '/api/backup/restore', { ...input, selection: { customPersonas: true, modules: ['plugin:route-demo'] } });
+  assert.equal(restored.status, 200, JSON.stringify(restored.data));
+  assert.equal(imported.length, 1);
+  assert.match(imported[0].draftId, /^restore-/);
+  assert.equal(restored.data.report.modules[0].draftId, imported[0].draftId);
+  assert.ok(getConfig().customPersonas.some((persona) => persona.id === 'restored-route-persona'));
+  const rollback = await request('POST', '/api/backup/rollback', { backupId: restored.data.backupId });
+  assert.equal(rollback.status, 200, JSON.stringify(rollback.data));
+  assert.deepEqual(discarded, [imported[0].draftId]);
+  assert.ok(!getConfig().customPersonas.some((persona) => persona.id === 'restored-route-persona'));
 });

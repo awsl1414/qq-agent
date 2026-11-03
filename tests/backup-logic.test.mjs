@@ -57,7 +57,7 @@ test('unfinished history from a terminated process becomes failed on restart', (
 
 test('a running backup retains its configuration snapshot when settings change during upload', async () => {
   const prefix = path.join(goodDir, 'qq-agent');
-  for (const day of ['01', '02', '03']) fs.writeFileSync(path.join(prefix, `backup-202610${day}-0300.qqab`), 'old');
+  for (const day of ['01', '02', '03']) fs.writeFileSync(path.join(prefix, `backup-202610${day}-030000000-abcdef01.qqab`), 'old');
   fs.writeFileSync(path.join(prefix, 'personal.qqab'), 'user data');
   const before = fs.readdirSync(prefix).length;
   const cfg = getConfig().backup;

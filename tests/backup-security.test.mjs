@@ -125,13 +125,13 @@ test('local list returns empty only for ENOENT and propagates unreadable, offlin
   const dir = path.join(root, 'unreadable');
   fs.mkdirSync(dir);
   const target = createLocalTarget({ dir });
-  const original = fsp.readdir;
+  const original = fsp.opendir;
   try {
     for (const code of ['EACCES', 'EPERM', 'EIO']) {
-      fsp.readdir = async () => { throw Object.assign(new Error('audit injected directory failure'), { code }); };
+      fsp.opendir = async () => { throw Object.assign(new Error('audit injected directory failure'), { code }); };
       await assert.rejects(target.list(), { code });
     }
-  } finally { fsp.readdir = original; }
+  } finally { fsp.opendir = original; }
   const file = path.join(root, 'not-a-directory');
   fs.writeFileSync(file, 'x');
   await assert.rejects(createLocalTarget({ dir: file }).list(), { code: 'ENOTDIR' });

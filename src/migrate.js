@@ -16,6 +16,10 @@
 //   统计类       cost-guard.json（相加）、telemetry-totals.json（相加）、
 //                usage-daily.json（仅补缺：目标没有的"天"才导入）
 //   reminders.json / stickers.json 按 id 补缺，同 id 保留本机数据
+//   config-fields/ 只合并允许的配置字段，同键保留本机数据
+//   壁纸 / 桌宠  文件覆盖，状态同键保留本机数据
+//   drafts/       按草稿目录覆盖锻造台暂存区，不自动安装
+//   modules/      能力扫描后送锻造台暂存，安装仍需控制台人工确认
 //
 // 明确不搬的（搬了也是脏数据 / 风险太高）：
 //   memory-v2/    messages 的派生物（长时索引）。导入后按会话全量重建，
@@ -24,7 +28,7 @@
 //   sessions/     运行档案（纯历史记录，可再生价值低）。
 //   *-cache*.json / *.lock / window-state / telemetry.json / usage-today.json
 //                 缓存、运行态、本机状态。
-//   semantic-cards/ cross-turn/ plugin-data/  资产类。
+//   semantic-cards/ cross-turn/ plugin-data/  资产类（锻造台草稿除外）。
 //
 // 安全机制：
 //   1. 导入前把每个将被改动/覆盖的文件备份到 data/import-backups/<ts>/，
@@ -41,13 +45,36 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR } from './config.js';
+import { randomUUID } from 'node:crypto';
+import { CONFIG_FILE, DATA_DIR } from './config.js';
 import { logger } from './logger.js';
 import { atomicWriteJson, atomicWriteText } from './atomic-write.js';
+import { buildZip } from './zip-build.js';
 
 const REMINDERS_FILE = 'reminders.json';
 const STICKERS_FILE = 'stickers.json';
 const MERGE_CATEGORIES = ['reminders', 'stickers'];
+const CONFIG_FIELDS = {
+  persona: ['persona', 'personaByChat', 'personaUnified'],
+  customPersonas: ['customPersonas'],
+  lists: ['allow', 'deny', 'blocklist', 'globalBlocklist', 'communityExemptions'],
+  configSafe: ['tools', 'extensions', 'skills']
+};
+const UNSAFE_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+const SENSITIVE_SKILL_IDS = new Set(['account-pool']);
+const MODULE_KINDS = ['plugins', 'skills'];
+const MODULE_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
+// 与 forge.import-zip 的入站大小、条目数契约对齐，超限拒绝而非截断扩展。
+const MODULE_MAX_FILES = 600;
+const MODULE_MAX_BYTES = 12 * 1024 * 1024;
+const MODULE_MAX_DEPTH = 10;
+const FILE_RESTORE_CATEGORIES = {
+  wallpaper: {
+    paths: ['wallpaper-static', 'wallpaper-state.json', 'wallpaper-imports.json', 'ui'],
+    mergeFiles: ['wallpaper-state.json', 'wallpaper-imports.json']
+  },
+  desktopPet: { paths: ['desktop-pet'], mergeFiles: ['desktop-pet/state.json'] }
+};
 
 const MESSAGES_DIR = path.join(DATA_DIR, 'messages');
 const MEMORY_DIR = path.join(DATA_DIR, 'memory');
@@ -66,11 +93,116 @@ function readJson(file, fallback = null) {
   }
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** 兼容旧 data 目录入参；包根目录和 data 的同级前缀都交给同一恢复引擎。 */
+function sourcePaths(abs) {
+  const packaged = fs.existsSync(path.join(abs, 'data'))
+    || fs.existsSync(path.join(abs, 'config-fields')) || fs.existsSync(path.join(abs, 'modules'))
+    || fs.existsSync(path.join(abs, 'drafts'));
+  const root = packaged ? abs : path.basename(abs) === 'data' ? path.dirname(abs) : abs;
+  return { root, data: packaged ? path.join(abs, 'data') : abs };
+}
+
+function checkedSourcePath(root, ...parts) {
+  const file = path.resolve(root, ...parts);
+  const rel = path.relative(root, file);
+  if (path.isAbsolute(rel) || rel.split(path.sep).includes('..')) throw new Error('源路径越界');
+  let cursor = root;
+  for (const part of rel.split(path.sep).filter(Boolean)) {
+    cursor = path.join(cursor, part);
+    if (fs.lstatSync(cursor, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      throw new Error('恢复源不能包含符号链接或目录联接');
+    }
+  }
+  return file;
+}
+
+/** 只收普通文件；每一层都检查链接，避免恢复时读写到边界之外。 */
+function restoreFiles(root, relative) {
+  const file = checkedSourcePath(root, relative);
+  const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+  if (!stat) return [];
+  if (stat.isFile()) return [relative.replace(/\\/g, '/')];
+  if (!stat.isDirectory()) throw new Error('恢复路径包含非普通文件');
+  return fs.readdirSync(file).flatMap((name) => restoreFiles(root, path.join(relative, name)));
+}
+
+function removeEmptyParents(file, boundary) {
+  let dir = path.dirname(file);
+  while (dir !== boundary && fs.existsSync(dir) && fs.readdirSync(dir).length === 0) {
+    fs.rmdirSync(dir);
+    dir = path.dirname(dir);
+  }
+}
+
+function entryKey(value) {
+  if (isRecord(value) && Object.hasOwn(value, 'id')) return `id:${String(value.id).trim()}`;
+  return JSON.stringify(value);
+}
+
+/** 只补缺：已有标量（含 false、空串、null）保留；数组去重，对象递归按键合并。 */
+function fillMissing(target, source) {
+  if (Array.isArray(source)) {
+    if (target !== undefined && !Array.isArray(target)) return target;
+    const out = [...(target || [])];
+    const seen = new Set(out.map(entryKey));
+    for (const value of source) {
+      const key = entryKey(value);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(fillMissing(undefined, value));
+    }
+    return out;
+  }
+  if (isRecord(source)) {
+    if (target !== undefined && !isRecord(target)) return target;
+    const out = { ...(target || {}) };
+    for (const [key, value] of Object.entries(source)) {
+      if (UNSAFE_KEYS.has(key)) continue;
+      out[key] = fillMissing(Object.hasOwn(out, key) ? out[key] : undefined, value);
+    }
+    return out;
+  }
+  return target === undefined ? source : target;
+}
+
+function moduleZip(root, kind, name) {
+  const base = checkedSourcePath(root, 'modules', kind, name);
+  const entries = [];
+  let bytes = 0;
+  const walk = (dir, depth) => {
+    if (depth > MODULE_MAX_DEPTH) throw new Error('扩展嵌套过深');
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const file = checkedSourcePath(root, path.relative(root, path.join(dir, entry.name)));
+      if (entry.isDirectory()) { walk(file, depth + 1); continue; }
+      if (!entry.isFile()) throw new Error('扩展包含非普通文件');
+      if (entries.length >= MODULE_MAX_FILES || bytes + fs.statSync(file).size > MODULE_MAX_BYTES) {
+        throw new Error('扩展超过锻造台导入限额');
+      }
+      const data = fs.readFileSync(file);
+      bytes += data.length;
+      if (bytes > MODULE_MAX_BYTES) throw new Error('扩展超过锻造台导入限额');
+      entries.push({ name: path.relative(base, file).replace(/\\/g, '/'), data });
+    }
+  };
+  walk(base, 0);
+  const manifest = readJson(path.join(base, 'skill.json')) || readJson(path.join(base, 'plugin.json'));
+  if (!isRecord(manifest)) throw new Error('扩展缺少有效清单');
+  const entry = checkedSourcePath(base, String(manifest.entry || 'index.js'));
+  if (!fs.statSync(entry, { throwIfNoEntry: false })?.isFile()) throw new Error('扩展入口不存在');
+  const zip = buildZip(entries);
+  if (zip.length > MODULE_MAX_BYTES) throw new Error('扩展压缩包超过锻造台导入限额');
+  return { zip, base, manifest };
+}
+
 // 改走 src/atomic-write.js 的统一实现（原来是本文件自己写的一份）。
 // 保持原口径不变：字符串入参原样写、对象按缩进 1 序列化
 // （atomicWriteJson 会把字符串也 JSON 编码，那是另一种语义，所以这里分开走）。
 function atomicWrite(file, data) {
-  if (typeof data === 'string') atomicWriteText(file, data);
+  if (typeof data === 'string' || Buffer.isBuffer(data)) atomicWriteText(file, data);
   else atomicWriteJson(file, data, 1);
 }
 
@@ -124,18 +256,19 @@ function loadChatFile(file) {
 // ── 扫描（只读）──────────────────────────────────────────────────────────
 
 /**
- * 扫描源 data 目录，产出分类清单与差异预览。绝不写任何文件。
- * @param {string} sourceDir 另一实例的 data 目录
+ * 扫描源 data 目录或备份包根目录，产出分类清单与差异预览。绝不写任何文件。
+ * @param {string} sourceDir 另一实例的 data 目录或解包根目录
  */
 export function scanSource(sourceDir) {
   const src = String(sourceDir || '').trim();
   if (!src) return { ok: false, error: '请填写源 data 目录路径' };
-  const abs = path.resolve(src);
+  const sourceRoot = path.resolve(src);
   let st = null;
-  try { st = fs.statSync(abs); } catch { /* 不存在 */ }
+  try { st = fs.statSync(sourceRoot); } catch { /* 不存在 */ }
   if (!st || !st.isDirectory()) {
-    return { ok: false, error: `目录不存在或不是文件夹：${abs}` };
+    return { ok: false, error: `目录不存在或不是文件夹：${sourceRoot}` };
   }
+  const { root, data: abs } = sourcePaths(sourceRoot);
 
   // 自我导入守卫：源 == 本机 data 时，messages 靠 mid 去重还算安全，但统计类
   // 是"同键相加"：cost-guard / telemetry-totals 会自己加自己，导入一次用量
@@ -143,25 +276,25 @@ export function scanSource(sourceDir) {
   // 本机文件的备份"，回滚等于没回滚。这个模块的语义是"两个实例之间搬家"，
   // 所以这里直接拒绝。
   const selfDir = path.resolve(DATA_DIR);
-  if (abs === selfDir) {
+  if (abs === selfDir || sourceRoot === selfDir) {
     return { ok: false, error: `源目录就是当前实例的 data 目录（${selfDir}）。请选**另一个** QQ Agent 实例的 data —— 自我导入会让成本/调用统计翻倍。` };
   }
-  if (selfDir.startsWith(abs + path.sep)) {
+  if (selfDir.startsWith(sourceRoot + path.sep)) {
     return { ok: false, error: `源目录包含了当前实例的 data 目录（${selfDir}）。请直接指向另一个实例的 data 文件夹本身。` };
   }
 
   const result = {
     ok: true,
-    sourceDir: abs,
+    sourceDir: sourceRoot,
     messages: [],   // 每 chat：{ chatKey, source, target, diff }
     memory: { available: false, chats: [] },
     stats: [],
     excluded: [
       { name: 'memory-v2/', reason: 'messages 的派生索引，导入后自动按会话重建，不直接复制' },
-      { name: 'config.json', reason: '含身份字段（selfId/apiKey/provider），整份导入等于换魂；字段级合并放二期' },
+      { name: 'config.json', reason: '含身份字段（selfId/apiKey/provider），仅恢复 config-fields 中的允许字段，不导入整份配置' },
       { name: 'sessions/', reason: '运行档案（纯历史记录），一期不搬' },
       { name: '各缓存与运行态', reason: 'cache-warm-prefix / session-index-cache / price-feed / window-state / *.lock / telemetry / usage-today' },
-      { name: '资产类', reason: 'semantic-cards / cross-turn / plugin-data，二期再议' }
+      { name: '资产类', reason: 'semantic-cards / cross-turn / plugin-data（锻造台草稿除外），二期再议' }
     ]
   };
 
@@ -257,6 +390,24 @@ export function scanSource(sourceDir) {
     const list = valid ? entries.filter((entry) => entry && typeof entry === 'object') : [];
     result[category] = { available: valid, count: list.length, total: list.length };
     if (category === 'reminders') result[category].pending = list.filter((r) => r && !r.fired).length;
+  }
+  result.configFields = Object.fromEntries(Object.keys(CONFIG_FIELDS).map((key) => [key, {
+    available: fs.existsSync(path.join(root, 'config-fields', `${key}.json`))
+  }]));
+  for (const [category, { paths }] of Object.entries(FILE_RESTORE_CATEGORIES)) {
+    result[category] = { available: paths.some((rel) => fs.existsSync(path.join(abs, rel))) };
+  }
+  result.drafts = { available: fs.statSync(path.join(root, 'drafts'), { throwIfNoEntry: false })?.isDirectory() || false };
+  result.modules = [];
+  for (const kind of MODULE_KINDS) {
+    const base = path.join(root, 'modules', kind);
+    if (!fs.statSync(base, { throwIfNoEntry: false })?.isDirectory()) continue;
+    // 扫描只显示候选项；实际读文件仍须逐层拒绝符号链接。
+    for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+      if (entry.isDirectory() && MODULE_NAME_RE.test(entry.name)) {
+        result.modules.push({ key: `${kind.slice(0, -1)}:${entry.name}`, kind, dir: entry.name });
+      }
+    }
   }
   return result;
 }
@@ -608,12 +759,17 @@ let importInFlight = false;
 
 /**
  * 执行导入。
- * @param {string} sourceDir 源 data 目录
+ * @param {string} sourceDir 源 data 目录或解包根目录
  * @param {object} selection 用户勾选：
  *   { messages: { chatKeys: string[], strategy: 'merge'|'overwrite' },
- *     memory: boolean, reminders: boolean, stickers: boolean, stats: { costGuard, telemetryTotals, usageDaily } }
+ *     memory: boolean, reminders: boolean, stickers: boolean, stats: { costGuard, telemetryTotals, usageDaily },
+ *     persona?: boolean, customPersonas?: boolean, lists?: boolean, configSafe?: boolean,
+ *     wallpaper?: boolean, desktopPet?: boolean, drafts?: boolean,
+ *     extensions?: boolean, modules?: string[] }
  * @param {object} hooks 热生效回调（由 routes 层注入）：
- *   { remindersReload(), stickersReload(), storeInvalidate(chatKey), rebuildChat(chatKey) -> { mode, ... }|Promise }
+ *   { remindersReload(), stickersReload(), storeInvalidate(chatKey), rebuildChat(chatKey), configReload(),
+ *     forgeImportZip({zipBase64, zipName, draftId}), forgeGate({draftId}), forgeDiscard({draftId}) }
+ *   forge 回调对应同名能力；这里只暂存，不签票、不安装，后续必须由控制台人工确认。
  */
 export async function applyImport(sourceDir, selection = {}, hooks = {}) {
   // 重入闸：导入是"备份 → 覆盖 → 回填缓存"的多步长流程，并发两次会把
@@ -629,18 +785,19 @@ export async function applyImport(sourceDir, selection = {}, hooks = {}) {
 
 async function applyImportInner(sourceDir, selection = {}, hooks = {}) {
   const src = String(sourceDir || '').trim();
-  const abs = path.resolve(src);
-  if (!fs.statSync(abs, { throwIfNoEntry: false })?.isDirectory()) {
-    return { ok: false, error: `目录不存在：${abs}` };
+  const sourceRoot = path.resolve(src);
+  if (!fs.statSync(sourceRoot, { throwIfNoEntry: false })?.isDirectory()) {
+    return { ok: false, error: `目录不存在：${sourceRoot}` };
   }
-  const scan = scanSource(abs);
+  const scan = scanSource(sourceRoot);
   if (!scan.ok) return scan;
+  const { root, data: abs } = sourcePaths(sourceRoot);
 
   const { id: backupId, dir: backupDir } = newBackupDir();
   const manifest = {
     id: backupId,
     at: Date.now(),
-    sourceDir: abs,
+    sourceDir: sourceRoot,
     actions: [],
     version: 1
   };
@@ -839,6 +996,163 @@ async function applyImportInner(sourceDir, selection = {}, hooks = {}) {
     }
   }
 
+  // 多个配置类别共写一个文件，快照必须是整次导入之前的原始字节。
+  let configBackup;
+  let configTouched = false;
+  for (const [category, fields] of Object.entries(CONFIG_FIELDS)) {
+    if (!selection[category]) continue;
+    const detail = { ok: false };
+    (report.configFields ||= {})[category] = detail;
+    try {
+      const sourceFile = checkedSourcePath(root, 'config-fields', `${category}.json`);
+      if (!fs.existsSync(sourceFile)) { Object.assign(detail, { ok: true, skipped: true }); continue; }
+      const sourceConfig = readJson(sourceFile);
+      if (!isRecord(sourceConfig)) throw new Error('源配置字段文件损坏或结构无效');
+      checkedSourcePath(DATA_DIR, path.basename(CONFIG_FILE));
+      const targetConfig = readJson(CONFIG_FILE);
+      if (fs.existsSync(CONFIG_FILE) && !isRecord(targetConfig)) throw new Error('本机配置损坏或结构无效，拒绝覆盖');
+      const patch = {};
+      for (const field of fields) {
+        if (!Object.hasOwn(sourceConfig, field)) continue;
+        let value = sourceConfig[field];
+        if (field === 'customPersonas') {
+          if (!Array.isArray(value)) throw new Error('自定义人设必须是数组');
+          value = value.filter((entry) => isRecord(entry) && entry.id != null && String(entry.id).trim());
+        }
+        if (category === 'configSafe' && field === 'skills' && isRecord(value)) {
+          value = Object.fromEntries(Object.entries(value).filter(([id]) => !SENSITIVE_SKILL_IDS.has(id)));
+        }
+        patch[field] = value;
+      }
+      const nextConfig = fillMissing(targetConfig || {}, patch);
+      if (JSON.stringify(nextConfig) !== JSON.stringify(targetConfig || {})) {
+        configBackup ||= backupFile(backupDir, CONFIG_FILE);
+        recordAction({ type: 'config-fields', category, target: path.basename(CONFIG_FILE), backup: configBackup.backup || null });
+        atomicWrite(CONFIG_FILE, nextConfig);
+        configTouched = true;
+      }
+      detail.ok = true;
+    } catch (error) {
+      detail.error = String(error?.message ?? error);
+      report.ok = false;
+    }
+  }
+  if (configTouched) {
+    try { await hooks.configReload?.(); }
+    catch (error) { report.ok = false; report.configReloadError = String(error?.message ?? error); }
+  }
+
+  // 壁纸、桌宠按文件覆盖；只有状态 JSON 沿用配置类的本机优先补缺。
+  for (const [category, { paths, mergeFiles }] of Object.entries(FILE_RESTORE_CATEGORIES)) {
+    if (!selection[category]) continue;
+    const detail = report[category] = { ok: false, files: 0 };
+    try {
+      checkedSourcePath(root, path.relative(root, abs));
+      const files = paths.flatMap((rel) => restoreFiles(abs, rel));
+      for (const rel of files) {
+        const sourceFile = checkedSourcePath(abs, rel);
+        const targetFile = checkedSourcePath(DATA_DIR, rel);
+        let data = fs.readFileSync(sourceFile);
+        if (mergeFiles.includes(rel)) {
+          const sourceState = readJson(sourceFile);
+          const targetState = readJson(targetFile);
+          if (!isRecord(sourceState)) throw new Error('源状态文件损坏或结构无效');
+          if (fs.existsSync(targetFile) && !isRecord(targetState)) throw new Error('本机状态文件损坏或结构无效，拒绝覆盖');
+          data = fillMissing(targetState || {}, sourceState);
+        }
+        const bk = backupFile(backupDir, targetFile);
+        recordAction({ type: category, target: rel, backup: bk.backup || null });
+        atomicWrite(targetFile, data);
+        detail.files += 1;
+      }
+      detail.ok = true;
+      if (!files.length) detail.skipped = true;
+    } catch (error) {
+      detail.error = String(error?.message ?? error);
+      report.ok = false;
+    }
+  }
+
+  // 草稿只落暂存区；同名目录整体替换，未出现在包中的本机草稿保留。
+  if (selection.drafts) {
+    const detail = report.drafts = { ok: false, files: 0, drafts: 0 };
+    try {
+      const sourceBase = checkedSourcePath(root, 'drafts');
+      if (fs.existsSync(sourceBase)) {
+        const staging = path.join('plugin-data', 'extension-forge', 'staging');
+        for (const entry of fs.readdirSync(sourceBase, { withFileTypes: true })) {
+          checkedSourcePath(root, 'drafts', entry.name);
+          if (!entry.isDirectory()) throw new Error('草稿必须按目录存放');
+          const sourceRel = path.join('drafts', entry.name);
+          const targetRel = path.join(staging, entry.name);
+          const targetDir = checkedSourcePath(DATA_DIR, targetRel);
+          if (fs.existsSync(targetDir) && !fs.statSync(targetDir).isDirectory()) throw new Error('本机草稿路径不是目录');
+          const files = restoreFiles(root, sourceRel);
+          const incoming = new Set(files.map((rel) => path.relative(sourceRel, rel).replace(/\\/g, '/')));
+          const existing = restoreFiles(DATA_DIR, targetRel);
+          // 删除旧目录中不属于这份草稿的文件前，同样逐文件快照并持久化动作。
+          for (const rel of existing) {
+            if (incoming.has(path.relative(targetRel, rel).replace(/\\/g, '/'))) continue;
+            const targetFile = checkedSourcePath(DATA_DIR, rel);
+            const bk = backupFile(backupDir, targetFile);
+            recordAction({ type: 'drafts', target: rel, backup: bk.backup || null });
+            fs.rmSync(targetFile);
+            removeEmptyParents(targetFile, targetDir);
+          }
+          for (const rel of files) {
+            const targetFile = checkedSourcePath(DATA_DIR, targetRel, path.relative(sourceRel, rel));
+            const data = fs.readFileSync(checkedSourcePath(root, rel));
+            const bk = backupFile(backupDir, targetFile);
+            recordAction({ type: 'drafts', target: path.relative(DATA_DIR, targetFile).replace(/\\/g, '/'), backup: bk.backup || null });
+            atomicWrite(targetFile, data);
+            detail.files += 1;
+          }
+          detail.drafts += 1;
+        }
+      }
+      detail.ok = true;
+      if (!detail.drafts) detail.skipped = true;
+    } catch (error) {
+      detail.error = String(error?.message ?? error);
+      report.ok = false;
+    }
+  }
+
+  const moduleKeys = new Set(Array.isArray(selection.modules) ? selection.modules.map(String) : []);
+  if (selection.extensions || moduleKeys.size) {
+    report.modules = [];
+    for (const item of scan.modules) {
+      if (!selection.extensions && !moduleKeys.has(item.key)) continue;
+      const detail = { key: item.key, ok: false, needConfirm: true };
+      report.modules.push(detail);
+      try {
+        if (![hooks.forgeImportZip, hooks.forgeGate, hooks.forgeDiscard].every((fn) => typeof fn === 'function')) {
+          throw new Error('扩展锻造台未就绪（需要导入、闸门和丢弃草稿能力）');
+        }
+        const { zip, base, manifest: moduleManifest } = moduleZip(root, item.kind, item.dir);
+        const checkTrust = hooks.checkPluginTrust || (await import('./plugin-loader.js')).checkPluginTrust;
+        // 扫整个扩展目录，避免 entry 放在子目录时遗漏其同级代码。
+        const trust = await checkTrust(String(moduleManifest.id || item.dir), path.join(base, 'index.js'));
+        if (!trust?.ok) throw new Error(trust?.reason || '扩展未通过能力扫描');
+        const draftId = `restore-${randomUUID()}`;
+        const draftPath = path.join(DATA_DIR, 'plugin-data', 'extension-forge', 'staging', draftId);
+        if (fs.existsSync(draftPath)) throw new Error('暂存草稿已存在，拒绝覆盖');
+        // 先记录确定的草稿 id，连导入抛错留下的半成品也能回滚。
+        recordAction({ type: 'modules', key: item.key, draftId });
+        detail.draftId = draftId;
+        const out = await hooks.forgeImportZip({ draftId, zipBase64: zip.toString('base64'), zipName: `${item.key.replace(':', '-')}.zip` });
+        if (!out?.ok) throw new Error(out?.error || '导入暂存区失败');
+        if (out.draftId !== draftId) throw new Error('锻造台未使用请求的草稿 id');
+        detail.gate = await hooks.forgeGate({ draftId });
+        if (!detail.gate?.ok) throw new Error(detail.gate?.error || '扩展未通过锻造台闸门');
+        detail.ok = true;
+      } catch (error) {
+        detail.error = String(error?.message ?? error);
+        report.ok = false;
+      }
+    }
+  }
+
   report.ok = report.ok && report.messages.every((item) => item.ok)
     && report.memory?.ok !== false && Object.values(report.stats).every((item) => item.ok);
   if (!report.ok) report.error = '部分数据导入失败，已完成的修改可使用 backupId 回滚';
@@ -878,10 +1192,22 @@ async function rollbackImportInner(backupId, hooks = {}) {
   const memChats = new Set();
   let remindersTouched = false;
   let stickersTouched = false;
+  let configTouched = false;
   let restored = 0, removed = 0, failed = 0;
 
-  for (const a of manifest.actions) {
+  // 草稿目录替换可能把文件变成子目录，先撤新增路径再还原旧文件。
+  // 只倒序撤销草稿，其他类别保留原有的回滚与 hook 调用顺序。
+  const actions = manifest.actions.filter((a) => a.type !== 'drafts');
+  actions.push(...manifest.actions.filter((a) => a.type === 'drafts').reverse());
+  for (const a of actions) {
     try {
+      if (a.type === 'modules') {
+        if (typeof hooks.forgeDiscard !== 'function') throw new Error('扩展锻造台丢弃草稿能力未就绪');
+        const out = await hooks.forgeDiscard({ draftId: a.draftId });
+        if (!out?.ok) throw new Error(out?.error || '删除暂存草稿失败');
+        removed += 1;
+        continue;
+      }
       const target = path.join(DATA_DIR, a.target);
       if (a.backup) {
         const src = path.join(dir, a.backup);
@@ -905,9 +1231,15 @@ async function rollbackImportInner(backupId, hooks = {}) {
             } catch { /* ignore */ }
           }
         }
+        if (Object.hasOwn(FILE_RESTORE_CATEGORIES, a.type) || a.type === 'drafts') {
+          const boundary = a.type === 'drafts'
+            ? path.join(DATA_DIR, 'plugin-data', 'extension-forge', 'staging') : DATA_DIR;
+          removeEmptyParents(target, boundary);
+        }
       }
       if (a.type === 'stickers') stickersTouched = true;
       if (a.type === 'reminders') remindersTouched = true;
+      if (a.type === 'config-fields') configTouched = true;
       if (a.type === 'messages' && a.chatKey) msgChats.add(a.chatKey);
       if (a.type === 'memory' && a.chatKey) memChats.add(a.chatKey);
     } catch {
@@ -938,6 +1270,12 @@ async function rollbackImportInner(backupId, hooks = {}) {
     try { await reloadStickers(hooks); } catch (error) {
       failed += 1;
       logger.warn('[migrate] 表情重新加载失败:', error?.message ?? error);
+    }
+  }
+  if (configTouched) {
+    try { await hooks.configReload?.(); } catch (error) {
+      failed += 1;
+      logger.warn('[migrate] 配置重新加载失败:', error?.message ?? error);
     }
   }
   const touchedChats = [...new Set([...msgChats, ...memChats])];

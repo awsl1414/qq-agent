@@ -44,8 +44,9 @@ test('包含密钥强制加密：外层仅清单与密文，内层含 config 而
   let calls = 0;
   const restored = await runRestore({ targetId: 'test', key: result.key }, { applyImport: async (source) => {
     calls++;
-    assert.equal(fs.readFileSync(path.join(source, 'config.json'), 'utf8'), secret);
-    assert.ok(fs.existsSync(path.join(source, 'messages', 'group_123.json')));
+    // 包根：业务数据在 data/ 子目录下，与 config-fields/、modules/ 同级。
+    assert.equal(fs.readFileSync(path.join(source, 'data', 'config.json'), 'utf8'), secret);
+    assert.ok(fs.existsSync(path.join(source, 'data', 'messages', 'group_123.json')));
     return { ok: true };
   } });
   assert.equal(restored.ok, true, restored.error);

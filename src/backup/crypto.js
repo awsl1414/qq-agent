@@ -1,8 +1,10 @@
+// 清单认证是同一主密钥的第三个用途，必须独立派生以隔离用途，
+// 避免清单认证密钥泄露时同时暴露凭据或载荷加密密钥。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from 'node:crypto';
+import { randomBytes, scryptSync, createCipheriv, createDecipheriv, createHmac, timingSafeEqual } from 'node:crypto';
 import { DATA_DIR } from '../config.js';
 import { atomicWriteText } from '../atomic-write.js';
 
@@ -17,6 +19,7 @@ const ALGORITHM = 'aes-256-gcm';
 const CREDENTIAL_PREFIX = 'qqac:v1:';
 const PAYLOAD_HEADER = Buffer.from('QQABENC1');
 const CREDENTIAL_CONTEXT = Buffer.from(CREDENTIAL_PREFIX);
+const MANIFEST_CONTEXT = 'qqab-manifest-v2';
 export const BACKUP_SALT_FILE = path.join(DATA_DIR, 'backup-crypto.salt');
 
 let machineIdentity;
@@ -93,6 +96,31 @@ function masterKey() {
     cachedSalt = salt;
   }
   return cachedKey;
+}
+
+function canonicalManifest(manifest) {
+  const stable = value => {
+    if (Array.isArray(value)) return value.map(stable);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])]));
+    }
+    return value;
+  };
+  const { hmac, ...fields } = manifest;
+  return JSON.stringify(stable(fields));
+}
+
+/** 认证整个规范化清单（除签名自身），摘要将载荷也绑定到本机实例。 */
+export function signManifest(manifest) {
+  const key = createHmac('sha256', masterKey()).update(MANIFEST_CONTEXT).digest();
+  try {
+    return createHmac('sha256', key).update(canonicalManifest(manifest)).digest('hex');
+  } finally { key.fill(0); }
+}
+
+export function verifyManifest(manifest) {
+  if (typeof manifest?.hmac !== 'string' || !/^[a-f0-9]{64}$/.test(manifest.hmac)) return false;
+  return timingSafeEqual(Buffer.from(manifest.hmac, 'hex'), Buffer.from(signManifest(manifest), 'hex'));
 }
 
 function encrypt(buffer, context) {
