@@ -16,13 +16,17 @@
 //
 // 随包 ffmpeg 已下线：79MB 的 runtime/ffmpeg.exe 不再随安装包分发，改为设置页
 // 「媒体工具」按需下载到 DATA_DIR/runtime/ffmpeg/bin/。旧安装升级后若 runtime/
-// 里还有那份，启动时的迁移项 retire-bundled-ffmpeg（src/upgrade.js）会把它搬进
-// data/runtime/legacy-backup/；搬走之后解析链的第 ④ 项自然落空。
+// 里还有那份，启动时的迁移项 retire-bundled-ffmpeg（src/upgrade.js）会把它搬到
+// **同一个正式位置**（managedBinDir）。搬走之后解析链的第 ④ 项落空。
 //
-// 第 ④ 项本身刻意**保留**：迁移是"失败不阻塞启动"的，安装目录只读、文件被占用
-// （用户正开着某个用它的程序）时那次迁移会失败并在下次启动重试。这种机器上
-// 旧 ffmpeg 仍是唯一能用的那份，删掉候选等于让这些用户的功能在这段窗口里直接
-// 中断。保留的代价是一次 stat —— 迁移成功后路径为空，探测直接跳过。
+// 第 ④ 项本身刻意**保留**，它覆盖三种情况：
+//   · 迁移失败 —— 安装目录只读、文件被占用（用户正开着某个用它的程序）、跨盘
+//     放弃复制，那一轮迁移不会记完成，下次启动重试；期间旧 ffmpeg 是这些机器上
+//     唯一能用的那份，删掉候选等于让功能直接中断；
+//   · 迁移还没跑 —— 首次启动的迁移发生在 reloadSkills 之前，而解析链可能在
+//     迁移完成前就被调用（例如启动即预热媒体工具）；
+//   · 用户手动把一份 ffmpeg 放进 `<app>/runtime/`（免安装版常见）。
+// 迁移成功后这个目录被清空，候选是一次不存在的 stat，探测直接跳过。
 //
 // ffprobe 一律从 ffmpeg 同目录推导：以前 gif-to-video / video-reader 直接 spawn
 // 裸名 'ffprobe'，ffmpeg 在非 PATH 目录（随包 / 下载 / 手填）时，明明同目录就
@@ -194,9 +198,15 @@ export function installGuideFor(platform = process.platform, arch = process.arch
   return null;
 }
 
-/** 下载落地目录（`data/runtime/ffmpeg/bin/`）。下载安装只往这里写。 */
-export function managedBinDir() {
-  return path.join(DATA_DIR, 'runtime', 'ffmpeg', 'bin');
+/**
+ * 下载落地目录（`data/runtime/ffmpeg/bin/`）。下载安装只往这里写。
+ *
+ * `dataDir` 只为迁移（src/upgrade.js）注入临时目录用 —— 迁移要把旧随包 ffmpeg
+ * 搬到"解析链认的那个位置"，两边必须共用同一个函数，否则落点一漂移，搬完仍然
+ * 找不到。
+ */
+export function managedBinDir(dataDir = DATA_DIR) {
+  return path.join(dataDir, 'runtime', 'ffmpeg', 'bin');
 }
 
 /** 旧随包目录（`<app>/runtime/`）。仅作兼容候选，不再往里写。 */

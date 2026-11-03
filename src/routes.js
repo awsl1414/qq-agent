@@ -2376,58 +2376,6 @@ export function createRoutes(deps) {
       }
     },
     {
-      // 旧版本残留（跨版本迁移搬进来的备份、还没搬走的旧随包 ffmpeg）。
-      // 只**检测**，不动磁盘：删除是用户在第 ② 条路由里逐个确认后才发生。
-      // 与 /api/skills/cleanup 同一套范式 —— 检测与删除分两个接口，
-      // 前端拿到的路径在删除时后端会再校验一遍，不信任任何回传值。
-      method: 'GET', pattern: '/api/maintenance/legacy',
-      handler: async ({ res, json }) => {
-        try {
-          const { detectLegacyResidue } = await import('./upgrade.js');
-          const r = detectLegacyResidue({ appRoot: ROOT, dataDir: DATA_DIR });
-          const bytes = r.items.reduce((sum, x) => sum + (x.sizeBytes || 0), 0);
-          return json(res, 200, {
-            ok: true,
-            items: r.items,
-            totalBytes: bytes,
-            dataDir: DATA_DIR,
-            // 前端只用来给人看（"这些都在数据目录里"），不用于任何判断
-            roots: r.roots
-          });
-        } catch (error) {
-          return json(res, 500, { ok: false, error: `读取旧版本残留失败：${String(error?.message ?? error)}` });
-        }
-      }
-    },
-    {
-      // 用户确认后删除旧版本残留。body: { paths: [绝对路径...] }
-      // 路径安全校验全部在 upgrade.js 的 removeLegacyResidue 里（越界 / 根目录 /
-      // 符号链接 / 非备份区），这里只负责鉴权与响应，不做也不复述那些判断。
-      // 删除不可恢复，所以要求控制台凭据：外部网页冒用 127.0.0.1 点不掉文件。
-      method: 'POST', pattern: '/api/maintenance/legacy/remove',
-      handler: async ({ req, res, json }) => {
-        if (!keyEndpointAllowed(req)) return json(res, 403, { ok: false, error: '请求来源不被信任，已拒绝删除。' });
-        try {
-          const body = await bodyOf(req);
-          const paths = Array.isArray(body?.paths) ? body.paths.map(String).filter(Boolean) : [];
-          if (!paths.length) return json(res, 400, { ok: false, error: '缺少 paths' });
-          const { removeLegacyResidue } = await import('./upgrade.js');
-          const r = removeLegacyResidue({
-            paths,
-            appRoot: ROOT,
-            dataDir: DATA_DIR,
-            log: (msg) => log('info', msg)
-          });
-          if (!r.removed.length && r.skipped.length) {
-            return json(res, 400, { ok: false, error: r.skipped[0].reason, skipped: r.skipped });
-          }
-          return json(res, 200, { ok: true, ...r });
-        } catch (error) {
-          return json(res, 500, { ok: false, error: `删除失败：${String(error?.message ?? error)}` });
-        }
-      }
-    },
-    {
       method: 'POST', pattern: '/api/reset-data',
       handler: async ({ res, json }) => {
         try {
