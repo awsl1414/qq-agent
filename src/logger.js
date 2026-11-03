@@ -201,8 +201,8 @@ class Logger {
             const keep = 16 * 1024 * 1024;
             const fd = fs.openSync(fp, 'r');
             const buf = Buffer.alloc(keep);
-            fs.readSync(fd, buf, 0, keep, st.size - keep);
-            fs.closeSync(fd);
+            try { fs.readSync(fd, buf, 0, keep, st.size - keep); }
+            finally { fs.closeSync(fd); }
             const head = `（日志异常膨胀，已截断：原 ${(st.size / 1024 / 1024 / 1024).toFixed(2)}GB，保留尾部 16MB）\n`;
             fs.writeFileSync(fp, head + buf.toString('utf8'), 'utf8');
           }

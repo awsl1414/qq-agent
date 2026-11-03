@@ -198,7 +198,7 @@ export async function publishModule({ kind, id, displayName, description, token,
     body: form,
     signal: AbortSignal.timeout(120000)
   });
-  const data = await res.json().catch(() => ({}));
+  const data = await res.json();
   if (!res.ok) throw new Error(data?.error || `发布失败：HTTP ${res.status}`);
   return data;
 }

@@ -155,7 +155,7 @@ export async function deepSeekSearch(query) {
     const text = await res.text().catch(() => '');
     throw new Error(`DeepSeek 搜索 HTTP ${res.status}：${text.slice(0, 300)}`);
   }
-  const data = await res.json().catch(() => { throw new Error('DeepSeek 搜索返回了无法解析的 JSON'); });
+  const data = await res.json().catch((error) => { if (error instanceof SyntaxError) throw new Error('DeepSeek 搜索返回了无法解析的 JSON'); throw error; });
   const outputText = String(data?.output_text ?? '').trim();
   if (!outputText) {
     // 兼容不同字段位置
@@ -201,7 +201,7 @@ export async function zhipuSearch(query) {
     const text = await res.text().catch(() => '');
     throw new Error(`智谱搜索 HTTP ${res.status}：${text.slice(0, 300)}`);
   }
-  const data = await res.json().catch(() => { throw new Error('智谱搜索返回了无法解析的 JSON'); });
+  const data = await res.json().catch((error) => { if (error instanceof SyntaxError) throw new Error('智谱搜索返回了无法解析的 JSON'); throw error; });
   const arr = Array.isArray(data?.search_result) ? data.search_result : [];
   const results = arr
     .filter((r) => r?.link || r?.url)
@@ -236,7 +236,7 @@ export async function bochaSearch(query) {
     const text = await res.text().catch(() => '');
     throw new Error(`博查搜索 HTTP ${res.status}：${text.slice(0, 300)}`);
   }
-  const data = await res.json().catch(() => { throw new Error('博查搜索返回了无法解析的 JSON'); });
+  const data = await res.json().catch((error) => { if (error instanceof SyntaxError) throw new Error('博查搜索返回了无法解析的 JSON'); throw error; });
   if (data?.code && Number(data.code) !== 200) {
     throw new Error(`博查搜索 API 错误（code ${data.code}）：${data.message || data.msg || '未知'}`);
   }
@@ -278,7 +278,7 @@ export async function baiduSearch(query) {
     const text = await res.text().catch(() => '');
     throw new Error(`百度搜索 HTTP ${res.status}：${text.slice(0, 300)}`);
   }
-  const data = await res.json().catch(() => { throw new Error('百度搜索返回了无法解析的 JSON'); });
+  const data = await res.json().catch((error) => { if (error instanceof SyntaxError) throw new Error('百度搜索返回了无法解析的 JSON'); throw error; });
   if (data?.error_code && Number(data.error_code) !== 0) {
     throw new Error(`百度搜索 API 错误（code ${data.error_code}）：${data.error_msg || data.message || '未知'}`);
   }
@@ -314,7 +314,7 @@ export async function metasoSearch(query) {
     const text = await res.text().catch(() => '');
     throw new Error(`秘塔搜索 HTTP ${res.status}：${text.slice(0, 300)}`);
   }
-  const data = await res.json().catch(() => { throw new Error('秘塔搜索返回了无法解析的 JSON'); });
+  const data = await res.json().catch((error) => { if (error instanceof SyntaxError) throw new Error('秘塔搜索返回了无法解析的 JSON'); throw error; });
   const arr = Array.isArray(data?.results) ? data.results
     : Array.isArray(data?.data) ? data.data
     : Array.isArray(data?.sources) ? data.sources
@@ -390,7 +390,7 @@ export async function customSearch(query, providerId = null) {
     const text = await res.text().catch(() => '');
     throw new Error(`自定义搜索 HTTP ${res.status}：${text.slice(0, 300)}`);
   }
-  const data = await res.json().catch(() => { throw new Error('自定义搜索返回了无法解析的 JSON'); });
+  const data = await res.json().catch((error) => { if (error instanceof SyntaxError) throw new Error('自定义搜索返回了无法解析的 JSON'); throw error; });
 
   // 兜住各家字段名
   const arr = Array.isArray(data?.results) ? data.results

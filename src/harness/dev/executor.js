@@ -20,7 +20,7 @@ import { getConfig } from '../../config.js';
 import { chatCompletionWithRetry, resolveApiKey } from '../../llm.js';
 import { toOpenAiTools, executeTool } from '../../tools.js';
 import { safeFetch } from '../../safe-fetch.js';
-import { marketFetch, MARKET_API_BASE } from '../../market.js';
+import { marketFetch, downloadModuleZip } from '../../market.js';
 import { unzipToModuleDir } from '../../zip-install.js';
 
 const MAX_FILE_BYTES = 1024 * 1024;        // 单文件 1MB
@@ -360,7 +360,6 @@ export function shouldSendNotice(round, lastAtMs, nowMs, gapMs) {
 //   · 第三方还要过准入闸（含 fs/网络的会被拦下等信任），体验也不顺。
 //   落沙箱 → 模型先读先改 → 采用时再把（改过的）文件写进 plugins/ 并重算基线。
 const MARKET_FETCH_TIMEOUT_MS = 20000;
-const MARKET_MAX_ZIP_BYTES = 8 * 1024 * 1024;   // 与后端 MAX_UPLOAD 对齐
 
 /**
  * 广场条目按关键词排序（纯函数，便于测试）。
@@ -719,12 +718,7 @@ export function buildDevTools(projectRoot, workDir) {
           const code = String(it.installCode || '').trim();
           if (!code) return { content: `错误：「${want}」当前没有可下载的安装口令（可能还在审核中）。`, isError: true };
 
-          const res = await fetch(`${MARKET_API_BASE}/install/${encodeURIComponent(code.toUpperCase())}/download`, {
-            signal: AbortSignal.timeout(120000)
-          });
-          if (!res.ok) return { content: `错误：下载失败 HTTP ${res.status}`, isError: true };
-          const buf = Buffer.from(await res.arrayBuffer());
-          if (buf.length > MARKET_MAX_ZIP_BYTES) return { content: '错误：安装包超过 8MB 上限', isError: true };
+          const { buffer: buf } = await downloadModuleZip({ code });
 
           const type = String(it.type || '').toLowerCase() === 'plugin' ? 'plugin' : 'skill';
           const pulledRoot = path.join(workDir, 'pulled');

@@ -1099,7 +1099,7 @@ export async function listModels() {
     throw new Error(`获取模型列表失败：HTTP ${res.status} ${res.statusText || ''}\n`
       + `请求地址：${url}${text ? `\n服务端返回：${previewBody(text)}` : ''}${hint}`);
   }
-  const raw = await res.text().catch(() => '');
+  const raw = await res.text();
   let data;
   try {
     data = JSON.parse(raw);

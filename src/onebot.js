@@ -382,7 +382,7 @@ export class OneBotClient {
         : '';
       throw new Error(`OneBot ${action} HTTP ${res.status}${hint}`);
     }
-    const body = await res.json().catch(() => ({}));
+    const body = await res.json();
     if (body.status !== 'ok' && body.retcode !== 0) {
       // retcode / wording 必须挂到错误对象上，不能只塞进 message 字符串。
       // 上层要按 retcode 分流（例如 get_forward_msg 的 retcode=100 = 协议端拿不到

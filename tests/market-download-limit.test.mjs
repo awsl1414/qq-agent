@@ -39,3 +39,24 @@ test('市场下载正常大小的 ZIP 保留原字节并完成结构校验', asy
   const result = await downloadModuleZip({ code: 'test' });
   assert.deepEqual(result.buffer, zip);
 });
+
+test('开发模式拉取市场扩展也在读取时限制大小并取消流', async (t) => {
+  const { buildDevTools } = await import('../src/harness/dev/executor.js');
+  let reads = 0, cancelled = false;
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    if (String(url).includes('/download')) return new Response(new ReadableStream({
+      pull(controller) {
+        if (++reads <= 12) controller.enqueue(new Uint8Array(1024 * 1024));
+        else controller.close();
+      }, cancel() { cancelled = true; }
+    }, { highWaterMark: 0 }));
+    return Response.json({ items: [{ id: 'sample', installCode: 'SAMPLE', type: 'skill' }] });
+  });
+  const { defs } = buildDevTools(temp, path.join(temp, 'work'));
+  const result = await defs.find((d) => d.id === 'dev_market_pull').execute({}, { id: 'sample' });
+  assert.equal(result.isError, true);
+  assert.match(result.content, /8MB/);
+  assert.equal(cancelled, true);
+  assert.ok(reads <= 9);
+  assert.equal(fs.existsSync(path.join(temp, 'work', 'pulled')), false);
+});

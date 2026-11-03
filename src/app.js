@@ -1152,7 +1152,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         sender,
         store,
         log,
-        sendSegments: (k, id2, segs) => onebot.sendSegments(k, id2, segs),
+        sendSegments: sendHookSegments,
         // opts 可选透传（如 { dedupe: false }），给"进度提示"这类本就该重复的内容用。
         // 不传时走默认去重。
         send: (messages, opts) => sender.sendTextBatch(`${kind}:${id}`, Array.isArray(messages) ? messages : [String(messages)], opts || {})
@@ -1409,14 +1409,18 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     // ctx 必须带齐 onebot/sender/store/log/sendSegments：runHook 原样透传 ctx，
     // 缺任何一项都会让 anti-recall 的 sendSegmentsSafe 三级回退落空（ctx.onebot.call
     // 抛 TypeError 被 catch 吞掉），撤回时机器人毫无反应。见 CORE-PATCH.md 的契约。
-    // 段发送用 onebot.sendSegments，SendQueue 没有同名方法（只有 sendMedia /
-    // sendTextBatch）。
+    // 段发送通过 SendQueue，准入、限频、去重与留档口径一致。
     try {
       skillManager.runHook('onRecall', {
         event, chatKey, mid, onebot, sender, store, log,
-        sendSegments: (kind, id2, segs) => onebot.sendSegments(kind, id2, segs)
+        sendSegments: sendHookSegments
       }).catch(() => {});
     } catch { /* ignore */ }
+  }
+
+  async function sendHookSegments(kind, id, segments) {
+    const label = await segmentsToText(segments, { includeReply: false });
+    return sender.sendMedia(`${kind}:${id}`, segments, { label, dedupeKey: JSON.stringify(segments) });
   }
 
   // ── HTTP API ──
@@ -1662,7 +1666,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   // 声明式路由表（src/routes.js）：把所有依赖一次性注入。
   // 路由 handler 通过闭包取用这些依赖，handleHttp 只负责匹配分发。
   const apiRoutes = createRoutes({
-    store, memory, sessions, onebot, orchestrator,
+    store, memory, sessions, onebot, orchestrator, sender,
     emit, log,
     localVersion, compareSemver,
     sanitizeConfig, keyEndpointAllowed, sanitizeProvider,
