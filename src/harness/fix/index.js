@@ -32,7 +32,7 @@ import {
   stagingDir, sandboxDir, backupDir, recordFile,
   readRecord, writeRecord, writeVerify, readVerify, listRecords, deleteRecord, pruneRecords,
   resolveTarget, stagedPath, backupPath, commit, rollback, classify,
-  writeJsonAtomic, diffStat, simpleDiff, sha1
+  writeJsonAtomic, diffStat, simpleDiff, sha1, SNAPSHOT_PHASE, pendingCommit
 } from './core.js';
 import { runProtocolGate, runVerifyPlan, VERIFIERS, VERIFIER_IDS } from './checks.js';
 import { buildProposePrompt, parseProposal, applyHunks } from './prompt.js';
@@ -79,6 +79,12 @@ function nowEnabled() {
 function guardEnabled() {
   if (!nowEnabled()) return { ok: false, available: true, enabled: false, error: '「自动修复」未启用（自检 → 自动修复 页可当场开启）' };
   return null;
+}
+
+function guardPendingCommit(rec) {
+  return pendingCommit(rec)
+    ? { ok: false, error: '提交中断，可回滚或重试；完成恢复前不能修改暂存内容、验证或丢弃工单' }
+    : null;
 }
 
 // ── 相关文件收集（给提案 prompt 用）────────────────────────────────────────
@@ -186,6 +192,7 @@ function previewAll(id, rec) {
 function summarize(rec) {
   return {
     id: rec.id, createdAt: rec.createdAt, updatedAt: rec.updatedAt, status: rec.status,
+    recovery: pendingCommit(rec) ? '提交中断，可回滚或重试' : null,
     question: rec.question || '', target: rec.target || {},
     rootCause: rec.proposal?.rootCause || '',
     paths: (rec.proposal?.changes || []).map((c) => `${c.scope === 'data' ? 'data:' : ''}${c.path}`),
@@ -273,7 +280,11 @@ export function setup(api) {
   log(`已启动（自动修复 ${isEnabled ? '开启' : '关闭'}；数据目录 ${root}）；` +
       `可改范围：plugins/ skills/${cfg().allowCoreFiles ? ' + src/ ui/ electron/（核心）' : '（核心默认关闭）'}`);
 
-  // 启动时按保留策略清一次（只清未落地记录；committed 保留以保住回滚能力）
+  // writing 清单就是恢复标记；启动时报告中断，保留原状态供重试，禁止清理。
+  for (const rec of listRecords(root).records) {
+    if (pendingCommit(rec)) log(`工单 ${rec.id} 提交中断，可回滚或重试`);
+  }
+  // 启动时只清理未落地且没有未完成事务的记录。
   try {
     const days = Math.max(0, Number(cfg().auditKeepDays) || 0);
     const maxRec = Math.max(0, Number(cfg().auditMaxRecords) || 0);
@@ -404,6 +415,7 @@ export const providers = {
     const g = guardEnabled(); if (g) return g;
     const rec = readRecord(root, fixId);
     if (!rec) return { ok: false, error: '工单不存在' };
+    const pending = guardPendingCommit(rec); if (pending) return pending;
     // 空提案没有任何可应用的内容：明确拒绝，别让它在 apply 之后变成一个"空的暂存区工单"。
     if (rec.noChange === true || !(rec.proposal?.changes || []).length) {
       return { ok: false, noChange: true, error: '本次提案没有任何改动（判定为「无需代码修复」）—— 无需应用，直接丢弃这条即可。' };
@@ -455,6 +467,7 @@ export const providers = {
   'fix.gate': ({ fixId } = {}) => {
     const rec = readRecord(root, fixId);
     if (!rec) return { ok: false, error: '工单不存在' };
+    const pending = guardPendingCommit(rec); if (pending) return pending;
     rec.protocol = runProtocolGate(root, appRoot, dataRoot, rec);
     writeRecord(root, fixId, rec);
     return { ok: true, protocol: rec.protocol };
@@ -465,6 +478,7 @@ export const providers = {
     const g = guardEnabled(); if (g) return g;
     const rec = readRecord(root, fixId);
     if (!rec) return { ok: false, error: '工单不存在' };
+    const pending = guardPendingCommit(rec); if (pending) return pending;
     if (!Array.isArray(rec.proposal?.changes) || !rec.proposal.changes.length) {
       rec.status = 'verified';
       writeRecord(root, fixId, rec);
@@ -571,11 +585,7 @@ export const providers = {
     if (!out.ok) return out;
     // 落地动到内置模块的话，core 里已同步重算过基线（见 core.js refreshTouchedBuiltins）
     for (const b of (out.baseline || [])) log(`已重算内置基线：${b.dir}（${b.files} 个文件）`);
-    rec.snapshot = { files: out.files, at: Date.now() };
-    rec.status = 'committed';
-    rec.committedAt = Date.now();
-    rec.decision = { ...(rec.decision || {}), verdict: 'accept', decidedAt: Date.now() };
-    writeRecord(root, fixId, rec);
+    // core 已将 committed 阶段、工单状态与人工决断作为同一条记录持久化。
     return { ok: true, fixId, files: out.files, coreChanged: out.files.some((f) => f.level === 'L1'), needsRestart: out.files.some((f) => f.level === 'L1') };
   },
 
@@ -588,6 +598,7 @@ export const providers = {
     if (!out.ok) return out;
     for (const b of (out.baseline || [])) log(`已重算内置基线：${b.dir}（${b.files} 个文件）`);
     rec.status = 'rolled-back';
+    rec.snapshot.phase = SNAPSHOT_PHASE.ROLLED_BACK;
     rec.rolledBackAt = Date.now();
     // 回滚 = 改动没留在磁盘上。工单不能就此作废：换票退回待批准，
     // 模型可以按新的诊断再改一版、重新走一次人工批准（旧快照与验证轮次都保留）。
@@ -600,6 +611,7 @@ export const providers = {
   'fix.discard': ({ fixId, reason = '' } = {}) => {
     const rec = readRecord(root, fixId);
     if (!rec) return { ok: false, error: '工单不存在' };
+    const pending = guardPendingCommit(rec); if (pending) return pending;
     if (rec.status === 'committed') return { ok: false, error: '已落地的工单不能丢弃，请用「回滚」' };
     rec.status = 'discarded';
     rec.decision = { ...(rec.decision || {}), verdict: 'reject', reason: String(reason).slice(0, 1000) || '（未填写理由）', decidedAt: Date.now() };

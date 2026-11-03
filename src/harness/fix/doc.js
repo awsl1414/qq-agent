@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { deflateRawSync } from 'node:zlib';
-import { readVerify, simpleDiff, readJsonSafe } from './core.js';
+import { readVerify, simpleDiff, readJsonSafe, SNAPSHOT_PHASE } from './core.js';
 
 // ── 证据包 ────────────────────────────────────────────────────────────────
 
@@ -60,6 +60,7 @@ export function packToMarkdown(pack, narrative = null) {
   L.push('');
   L.push(`- 生成时间：${t(Date.now())}`);
   L.push(`- 状态：${statusLabel(pack.status)}`);
+  if (pack.snapshot?.phase === SNAPSHOT_PHASE.WRITING) L.push('- 提交中断，可回滚或重试（原始快照已持久化）');
   L.push(`- 目标：${pack.target?.file || '—'}${pack.target?.line ? ':' + pack.target.line : ''}  ${pack.target?.ruleId || ''}`);
   L.push(`- 触发问题：${pack.question || '—'}`);
   if (pack.approval?.approvedAt) L.push(`- 人工批准于：${t(pack.approval.approvedAt)}`);

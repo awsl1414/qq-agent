@@ -26,6 +26,12 @@ import { refreshBuiltinEntry } from '../../plugin-loader.js';
 // ── 允许写入的后缀 ────────────────────────────────────────────────────────
 export const ALLOWED_EXT = /\.(js|mjs|cjs|json|md|txt|css|html|yml|yaml)$/i;
 
+export const SNAPSHOT_PHASE = Object.freeze({ WRITING: 'writing', COMMITTED: 'committed', ROLLED_BACK: 'rolled-back' });
+
+export function pendingCommit(rec) {
+  return rec?.snapshot?.phase === SNAPSHOT_PHASE.WRITING;
+}
+
 /**
  * L0「元部件」：一票否决，模型不得修改。
  *
@@ -187,7 +193,7 @@ export function readJsonSafe(f) {
 export function writeJsonAtomic(f, obj) {
   ensureDir(path.dirname(f));
   const tmp = `${f}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 1), 'utf8');
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, 1), { encoding: 'utf8', flush: true });
   fs.renameSync(tmp, f);
 }
 
@@ -225,6 +231,7 @@ export function listRecords(root) {
 export function deleteRecord(root, id, { deleteBackup = false } = {}) {
   const rec = readRecord(root, id);
   if (!rec) return { ok: false, error: '工单不存在' };
+  if (pendingCommit(rec)) return { ok: false, error: '提交中断，可回滚或重试；完成恢复前不能删除工单' };
   if (rec.status === 'committed' && !deleteBackup) {
     // 允许删审计、保留快照：只删 json，把"仍有快照"这件事写进删除账本
   }
@@ -247,7 +254,7 @@ export function deleteRecord(root, id, { deleteBackup = false } = {}) {
 
 /**
  * 按条件清理（dryRun 先给预览）。
- * 只自动清「未落地」的记录；committed 记录不自动删（快照还在，回滚能力要保住）。
+ * 只自动清「未落地」且没有 writing 事务的记录，保住落地或中断后的回滚索引。
  */
 export function pruneRecords(root, { before = 0, status = '', maxRecords = 0, dryRun = false } = {}) {
   const { records } = listRecords(root);
@@ -255,21 +262,21 @@ export function pruneRecords(root, { before = 0, status = '', maxRecords = 0, dr
   // ① 按时间
   if (before > 0) {
     for (const r of records) {
-      if (r.status === 'committed') continue;
+      if (r.status === 'committed' || pendingCommit(r)) continue;
       if ((r.createdAt || 0) < before) doomed.push(r);
     }
   }
   // ② 按状态
   if (status) {
     for (const r of records) {
-      if (r.status === 'committed') continue;
+      if (r.status === 'committed' || pendingCommit(r)) continue;
       if (r.status === status && !doomed.includes(r)) doomed.push(r);
     }
   }
   // ③ 按条数（最旧的未落地记录优先）
   if (maxRecords > 0 && records.length > maxRecords) {
     const overflow = records.length - maxRecords;
-    const pool = records.filter((r) => r.status !== 'committed' && !doomed.includes(r))
+    const pool = records.filter((r) => r.status !== 'committed' && !pendingCommit(r) && !doomed.includes(r))
       .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
     for (let i = 0; i < overflow && i < pool.length; i++) doomed.push(pool[i]);
   }
@@ -342,56 +349,132 @@ function refreshTouchedBuiltins(paths, appRoot) {
 
 // ── 快照 / 落地 / 回滚 ───────────────────────────────────────────────────
 
+/** 快照源的同一安全边界用于重试和回滚，不能只信工单里的相对路径。 */
+function snapshotSource(root, id, f) {
+  if (f.isNew) return null;
+  if (typeof f.backupRel !== 'string' || !f.backupRel) throw new Error(`快照缺失：${f.path}`);
+  const source = path.resolve(root, f.backupRel);
+  const relative = path.relative(path.resolve(backupDir(root, id)), source);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error('快照源越出本工单备份目录');
+  }
+  let cursor = path.resolve(root);
+  for (const part of path.relative(cursor, source).split(path.sep)) {
+    cursor = path.join(cursor, part);
+    if (fs.lstatSync(cursor).isSymbolicLink()) throw new Error('快照源不能包含符号链接或目录联接');
+  }
+  if (!fs.statSync(source).isFile()) throw new Error(`快照不是文件：${f.backupRel}`);
+  return source;
+}
+
+/** 同目录替换：进程死在 copy 中也只损坏临时文件，真实目标始终是完整旧版或新版。 */
+function replaceFile(source, target, id) {
+  ensureDir(path.dirname(target));
+  // 隐藏文件名使崩溃残留不进入扩展的文件扫描与基线。
+  const tmp = path.join(path.dirname(target), `.${path.basename(target)}.fix-${id}-${crypto.randomBytes(6).toString('hex')}.tmp`);
+  try {
+    fs.copyFileSync(source, tmp, fs.constants.COPYFILE_EXCL);
+    // Windows 的 FlushFileBuffers 要求可写句柄。
+    const fd = fs.openSync(tmp, 'r+');
+    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    fs.renameSync(tmp, target);
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
 /**
- * 落地：**先快照，再写真实文件**。
- * 顺序不能反：反了的话崩溃窗口会留下"改了一半且无法回滚"的状态。
- * 返回 { ok, files:[{scope,path,backupRel,hash,isNew}], error? }。
+ * 先持久化不可覆盖的备份与 writing 清单，再替换真实文件，最后重算基线并结单。
+ * writing 重试只接受原版或本事务新版；rolled-back 可重新审批同一组目标的新版本。
+ * committed 与工单状态一起原子保存，崩溃后只需根据 writing 重试或回滚。
  */
 export function commit(root, id, appRoot, dataRoot, rec) {
   const changes = rec?.proposal?.changes || [];
   if (!changes.length) return { ok: false, error: '没有改动可落地' };
+  if (typeof id !== 'string' || id !== sanitizeId(id)) return { ok: false, error: '非法工单 id' };
+  const previous = rec.snapshot;
+  const reuse = !!previous?.files?.length;
+  const resuming = pendingCommit(rec);
+  if (reuse && !resuming && previous.phase !== SNAPSHOT_PHASE.ROLLED_BACK) {
+    return { ok: false, error: '已有落地快照，请先回滚，不能覆盖原始快照' };
+  }
   const files = [];
-  // ① 全部快照先落盘
-  for (const c of changes) {
-    const r = resolveTarget(root, appRoot, dataRoot, c);
-    if (!r.ok) return { ok: false, error: `快照前解析失败：${r.error}` };
-    const st = stagedPath(root, id, c);
-    if (!fs.existsSync(st)) return { ok: false, error: `暂存区缺少文件：${c.path}（请先 apply）` };
-    const exists = fs.existsSync(r.abs);
-    const backupRel = backupPath(root, id, c);
-    try {
-      if (exists) {
-        ensureDir(path.dirname(backupRel));
-        const buf = fs.readFileSync(r.abs);
-        fs.writeFileSync(backupRel, buf);
-        const fd = fs.openSync(backupRel, 'r');
-        try { fs.fsyncSync(fd); } catch { /* 某些平台不支持，忽略 */ }
-        fs.closeSync(fd);
+  const plans = [];
+  try {
+    if (resuming && !reuse) throw new Error('提交清单为空，不能恢复');
+    if (reuse && previous.files.length !== changes.length) throw new Error('目标清单与原始快照不符，请创建新工单');
+    const targets = new Set();
+    for (const c of changes) {
+      const r = resolveTarget(root, appRoot, dataRoot, c);
+      if (!r.ok) throw new Error(r.error);
+      const key = process.platform === 'win32' ? r.abs.toLowerCase() : r.abs;
+      if (targets.has(key)) throw new Error(`重复目标：${c.path}`);
+      targets.add(key);
+      const st = stagedPath(root, id, c);
+      const staged = fs.readFileSync(st);
+      const stagedHash = sha1(staged.toString('utf8'));
+      const current = fs.existsSync(r.abs) ? fs.readFileSync(r.abs) : null;
+      if (!reuse && current === null && fs.existsSync(backupPath(root, id, c))) {
+        throw new Error(`已有快照但原文件已不存在：${c.path}，不能当作新增文件重新提交`);
       }
-    } catch (e) {
-      return { ok: false, error: `快照失败：${c.path} —— ${e.message}` };
+      let f;
+      if (reuse) {
+        const saved = previous.files.find((x) => x.scope === r.scope && x.path === r.rel);
+        if (!saved) throw new Error(`目标清单与原始快照不符：${c.path}，请创建新工单`);
+        const source = snapshotSource(root, id, saved);
+        const original = source ? fs.readFileSync(source) : null;
+        if (original && sha1(original.toString('utf8')) !== saved.hash) throw new Error(`原始快照内容已改变：${c.path}`);
+        if (resuming && stagedHash !== saved.stagedHash) throw new Error(`暂存内容与提交清单不符：${c.path}，请先回滚`);
+        const isOriginal = original === null ? current === null : current?.equals(original);
+        if (!isOriginal && !(resuming && current?.equals(staged))) {
+          throw new Error(`目标内容与快照或本次提交不符：${c.path}，拒绝覆盖外部改动`);
+        }
+        f = { ...saved, stagedHash };
+      } else {
+        f = {
+          scope: r.scope, path: r.rel, level: r.level,
+          backupRel: current === null ? null : path.relative(root, backupPath(root, id, c)).replace(/\\/g, '/'),
+          hash: current === null ? null : sha1(current.toString('utf8')),
+          isNew: current === null, stagedHash
+        };
+      }
+      files.push(f);
+      plans.push({ r, st, current, staged, f });
     }
-    files.push({
-      scope: r.scope, path: r.rel, level: r.level,
-      backupRel: exists ? path.relative(root, backupRel).replace(/\\/g, '/') : null,
-      hash: exists ? sha1(fs.readFileSync(r.abs, 'utf8')) : null,
-      isNew: !exists
-    });
+    if (!reuse) {
+      for (const { current, f } of plans) {
+        if (f.isNew) continue;
+        const backup = path.join(root, f.backupRel);
+        ensureDir(path.dirname(backup));
+        // 准备阶段崩溃可能留下没有清单的备份；只能核对复用，绝不覆盖。
+        if (fs.existsSync(backup)) {
+          const source = snapshotSource(root, id, f);
+          if (!fs.readFileSync(source).equals(current)) throw new Error(`已有快照与原文件不符：${f.path}`);
+        } else {
+          fs.writeFileSync(backup, current, { flag: 'wx', flush: true });
+        }
+      }
+    }
+    rec.snapshot = { files, at: previous?.at ?? Date.now(), phase: SNAPSHOT_PHASE.WRITING };
+    writeRecord(root, id, rec);
+  } catch (e) {
+    return { ok: false, error: `提交准备失败：${e.message}` };
   }
-  // ② 快照齐了才写真实文件
-  for (let i = 0; i < changes.length; i++) {
-    const r = resolveTarget(root, appRoot, dataRoot, changes[i]);
-    if (!r.ok) return { ok: false, error: r.error };
-    const st = stagedPath(root, id, changes[i]);
+  for (const { r, st, current, staged } of plans) {
     try {
-      ensureDir(path.dirname(r.abs));
-      fs.copyFileSync(st, r.abs);
+      if (!current?.equals(staged)) replaceFile(st, r.abs, id);
     } catch (e) {
-      return { ok: false, error: `写盘失败：${changes[i].path} —— ${e.message}（快照已留，可回滚）` };
+      return { ok: false, error: `写盘失败：${r.rel} —— ${e.message}（提交中断，原始快照已持久化，可回滚或重试）` };
     }
   }
-  // ③ 改动落在内置模块目录里 → 即时重算基线指纹（见文件头 import 处的注释）。
+  // 只有所有目标完成替换后才能刷新基线；结单前崩溃时重试会再次刷新。
   const baseline = refreshTouchedBuiltins(files.map((f) => f.path), appRoot);
+  rec.snapshot.phase = SNAPSHOT_PHASE.COMMITTED;
+  rec.status = 'committed';
+  rec.committedAt = Date.now();
+  rec.decision = { ...(rec.decision || {}), verdict: 'accept', decidedAt: Date.now() };
+  try { writeRecord(root, id, rec); }
+  catch (e) { return { ok: false, error: `提交结单失败：${e.message}（磁盘上的 writing 清单可用于回滚或重试）` }; }
   return { ok: true, files, baseline };
 }
 
@@ -402,25 +485,11 @@ export function rollback(root, id, appRoot, dataRoot, rec) {
   if (typeof id !== 'string' || id !== sanitizeId(id)) return { ok: false, error: '非法工单 id' };
   const plans = [];
   try {
-    const boundary = path.resolve(backupDir(root, id));
     for (const f of snap) {
       const r = resolveTarget(root, appRoot, dataRoot, { scope: f.scope, path: f.path });
       if (!r.ok) throw new Error(r.error);
-      let source = null;
-      if (!f.isNew) {
-        if (typeof f.backupRel !== 'string' || !f.backupRel) throw new Error(`快照缺失：${f.path}`);
-        source = path.resolve(root, f.backupRel);
-        const relative = path.relative(boundary, source);
-        if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-          throw new Error('快照源越出本工单备份目录');
-        }
-        let cursor = path.resolve(root);
-        for (const part of path.relative(cursor, source).split(path.sep)) {
-          cursor = path.join(cursor, part);
-          if (fs.lstatSync(cursor).isSymbolicLink()) throw new Error('快照源不能包含符号链接或目录联接');
-        }
-        if (!fs.statSync(source).isFile()) throw new Error(`快照不是文件：${f.backupRel}`);
-      }
+      const source = snapshotSource(root, id, f);
+      if (source && f.hash && sha1(fs.readFileSync(source, 'utf8')) !== f.hash) throw new Error(`原始快照内容已改变：${f.path}`);
       plans.push({ f, r, source });
     }
   } catch (error) { return { ok: false, error: `回滚预检失败：${error.message}` }; }
@@ -432,8 +501,7 @@ export function rollback(root, id, appRoot, dataRoot, rec) {
       continue;
     }
     try {
-      ensureDir(path.dirname(r.abs));
-      fs.copyFileSync(source, r.abs);
+      replaceFile(source, r.abs, id);
       restored.push(f.path);
     } catch (e) {
       return { ok: false, error: `回滚失败：${f.path} —— ${e.message}` };

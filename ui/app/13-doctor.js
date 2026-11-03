@@ -1904,6 +1904,17 @@ function renderFixActions(rec, detail) {
   const maxRerun = f.limits?.maxReruns ?? 3;
   const reruns = rec.decision?.reruns || 0;
 
+  if (rec.snapshot?.phase === 'writing') {
+    return `<div class="fix-sec">
+      <div class="fix-sec-h">提交中断，可回滚或重试</div>
+      <div class="fix-note is-warn">部分文件可能已写入。原始快照已保留，重试会继续完成本次改动。</div>
+      <div class="fix-actions">
+        <button class="btn btn-primary btn-small" id="fix-commit-btn"${f.busy ? ' disabled' : ''}>${f.busy === 'commit' ? '落地中…' : '重试落地'}</button>
+        <button class="btn btn-small" id="fix-rollback-btn"${f.busy ? ' disabled' : ''}>${f.busy === 'rollback' ? '回滚中…' : '回滚到改动前'}</button>
+      </div>
+    </div>`;
+  }
+
   if (st === 'applied' || st === 'failed') {
     const blocked = (rec.protocol?.violations || []).some((v) => v.level === 'block');
     return `<div class="fix-sec">
@@ -2243,7 +2254,12 @@ async function runFixCommit() {
     const d = await api('/api/fix/commit', {
       method: 'POST', body: JSON.stringify({ fixId: f.selected }), timeoutMs: 60000
     });
-    if (!d.ok) { f.error = d.error || '落地失败'; return; }   // 失败即返回：错误不能被列表刷新吞掉
+    if (!d.ok) {
+      await loadFixList({ force: true });
+      await loadFixDetail(f.selected);
+      f.error = d.error || '落地失败';
+      return;
+    }
     if (d.needsRestart) f.rerunHint = '含核心代码改动，需要重启应用才生效。';
     await loadFixList({ force: true });
     await loadFixDetail(f.selected);
