@@ -7,60 +7,49 @@ paths:
 
 # 前端规范
 
-`ui/` 是零框架原生实现。样式集中在 `ui/style.css`，设计令牌定义在 `:root` / `[data-theme='dark']` / `[data-theme='light']`。
+## 1. 实际运行环境
 
-## 运行时基线
+`ui/` 为原生 HTML / CSS / JS，不使用前端框架。控制台既用于 Electron，也由 `pnpm run server` 提供给浏览器；桌宠等独立窗口另有 Electron 专属能力。
 
-`electron` 45 对应 **Chromium 156 / Node 24.22.1**（查自 `releases.electronjs.org` 的版本表）。不需要为旧浏览器加垫片。
+- 桌面运行时版本以 `package.json` 和锁文件为准，不在规则中固定 Chromium / Node 的对应版本。
+- 通用控制台改动同时考虑桌面与 headless 访问；Electron 专属能力遵守现有桥接与可用性判断。
+- 新增 Web 特性核对 MDN Browser Compatibility Data 与 Baseline；通用控制台默认采用 Baseline Widely available 的能力，并验证 Electron 与当前主流浏览器。仅在 Electron 独立窗口使用的能力按其运行时核实，不据此提高通用控制台的要求。
+- 复用下述原生实现与公共封装；遇到旧写法时按对应职责统一改进，不并存两套实现。新增框架、预处理器或构建步骤属于技术栈调整，按通用规则第 4.2 节处理。
 
-`ui/` 由 Electron 直接加载，不存在跨浏览器兼容问题。独立窗口的 `ui/widget.html` 同样只在应用内打开。
+## 2. 脚本加载契约
 
-## 特性采用标准
+- Node 模块写法见通用规则第 4.2 节；浏览器脚本以 HTML 中的实际声明为准，不能因 `package.json` 的 `type: module` 就把普通脚本当作 ESM。
+- `ui/index.html` 通过 `defer` 按序加载 `ui/app/*.js` 普通脚本，跨脚本共享顶层绑定；这些文件不能直接添加 `import` / `export`。
+- `ui/app.js` 是 ESM 桥，将所需 `/vendor/*.js` 导出挂到 `window`；其他页面和入口按各自 `<script>` 声明处理。
+- 新增或删除渲染脚本时，检查 `ui/index.html` 的引用、执行依赖，以及 `ui/app.js` 和文件头说明；涉及桥接时同步修改桥，不因脚本数量变化而添加空改动。
 
-以 [Baseline](https://web-platform-dx.github.io/web-features/) 为准，不用"最新"这种判断。当前可用：
+### 2.1 DOM 与请求接口
 
-| 特性 | Baseline 状态 | 项目使用 |
-|---|---|---|
-| `color-mix()` | Widely available | 166 处 |
-| `:has()` | Widely available | 5 处 |
-| CSS 嵌套 | Widely available | 未使用 |
-| `@layer` | Widely available | 未使用 |
-| `@container` | Widely available | 未使用 |
-| `oklch()` | Widely available | 未使用 |
-| `light-dark()` | **Newly available** | 未使用，慎用 |
-| `<dialog>` / Popover API | Widely available / **Newly available** | 未使用 |
+- 控制台业务请求复用 `ui/app/00-core.js` 的 `api()`，沿用认证、错误文案与超时参数；启动探活、流式响应等不同契约使用其已有专用路径，不为普通业务请求另建 `fetch` 包装。
+- 纯文本写入用 `textContent`；HTML 模板中的外部文本用现有 `esc()` 转义。URL 单独校验协议和目标，HTML 转义不能代替 URL 校验。事件用 `addEventListener`，不新增内联事件属性。
 
-新增特性前先 `grep` 现有用法，与既有实现对齐优先于引入新写法。同一种效果不要出现两套写法。
+## 3. 样式与交互
 
-## 编写要求
+样式集中在 `ui/style.css`，设计令牌定义在 `:root` 与亮暗主题选择器中。
 
-- HTML：语义元素优先（`<button>` 不用 `<div onclick>`），表单控件用原生元素而不是重建
-- CSS：自定义属性做令牌，不写硬编码色值；能用 `:has()` 就用，不要加 JS 类切换
-- 无障碍：动效必须包在 `@media (prefers-reduced-motion: reduce)` 里（现有 4 处）；交互元素要有可见焦点态（`:focus-visible` 现有 20 处）
-- JS：ESM，`"type": "module"`
+- 复用 `.sl-*`、`.btn`、`.field`、`.skill-*` 等现有外壳与控件。
+- 颜色使用设计令牌，不硬编码色值；间距优先使用现有令牌，新增视觉效果验证亮暗主题。
+- HTML 优先使用语义元素和原生表单控件；开关沿用 `input.sw`，布局保持开关在左、文字在右。
+- CSS 能直接表达的状态优先用选择器（如 `:has()`），需要业务状态时才使用 JS。
+- 常规布局优先使用 Flexbox / Grid；界面主题的透明与混色沿用 `color-mix(in srgb, var(--令牌) 比例, transparent)`，由 CSS 自定义属性控制，不另写 JS 逐元素设色。壁纸取色等业务算法沿用其专用实现，不受此主题样式规则限制。
+- 常规动效按正常样式定义，并在 `prefers-reduced-motion: reduce` 下关闭或减弱；交互元素须有可见的 `:focus-visible`。
+- 表单控件提供关联的 `label`，图标按钮提供可访问名称；保留原生键盘操作，不用可点击的 `div` 代替按钮。
+- 状态条用于异常或需要用户行动的状态，正常时不重复已有信息。
 
-## 脚本加载
+相关原生能力的语义与兼容性见 MDN 的 [color-mix()](https://developer.mozilla.org/en-US/docs/Web/CSS/color_value/color-mix) 与 [:focus-visible](https://developer.mozilla.org/en-US/docs/Web/CSS/:focus-visible)；项目采用方式以上述规则为准。
 
-`ui/index.html` 用 `defer` 按序加载 `ui/app/*.js`（26 个）。这些是 classic script，不是 ESM：跨段共享的顶层绑定靠加载顺序，不能 `import`。
+## 4. 插件面板
 
-只有 `ui/app.js` 是 module，负责把 `/vendor/*.js` 的导出挂到 `window`。
+插件面板在同源 iframe 中运行，CSP 由 `src/skills/panel.js` 的 `panelCsp()` 统一管理：
 
-新增渲染脚本必须同步改三处：`ui/index.html`、`ui/app.js`、该文件头部的说明。三处对不上就是"函数未定义"。
+- 脚本来自允许的同源资源，不使用内联 `<script>` 或 `onclick=`；不放宽 CSP 来迁就实现。
+- 样式可用 `<style>` 与内联 `style=`。
+- 保留 `frame-ancestors 'self'`，使控制台可嵌入面板。
+- 存储数据通道用相对路径 `../@data/storage.json`，不硬编码扩展 id。
 
-## 视觉与交互风格
-
-- 新页面复用已有外壳：`.sl-*`（连接 / 自检 / 桌宠页）、`.btn`、`.field`、`.skill-*`。不要为单个页面另造一套
-- 颜色只走令牌，亮暗两套主题都要验
-- 开关统一用 `input.sw`（40×22 轨道，开关在左文字在右），不要混用方块复选框
-- 状态条只在出问题时说话，正常时不重复下方已有信息
-- 排版留白优先用现有间距令牌，不新造数值
-
-## 插件自带页面
-
-插件面板跑在同源 iframe 里，CSP 由 `src/skills/panel.js` 的 `panelCsp()` 统一给：
-
-- `script-src 'self'` 不含 `unsafe-inline`，内联 `<script>` 和 `onclick=` 会被静默拦掉
-- `<style>` 与内联 `style=` 允许
-- `frame-ancestors 'self'`（必须能被设置弹窗嵌入）
-
-数据通道用相对路径 `../@data/storage.json`，不要硬编码自己的 id。完整契约见 `doc/extend_development/panel-ui-contract.md`。
+修改面板前查阅 `doc/extend_development/panel-ui-contract.md`。修改内置插件面板文件也须按后端规则更新指纹。
