@@ -117,9 +117,11 @@ Bing 网页解析不需要 Key，是默认搜索源。
 | 场景 | 位置 |
 |---|---|
 | 开发 / `pnpm run server` | 仓库内的 `data/` |
-| 打包版 | `<exe 同级>/data/` |
+| 打包版（三平台） | Electron `userData` 下的 `data/`：Windows 为 `%APPDATA%\qq-agent\data\`，macOS 为 `~/Library/Application Support/qq-agent/data/`，Linux 为 `~/.config/qq-agent/data/` |
 | 多实例（`QQ_AGENT_PROFILE=N`） | 上述位置换成 `data-<N>/` |
 | 显式覆盖 | `QQ_AGENT_DATA_DIR` 指向的目录（优先级最高） |
+
+Windows 的 NSIS 升级会清空安装目录，包括运行时生成的文件，所以默认数据必须放在安装目录之外。便携场景仍可用 `QQ_AGENT_DATA_DIR` 显式指定位置，建议选择安装目录外的可写目录，避免覆盖安装时被清空。
 
 主要子目录与文件：
 
@@ -221,7 +223,7 @@ Bing 网页解析不需要 Key，是默认搜索源。
 
 | 现象 | 根因 | 解法 |
 |---|---|---|
-| 双击没反应；进程起来又没了，无窗口、无端口、`data/logs` 里什么都没有 | 数据目录不可写。`electron/main.js` 的 `probeDataDirWritable` 列了四类成因：装进了 `Program Files` 等受保护目录；安装目录在 OneDrive / 坚果云的「仅在线」位置；杀软或企业管控把目录设成只读；`data` 被一个同名文件占住 | 看弹出的原生错误框和 `%APPDATA%\qq-agent\data-dir-error.log`，按提示换目录或解除只读。这是环境问题，不是程序坏了 |
+| 双击没反应；进程起来又没了，无窗口、无端口、`data/logs` 里什么都没有 | 数据目录不可写：`QQ_AGENT_DATA_DIR` 指向了受保护目录；数据目录在 OneDrive / 坚果云的「仅在线」位置；杀软或企业管控把目录设成只读；目录被一个同名文件占住 | 看弹出的原生错误框和 `%APPDATA%\qq-agent\data-dir-error.log`，按提示取消或修改目录覆盖、解除只读。这是环境问题，不是程序坏了 |
 | 双击后弹「QQ Agent 已经在运行了」 | 单实例锁：已有实例占着同一个数据目录，或 Electron 单实例锁已被占 | 从托盘图标唤出/退出已有实例；要多开见第 4 节 |
 | 白屏、闪退、显卡相关崩溃 | GPU 渲染链路异常。应用在 60 秒内崩 3 次会自动写 `data/render-gpu-off.flag` 并重启进软件模式 | 删掉 `data/render-gpu-off.flag` 恢复 GPU；排障时可临时设 `QQ_AGENT_ENABLE_GPU=1` / `QQ_AGENT_DISABLE_GPU=1` |
 | 装好的内置插件/技能突然整个不工作，开关还开着 | 改过 `plugins/` 或 `skills/` 下的文件但没重算 `builtin-modules.json`，指纹失配后掉进能力扫描被拒载 | 按 [skill-system.md 第 6 节](extend_development/skill-system.md) 重算基线，再跑测试。控制台「插件」「技能」页会写明加载失败的原因 |

@@ -31,15 +31,31 @@ import {
   WINDOW_DEFAULT_W, WINDOW_DEFAULT_H, WINDOW_MIN_W, WINDOW_MIN_H
 } from './window-state.js';
 
+// 显示名由 productName 决定；内部应用名与存储路径固定，避免改显示名时数据目录漂移。
+// 必须在 RENDER_DATA_DIR 等首次读取 userData 之前显式设置，不能依赖默认路径的推导时机。
+app.setName('qq-agent');
+app.setPath('userData', path.join(app.getPath('appData'), 'qq-agent'));
 
 // ── 数据目录推导（三处共用，见函数注释）────────────────────────────────
+function isPortableInstall() {
+  // 便携语义只存在于 Windows 的 zip 分发：macOS 的 .app 与 Linux 的 AppImage
+  // 都没有"解压到任意目录就能跑"这种形态，把它们判成便携版会让数据落进
+  // 只读的 .app 包内或只读的 squashfs 挂载点，启动即失败。
+  if (process.platform !== 'win32') return false;
+  const exeDir = path.dirname(app.getPath('exe'));
+  // NSIS 安装版带卸载器，zip 便携版没有。文件名取打包显示名 QQ Agent，
+  // 不能用已钉死为 qq-agent 的 app.getName()，否则安装版会被误判成便携版。
+  return !fs.existsSync(path.join(exeDir, 'Uninstall QQ Agent.exe'));
+}
+
 /**
  * 不含 env 覆盖的数据目录，与 resolveDataDir 的推导规则逐字一致。
  *
  * 三处共用：RENDER_DATA_DIR（模块顶层）、fallbackLog（pre-ready 兜底日志）、
- * resolveDataDir。它们原本各抄一份「exe 同级/data」，那条规则在 macOS / Linux
- * 上指向 .app 包内与 AppImage 挂载点 —— 只读，且改包内容会被签名校验判为损坏。
- * 平台分支写在一处，才不会出现「主数据目录修好了，日志还在往只读目录写」。
+ * resolveDataDir。NSIS 安装版必须写入 userData：升级会清空整个安装目录，
+ * 包括运行时生成的 data/。zip 便携版不经过卸载器，数据可以留在 exe 同级。
+ * 共用推导才能让日志与 GPU 标志始终跟随业务数据。便携目录只读时明确报错，
+ * 不回退到 userData，否则用户会误以为数据仍在便携目录，实际却写去了别处。
  *
  * 开发态一并在这里处理：原先 RENDER_DATA_DIR 在开发态也按 exe 同级算，
  * 实际落到 node_modules/electron/dist/data，与 resolveDataDir 的项目内 data/
@@ -49,8 +65,8 @@ import {
  */
 function packagedDataDir() {
   if (!app.isPackaged) return path.resolve(fileURLToPath(import.meta.url), '..', '..', dataDirName());
-  if (process.platform !== 'win32') return path.join(app.getPath('userData'), dataDirName());
-  return path.join(path.dirname(app.getPath('exe')), dataDirName());
+  if (isPortableInstall()) return path.join(path.dirname(app.getPath('exe')), dataDirName());
+  return path.join(app.getPath('userData'), dataDirName());
 }
 
 // ── GPU 硬件加速：默认启用（壁纸套件）────────────────────────────────────
@@ -237,16 +253,16 @@ function describeError(error) {
  * 试写一次数据目录：返回 null 表示可写，否则返回失败原因文本。
  *
  * 值得在启动最早期单独测这一下：配置、聊天记录、记忆、用量账本全写在
- * 「安装目录/data」下。这个目录不可写时，后续的写入失败分散在十几个模块里，
+ * 已解析的数据目录下。这个目录不可写时，后续的写入失败分散在十几个模块里，
  * 表现千奇百怪（有的抛异常被 catch 掉、有的静默跳过、有的在渲染进程里 reject），
  * 用户看到的却是同一件事：双击之后什么都没发生，零提示、零日志。
  * 所以在业务代码之前把"环境问题"和"程序 bug"分开。
  *
  * 已知成因（按现场出现频率排）：
- *   ① 提权装到了 Program Files / Windows 之类的受保护目录；
- *   ② 安装目录在 OneDrive / 坚果云等同步盘的"仅在线"位置；
+ *   ① 用 QQ_AGENT_DATA_DIR 指向了 Program Files / Windows 之类的受保护目录；
+ *   ② 数据目录在 OneDrive / 坚果云等同步盘的"仅在线"位置；
  *   ③ 杀软或企业管控把目录设成只读，或"受控文件夹访问"拦了写入；
- *   ④ data 被一个同名文件占住了（安装目录被手工改坏）。
+ *   ④ 数据目录被一个同名文件占住了。
  *
  * @param {string} dir 已解析出的数据目录（process.env.QQ_AGENT_DATA_DIR）
  * @returns {string|null} 失败原因；可写时返回 null
@@ -282,13 +298,13 @@ function probeDataDirWritable(dir) {
  * "是环境问题还是程序崩了"。
  */
 function reportDataDirFailure(dir, reason) {
-  const installDir = (() => {
+  const programDir = (() => {
     try { return path.dirname(app.getPath('exe')); } catch { return '(未知)'; }
   })();
   const detail = [
     `时间：${new Date().toISOString()}`,
     `程序版本：${(() => { try { return app.getVersion(); } catch { return '(未知)'; } })()}`,
-    `安装目录：${installDir}`,
+    `程序目录：${programDir}`,
     `数据目录：${dir}`,
     `平台：${process.platform} ${process.arch}`,
     `命令行：${process.argv.join(' ')}`,
@@ -310,19 +326,28 @@ function reportDataDirFailure(dir, reason) {
   // 同步落一份到 stderr：带 -RedirectStandardError 启动时能直接抓到
   try { console.error(`[data] 数据目录不可写：${dir}\n${reason}`); } catch { /* 忽略 */ }
 
-  const message = [
+  const portableDataDir = app.isPackaged && isPortableInstall() && dir === packagedDataDir();
+  const guidance = portableDataDir ? [
+    '便携版需要可写的安装目录，当前目录不可写：',
+    programDir,
+    '',
+    '请把程序移到用户目录（如 D:\\Tools\\QQ Agent），',
+    '或改用安装版（数据会存在 %APPDATA%\\qq-agent）。'
+  ] : [
     '程序需要往下面这个目录写文件，但没有写入权限：',
     '',
     dir,
     '',
     '常见原因和解决办法：',
-    '1) 装到了 Program Files 或 Windows 目录下 —— 这类目录要管理员权限才能写。',
-    '   QQ Agent 的配置和聊天记录都存在安装目录里，不能装在受保护目录。',
-    '   请重新运行安装包，用默认位置（当前用户目录）安装。',
-    '2) 安装目录在 OneDrive / 坚果云等同步盘的「仅在线」文件夹里 ——',
+    '1) QQ_AGENT_DATA_DIR 指向了 Program Files 或 Windows 等受保护目录 ——',
+    '   请取消该环境变量，使用默认数据目录，或改到当前用户可写的位置。',
+    '2) 数据目录在 OneDrive / 坚果云等同步盘的「仅在线」文件夹里 ——',
     '   请在资源管理器里右键该文件夹，选「始终保留在此设备上」。',
-    '3) 杀毒软件或公司管控把它设成了只读 —— 把安装目录加进白名单，或换目录重装。',
-    '4) 安装目录下的 data 被一个同名文件占住了 —— 删掉那个文件再启动。',
+    '3) 杀毒软件或公司管控把它设成了只读 —— 解除数据目录的写入限制。',
+    '4) 数据目录被一个同名文件占住了 —— 将该文件移开后再启动。'
+  ];
+  const message = [
+    ...guidance,
     '',
     diagPath ? `诊断信息已写入：\n${diagPath}` : '诊断信息未能写入磁盘。'
   ].join('\n');
@@ -441,50 +466,16 @@ process.on('uncaughtException', (error) => {
 
 // AppUserModelID：让 Windows 把窗口归到「QQ Agent」身份下（任务栏分组/图标/通知），
 // 否则 dev 模式下会被当成裸 electron.exe，钉任务栏变成 electron 图标
-app.setAppUserModelId('cn.awsl1414.qq-agent');
+app.setAppUserModelId('com.awsl1414.qq-agent');
 
-// ── 数据目录：Windows 固定在「应用根目录/data」，macOS / Linux 走系统用户目录 ──
-//
-// Windows：所有数据都存在安装目录下，不往 %APPDATA% 塞。
-//   压缩包用户：data 本来就在压缩包目录里，直接用（项目内 data/）；
-//   安装版用户：安装目录/exe 旁边的 data/。选压缩包目录当安装目录时
-//   天然接管里面的 data/（config、记忆、聊天记录、telemetry id 全保留），零迁移零 bug。
-//   NSIS 覆盖安装只替换它自己装的文件，运行时生成的 data/ 不在清单里 → 升级不丢数据。
-//   兼容兜底：外置 %APPDATA% 时期的数据自动搬回安装目录。
-//
-// macOS / Linux：同样的规则在这两个平台上是错的，不是「不够优雅」而是必然失败 ——
-//   · macOS 的 exe 在 QQ Agent.app/Contents/MacOS/ 里，往同级写 data/ 等于往 .app 包
-//     内写。Gatekeeper 的 App Translocation 会把下载来的应用挂到一个随机只读路径上跑，
-//     包内写入直接失败；即便绕过，签名校验也会因为包内容被改动而判为已损坏。
-//   · Linux 的 AppImage 运行时挂在只读 squashfs 上；deb 装到 /opt/<name>，普通用户
-//     没有写权限。probeDataDirWritable 会把这两种情况判成「数据目录不可写」，
-//     用户看到的是启动即退出的错误框。
-//   所以这两个平台改用 app.getPath('userData')（macOS 是 ~/Library/Application Support/
-//   <name>，Linux 是 ~/.config/<name>），并保留 data-<N> 多实例后缀。
+// ── 数据目录：环境变量 > 便携目录 > userData，开发态留在项目内 ──────────
+// NSIS 升级会清空安装目录，安装版必须走 userData；便携版不经过卸载器，可留在 exe 旁。
+// QQ_AGENT_DATA_DIR 显式覆盖优先。只读时由启动自检报错，不静默回退，以免数据悄悄换位置。
 function resolveDataDir() {
   if (process.env.QQ_AGENT_DATA_DIR) return process.env.QQ_AGENT_DATA_DIR;
-  // 开发模式与 macOS / Linux 打包态都直接返回：前者是项目内 data/，后者是
-  // userData/data（天然可写，且按 profile 分目录后两个实例不会抢同一份配置）。
-  // 这两个平台此前从未发布过桌面版，磁盘上不存在需要迁移的旧数据。
-  if (!app.isPackaged || process.platform !== 'win32') return packagedDataDir();
-  const portable = packagedDataDir();
-  try {
-    if (!fs.existsSync(portable)) {
-      // 仅主实例接管旧版遗留；第二实例绝不能把主实例旧数据复制进 data-2。
-      // 下面整段只有 Windows 打包态会走到（上面的 return 已挡掉其它情况）。
-      if (dataDirName() !== 'data') return portable;
-      // 接管旧版遗留：%APPDATA%/qq-agent/data（外置期版本）→ 搬回安装目录
-      const legacy = path.join(app.getPath('userData'), 'data');
-      if (fs.existsSync(legacy) && fs.readdirSync(legacy).length > 0) {
-        fs.cpSync(legacy, portable, { recursive: true });
-        console.log('[data] 已从 %APPDATA% 迁回安装目录:', legacy, '→', portable);
-      }
-    }
-  } catch (error) {
-    logCritical('data', `[旧数据迁移失败（不影响启动）] ${describeError(error)}`);
-  }
-  return portable;
+  return packagedDataDir();
 }
+
 process.env.QQ_AGENT_DATA_DIR = resolveDataDir();
 
 // 单实例锁：重复启动（双击 .bat）不产生第二个实例，而是唤出已有窗口。
@@ -2319,7 +2310,7 @@ function startWidgetSync() {
 app.whenReady().then(async () => {
   try {
     // ── 数据目录可写性自检 ───────────────────────────────────────────
-    // 必须排在一切业务之前：安装目录不可写时，失败会散落在十几个模块里，
+    // 必须排在一切业务之前：数据目录不可写时，失败会散落在十几个模块里，
     // 最终表现成"双击没反应"。在这里一次性判掉，用户能看到原因和解法。
     // 只在拿到单实例锁时检查，第二实例本来就要退出，让它先报"已在运行"更有用。
     if (gotLock) {

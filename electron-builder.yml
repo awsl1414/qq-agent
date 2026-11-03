@@ -7,11 +7,11 @@
 #   refreshBuiltinEntry 重写。asar 打包后这些路径不可写，上述功能会集体失效。
 #
 # ⚠️ 同理，安装目录必须可写 → nsis.perMachine 为 false（装到
-#   %LOCALAPPDATA%\Programs\...）。electron/main.js 的 resolveDataDir 在打包态
-#   把数据目录固定为「exe 同级的 data/」，装进 Program Files 会因权限写不进去。
+#   %LOCALAPPDATA%\Programs\...）。运行时扩展仍需写入安装目录；用户数据由
+#   electron/main.js 的 resolveDataDir 单独放在系统用户数据目录，避免升级清空。
 
 appId: com.awsl1414.qq-agent
-productName: qq-agent
+productName: QQ Agent
 copyright: Copyright © 2026 logan（fork 自 Kondius 的 qq-agent）
 
 directories:
@@ -67,7 +67,7 @@ files:
   - "!**/*.rej"
 
 # 产物名带版本号：同目录并存多份安装包时能区分（历史上出过「安装包停在旧构建上」的事故）
-artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+artifactName: ${name}-${version}-${os}-${arch}.${ext}
 
 win:
   icon: assets/icon.ico
@@ -142,7 +142,7 @@ linux:
     - target: deb
       arch:
         - x64
-  # AppImage 的 desktop entry 里显示的启动名（productName 是 qq-agent）
+  # Linux 可执行文件名保持小写，与显示名称 QQ Agent 分开
   executableName: qq-agent
   # 与桌面环境的分类对应；Network 在 GNOME/KDE 菜单里归到「互联网」
   desktop:
@@ -162,11 +162,11 @@ deb:
 
 nsis:
   oneClick: false
-  # 见文件头：安装目录与数据目录都要可写，不能进 Program Files
+  # 见文件头：运行时扩展需要可写安装目录，不能进 Program Files
   perMachine: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: QQ Agent
-  # 卸载时保留 data/（用户资产：群聊记录、记忆、API Key）
+  # 卸载时保留系统用户数据目录（群聊记录、记忆、API Key）
   deleteAppDataOnUninstall: false
