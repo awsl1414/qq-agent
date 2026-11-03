@@ -2208,6 +2208,96 @@ function bindSettingsEvents(c) {
     }
   });
 
+  // ── 旧版本残留（数据管理区块）──
+  //
+  // 后端只做检测（GET /api/maintenance/legacy），删除必须用户勾选后 POST。
+  // 这里的路径只用来展示与回传，**不做任何安全判断** —— 校验全在后端
+  // （upgrade.js 的 removeLegacyResidue），前端就算被篡改也删不掉范围外的东西。
+  // 列表为空时整块保持 hidden：旧的备份对绝大多数用户不存在，常驻就是噪音。
+  const legacyField = $('#legacy-residue-field');
+  if (legacyField) {
+    const listEl = $('#legacy-residue-list');
+    const hintEl = $('#legacy-residue-hint');
+    const statusEl = $('#legacy-residue-status');
+    const removeBtn = $('#legacy-residue-remove');
+    // 字节数展示与自检页的 fmtBytes 同口径；13-doctor.js 可能晚于本文件加载，
+    // 取不到时退回本地实现（两处都只在这一屏用，不必强行共享）。
+    const sizeText = (n) => {
+      if (typeof fmtBytes === 'function') return fmtBytes(n);
+      const v = Number(n) || 0;
+      if (v < 1024) return `${v}B`;
+      if (v < 1048576) return `${(v / 1024).toFixed(1)}KB`;
+      return `${(v / 1048576).toFixed(1)}MB`;
+    };
+    // 来源标注：搬入日期 + 当时版本。"哪个版本留下的"比路径有用得多 ——
+    // 用户看到 0.5.0.x 就知道是自己上次升级时搬的，不会疑心是新版生成的。
+    // 定义在 paintLegacy 之前：后者在事件绑定阶段就会调用（不是等用户点击才跑），
+    // const 的 TDZ 会让它在这一行直接炸。
+    const legacyOriginText = (it) => {
+      const day = it.migratedAt ? String(it.migratedAt).slice(0, 10) : '';
+      const ver = it.fromVersion ? ` · v${it.fromVersion}` : '';
+      const when = day ? ` · ${day} 搬入` : '';
+      return `${ver}${when}`;
+    };
+    let legacyItems = [];
+    const paintLegacy = (d) => {
+      const items = Array.isArray(d?.items) ? d.items : [];
+      legacyItems = items;
+      if (!items.length) { legacyField.hidden = true; return; }
+      legacyField.hidden = false;
+      if (hintEl) {
+        hintEl.textContent = `升级时把旧版本留下的文件搬到了数据目录，共 ${items.length} 项、${sizeText(d.totalBytes)}。`
+          + '确认不再需要可以删除；不删也不影响使用。';
+      }
+      listEl.innerHTML = items.map((it, i) => `
+        <label class="pick-item" title="${esc(it.path)}">
+          <input type="checkbox" class="sw" data-legacy-idx="${i}" checked />
+          <span>${esc(it.label)}</span>
+          <span class="hint" style="margin:0;white-space:nowrap">${esc(sizeText(it.sizeBytes))}</span>
+        </label>
+        <div class="hint" style="margin:0 0 6px 44px">${esc(it.relPath)}${legacyOriginText(it)}</div>
+      `).join('');
+    };  // paintLegacy 结束
+    const legacyRefresh = async () => {
+      try {
+        const d = await api('/api/maintenance/legacy');
+        paintLegacy(d);
+      } catch {
+        // 检测失败只影响这一块：不显示，也不打扰用户
+        legacyField.hidden = true;
+      }
+    };
+    removeBtn?.addEventListener('click', async () => {
+      // 回传给后端的只有 path，且后端会重新校验（不信任这里的任何值）
+      const picked = [...listEl.querySelectorAll('input[data-legacy-idx]:checked')]
+        .map((el) => legacyItems[Number(el.dataset.legacyIdx)])
+        .filter(Boolean);
+      if (!picked.length) { if (statusEl) statusEl.textContent = '先勾选要删除的项'; return; }
+      const total = picked.reduce((s, x) => s + (x.sizeBytes || 0), 0);
+      if (!await qaConfirm({
+        danger: true,
+        title: '删除旧版本残留',
+        confirmText: `删除 ${picked.length} 项`,
+        message: `将永久删除 ${picked.length} 项（${sizeText(total)}），不可恢复：\n\n`
+          + picked.map((x) => `- ${x.relPath}`).join('\n')
+      })) return;
+      removeBtn.disabled = true;
+      if (statusEl) statusEl.textContent = '删除中…';
+      try {
+        const r = await api('/api/maintenance/legacy/remove', {
+          method: 'POST',
+          body: JSON.stringify({ paths: picked.map((x) => x.path) })
+        });
+        if (statusEl) statusEl.textContent = `已删除 ${r.removed?.length || 0} 项，释放 ${sizeText(r.freedBytes)}`;
+        await legacyRefresh();
+      } catch (e) {
+        if (statusEl) statusEl.textContent = `删除失败：${e?.message || e}`;
+      }
+      removeBtn.disabled = false;
+    });
+    legacyRefresh();
+  }
+
   const resetDataBtn = $('#reset-data-btn');
   if (resetDataBtn) resetDataBtn.addEventListener('click', async () => {
     const hint = $('#reset-data-hint');

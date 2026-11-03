@@ -16,7 +16,13 @@
 //
 // 随包 ffmpeg 已下线：79MB 的 runtime/ffmpeg.exe 不再随安装包分发，改为设置页
 // 「媒体工具」按需下载到 DATA_DIR/runtime/ffmpeg/bin/。旧安装升级后若 runtime/
-// 里还有那份，解析链仍然命中，老用户功能不中断，也不用重下。
+// 里还有那份，启动时的迁移项 retire-bundled-ffmpeg（src/upgrade.js）会把它搬进
+// data/runtime/legacy-backup/；搬走之后解析链的第 ④ 项自然落空。
+//
+// 第 ④ 项本身刻意**保留**：迁移是"失败不阻塞启动"的，安装目录只读、文件被占用
+// （用户正开着某个用它的程序）时那次迁移会失败并在下次启动重试。这种机器上
+// 旧 ffmpeg 仍是唯一能用的那份，删掉候选等于让这些用户的功能在这段窗口里直接
+// 中断。保留的代价是一次 stat —— 迁移成功后路径为空，探测直接跳过。
 //
 // ffprobe 一律从 ffmpeg 同目录推导：以前 gif-to-video / video-reader 直接 spawn
 // 裸名 'ffprobe'，ffmpeg 在非 PATH 目录（随包 / 下载 / 手填）时，明明同目录就
@@ -458,7 +464,7 @@ export function normalizeSourcePreference(raw) {
  *                               用户明确指定就该赢过一切自动探测
  *   ② QQ_AGENT_FFMPEG           环境变量（wallpaper 一直用这个口径，保留）
  *   ③ DATA_DIR/runtime/ffmpeg/bin   设置页下载的落点
- *   ④ <app>/runtime/ffmpeg      旧随包位置（老安装升级后仍命中）
+ *   ④ <app>/runtime/ffmpeg      旧随包位置（启动迁移搬走后为空；见文件头）
  *   ⑤ PATH（where + 进程 PATH）
  *   ⑥ 注册表现读 PATH            winget 装完不重启也能认
  *   ⑦ WinGet Links 垫片 / 包目录扫盘
