@@ -55,7 +55,7 @@ function onboardingSteps() {
     {
       id: 'model', required: true,
       title: '配一个 AI 模型',
-      desc: '填接口地址（Base URL）和 API Key，再选一个模型。没有 Key 可以去 DeepSeek 官网申请 —— 按量计费，充多少用多少，不用不花钱。',
+      desc: '先添加一个服务商（接口地址 + API Key），再选一个模型。没有 Key 可以去 DeepSeek 官网申请 —— 按量计费，充多少用多少，不用不花钱。',
       done: urlOk && modelOk,
       status: !urlOk ? '还没填接口地址' : (!modelOk ? '还没选模型' : `已选 ${api.model}`),
       jump: { tab: 'settings', section: 'api' },

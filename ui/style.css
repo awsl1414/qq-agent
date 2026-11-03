@@ -1836,6 +1836,12 @@ tr.chat-del-selected td { background: color-mix(in srgb, var(--red) 10%, transpa
 .mm-prov { padding: 7px 10px; border-radius: 7px; cursor: pointer; font-size: 13px; color: var(--muted); }
 .mm-prov:hover { color: var(--text); box-shadow: var(--inset-edge); }
 .mm-prov.active { color: var(--accent); font-weight: 600; box-shadow: var(--inset-edge); }
+/* 提供商列表项：主行名称 + 次行端点。
+   左列 flex-basis 只有 200px，「名称 · 127.0.0.1:11434」拼一行在窄屏下会折行，
+   所以拆成两行。次行沿用 11px + --muted 的既有惯例，选中态不跟着变粗。 */
+.mm-prov-name { overflow-wrap: anywhere; }
+.mm-prov-host { margin-top: 1px; font-size: 11px; font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
+.mm-prov.active .mm-prov-host { color: var(--muted); }
 .mm-model { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 7px; cursor: pointer; font-size: 13px; }
 .mm-provider-bar { display: flex; gap: 8px; padding: 4px 0 10px; border-bottom: 1px solid var(--edge); margin-bottom: 8px; }
 .mm-model:hover { background: var(--hover); }

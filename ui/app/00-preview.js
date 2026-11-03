@@ -842,7 +842,7 @@
         if (u.startsWith('/api/usage/breakdown')) return Promise.resolve(jsonRes(mockBreakdown(u)));
         if (u.startsWith('/api/config')) return Promise.resolve(jsonRes(pvConfig));
         if (u.startsWith('/api/providers/key')) return Promise.resolve(jsonRes({ apiKey: '' }));
-        if (u.startsWith('/api/providers')) return Promise.resolve(jsonRes({ providers: MOCK_PROVIDERS }));
+        if (u.startsWith('/api/providers')) return Promise.resolve(jsonRes({ providers: MOCK_PROVIDERS.map((p) => ({ ...p, label: providerLabelOf(p) })) }));
         if (u.startsWith('/api/persona-templates')) return Promise.resolve(jsonRes({ templates: mockPersonaTemplates() }));
         if (u.startsWith('/api/model-prices')) return Promise.resolve(jsonRes({ prices: [], current: null }));
         if (u.startsWith('/api/skills')) return Promise.resolve(jsonRes({ skills: MOCK_SKILLS, summary: { total: MOCK_SKILLS.length, active: 6 }, uninstalled: [] }));
@@ -958,6 +958,13 @@
         }
         return Promise.resolve(jsonRes({ ok: true, skill: entry, config: pvConfig }));
       }
+      // 连通性测试：预览里直接回一条成功结果，避免落到真后端（预览常常没有后端）
+      if (method === 'POST' && u.startsWith('/api/providers/test-chat')) {
+        return Promise.resolve(jsonRes({ ok: true, result: { ok: true, latencyMs: 128, note: '模型回复：「pong」' } }));
+      }
+      if (method === 'POST' && u.startsWith('/api/providers/test-one')) {
+        return Promise.resolve(jsonRes({ ok: true, result: { ok: true, latencyMs: 96, verdict: 'ok', note: '端点可用' } }));
+      }
       // 拉取模型 / 勾选并入：预览里返回一批假模型、并入第一个 mock 提供商，
       // 让"⟳ 拉取模型 → 勾选 → 加入列表 → 模型目录里能选到"整条链路可走通。
       if (method === 'POST' && u.startsWith('/api/providers/fetch-models')) {
@@ -981,16 +988,41 @@
         p.apiProtocol = String(body.apiProtocol || 'openai');
         return Promise.resolve(jsonRes({ ok: true, apiProtocol: p.apiProtocol }));
       }
-      // 添加提供商（模型管理子模态「添加提供商」）：预览里就地并入 MOCK_PROVIDERS，
-      // 让「填 URL+Key → ⟳拉取模型 → 勾选 → 添加 → 左列可见、模型可选」整条链路可演示。
+      // 改名（管理服务商右列的「保存」）：预览里就地改 MOCK_PROVIDERS。
+      // 必须排在下面更宽泛的 /api/providers 分支之前。
+      if (method === 'POST' && u.startsWith('/api/providers/display-name')) {
+        let body = {};
+        try { body = JSON.parse((init && init.body) || '{}'); } catch { /* 脏数据当空处理 */ }
+        const name = String(body.displayName || '').trim();
+        if (!name) return Promise.resolve(jsonRes({ ok: false, error: '名称不能为空' }, 400));
+        const p = MOCK_PROVIDERS.find((x) => x.id === body.providerId);
+        if (!p) return Promise.resolve(jsonRes({ ok: false, error: '提供商不存在' }, 404));
+        p.displayName = name.slice(0, 40);
+        return Promise.resolve(jsonRes({ ok: true, displayName: p.displayName }));
+      }
+      // 添加提供商（管理服务商子模态「添加提供商」）：预览里就地并入 MOCK_PROVIDERS，
+      // 让「填名称+URL+Key → ⟳拉取模型 → 勾选 → 添加 → 左列可见、模型可选」整条链路可演示。
+      // 同 baseURL 命中已有项时按后端的合并语义处理（只并模型，名称有传才更新）。
       // ⚠️ 必须排在 fetch-models / models 两个前缀分支之后（它们更具体）。
       if (method === 'POST' && u.startsWith('/api/providers')) {
         let body = {};
         try { body = JSON.parse((init && init.body) || '{}'); } catch { /* 脏数据当空处理 */ }
+        const baseURL = String(body.baseUrl || '');
+        const name = String(body.displayName || '').trim();
+        const existing = MOCK_PROVIDERS.find((x) => String(x.baseURL || '').replace(/\/+$/, '') === baseURL.replace(/\/+$/, ''));
+        if (existing) {
+          for (const m of (body.models || [])) {
+            if (!existing.models.includes(m.id)) existing.models.push(m.id);
+            if (!existing.modelNames[m.id]) existing.modelNames[m.id] = m.name || m.id;
+          }
+          if (name) existing.displayName = name;
+          return Promise.resolve(jsonRes({ provider: existing, created: false }));
+        }
         const prov = {
           id: 'pv-' + Date.now().toString(36),
-          displayName: '自定义提供商',
-          baseURL: String(body.baseUrl || ''),
+          // 与后端一致：留空时按域名兜底
+          displayName: name || (() => { try { return new URL(baseURL).host || '自定义提供商'; } catch { return '自定义提供商'; } })(),
+          baseURL,
           apiKey: '',
           apiKeyFrom: 'config',
           hasKey: !!String(body.apiKey || '').trim(),
@@ -999,7 +1031,7 @@
           modelNames: Object.fromEntries((body.models || []).map((m) => [m.id, m.name || m.id]))
         };
         MOCK_PROVIDERS.push(prov);
-        return Promise.resolve(jsonRes({ provider: prov }));
+        return Promise.resolve(jsonRes({ provider: prov, created: true }));
       }
       // 落盘级别：预览里让它"记得住"，否则切完一重渲染就弹回 info
       if (method === 'POST' && u.startsWith('/api/logs/level')) {
