@@ -152,7 +152,7 @@ function openDirNative(dir) {
  */
 export function createRoutes(deps) {
   const {
-    store, memory, sessions, onebot, orchestrator,
+    store, memory, sessions, onebot, orchestrator, sender,
     emit, log,
     // app.js 内部的过程/状态
     localVersion, compareSemver,
@@ -4486,10 +4486,9 @@ export function createRoutes(deps) {
         if (!text) return json(res, 400, { error: '消息内容为空' });
         try {
           const chatKey = `${match[1]}:${match[2]}`;
-          const data = await onebot.sendText(match[1], match[2], text);
-          store.appendSelf(chatKey, { text, ts: Date.now() });
+          const result = await sender.sendTextBatch(chatKey, [text]);
           emit('chat-update', chatKey);
-          return json(res, 200, { ok: true, messageId: data?.message_id ?? null });
+          return json(res, 200, { ok: true, messageId: result.sent[0]?.messageId ?? null });
         } catch (error) {
           return json(res, 502, { error: String(error?.message ?? error) });
         }

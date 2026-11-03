@@ -113,6 +113,16 @@ function reportsNothingSent(content) {
 }
 
 export class Orchestrator {
+  #wakeGeneration = 0;
+  #pendingTasks = new Set();
+  #shutdownController = new AbortController();
+
+  async #trackTask(task) {
+    this.#pendingTasks.add(task);
+    try { return await task; }
+    finally { this.#pendingTasks.delete(task); }
+  }
+
   constructor({ store, memory, sender, sessions, onebot, emit = null, reminders = null, videoReader = null }) {
     this.store = store;
     this.memory = memory;
@@ -565,7 +575,7 @@ export class Orchestrator {
   async wake(chatKey, { proactive = false, waitingSessionId = null, reuseSessionId = null } = {}) {
     // 早退也要把两个 id 都收尾（不能只收 waitingSessionId，见 #resolveWakeIds）
     if (this.aborted) { this.#resolveWakeIds({ waitingSessionId, reuseSessionId }, 'aborted'); return; }
-    if (this.paused && !proactive) { this.#resolveWakeIds({ waitingSessionId, reuseSessionId }, 'aborted'); return; }
+    if (this.paused) { this.#resolveWakeIds({ waitingSessionId, reuseSessionId }, 'aborted'); return; }
     // 本群已在运行/正在启动：本次唤醒不再起跑。
     // 但仍要显式收尾：等待会话可以被正在跑的那轮 drain 接管；被重试的会话
     // 若不管就永远停在"运行中"（不可中止、UI 删不掉）。
@@ -584,13 +594,14 @@ export class Orchestrator {
     //   · 先结束的运行会提前解除守卫，同群最多 3 个并发
     this.startingChats.add(chatKey);
     try {
-      return await this.#wakeInner(chatKey, { proactive, waitingSessionId, reuseSessionId });
+      return await this.#trackTask(this.#wakeInner(chatKey, { proactive, waitingSessionId, reuseSessionId }));
     } finally {
       this.startingChats.delete(chatKey);
     }
   }
 
   async #wakeInner(chatKey, { proactive = false, waitingSessionId = null, reuseSessionId = null } = {}) {
+    const generation = this.#wakeGeneration;
     // 原地重试与等待会话同时出现时的优先级：重试是用户显式动作（点了会话页的
     // 「重试」），必须以它为准；跟随而来的等待会话干净收掉（消息留未读，被重试的
     // 那轮跑完后 drain 会接手）。否则下面「等待会话 → 运行中」的分支会把等待会话
@@ -618,6 +629,11 @@ export class Orchestrator {
     // 排障时无法区分"没被禁言"和"被跳过了"。
     if (String(chatKey).startsWith('group:')) {
       const ban = await this.#checkSelfMutedDetail(chatKey);
+      // 禁言查询期间可能暂停/关闭甚至再次恢复；旧唤醒不能消费新状态的未读。
+      if (generation !== this.#wakeGeneration || this.aborted || this.paused) {
+        this.#resolveWakeIds({ waitingSessionId, reuseSessionId }, 'aborted');
+        return;
+      }
       if (ban.muted) {
         const remain = ban.remainSec != null ? `（剩余约 ${ban.remainSec} 秒）` : '（时长未知）';
         if (!ban.skipRun) {
@@ -2105,6 +2121,7 @@ export class Orchestrator {
       try {
         const dueList = this.reminders.due(Date.now());
         for (const r of dueList) {
+          if (gen !== this.reminderGen || this.aborted) return;
           if (this.reminderFiring.has(r.id)) continue;
           this.reminderFiring.add(r.id);
           try {
@@ -2134,10 +2151,11 @@ export class Orchestrator {
       } catch (error) {
         console.error('[reminder] 调度出错:', error?.message ?? error);
       }
-      this.reminderTimer = setTimeout(() => { tick().catch(() => {}); }, 20000);
+      if (gen !== this.reminderGen || this.aborted) return;
+      this.reminderTimer = setTimeout(() => { this.#trackTask(tick()).catch((error) => logger.error('reminder', error)); }, 20000);
       this.reminderTimer.unref?.();   // 别让调度链拖住进程退出
     };
-    this.reminderTimer = setTimeout(() => { tick().catch(() => {}); }, 5000);   // 启动 5s 后第一次检查
+    this.reminderTimer = setTimeout(() => { this.#trackTask(tick()).catch((error) => logger.error('reminder', error)); }, 5000);   // 启动 5s 后第一次检查
     this.reminderTimer.unref?.();
   }
 
@@ -2475,6 +2493,11 @@ export class Orchestrator {
    *   4) 既无名也无号 → 跳过。
    */
   async consolidateMemoryForChat(chatKey, { userIds = null, force = false } = {}) {
+    this.#shutdownController.signal.throwIfAborted();
+    return this.#trackTask(this.#consolidateMemoryForChat(chatKey, { userIds, force }));
+  }
+
+  async #consolidateMemoryForChat(chatKey, { userIds, force }) {
     const cfg = getConfig();
     if (!cfg.api?.model || !cfg.api?.baseUrl) throw new Error('模型未配置，无法整理记忆');
     const notes = cfg.memberNotes || {};
@@ -2836,7 +2859,7 @@ export class Orchestrator {
     const cfg = getConfig();
     const mem = cfg.memory || {};
     if (mem.useChatModel !== false) {
-      return chatCompletion({ messages, temperature: 0.2 });
+      return chatCompletion({ messages, temperature: 0.2, signal: this.#shutdownController.signal });
     }    const providers = currentProviders();
     const p = providers.find((x) => x.id === mem.provider);
     if (!p?.baseURL || !p?.apiKey || !mem.model) {
@@ -2846,6 +2869,7 @@ export class Orchestrator {
     return chatCompletion({
       messages,
       temperature: 0.2,
+      signal: this.#shutdownController.signal,
       overrides: { baseUrl: p.baseURL, apiKey: p.apiKey, model: mem.model, timeoutMs: 180000 }
     });
   }
@@ -2868,6 +2892,7 @@ export class Orchestrator {
     // 继续调 LLM（继续花钱）、继续往群里发消息。
     // 只有「暂停→运行」方向不需要动（那时没有在途运行需要保留）。
     if (this.paused && !was) {
+      this.#wakeGeneration++;
       let n = 0;
       for (const ctrl of [...this.sessionAbortControllers.values()]) {
         try { ctrl.abort(new Error(`已暂停（${reason}）`)); n++; } catch { /* 已中止 */ }
@@ -2930,6 +2955,9 @@ export class Orchestrator {
 
   async abortAll() {
     this.aborted = true;
+    this.#wakeGeneration++;
+    this.#shutdownController.abort(new Error('全局中止'));
+    this.stopReminderLoop();
     for (const timer of this.wakeTimers.values()) clearTimeout(timer);
     this.wakeTimers.clear();
     for (const timer of this.unreadFallbackTimers.values()) clearTimeout(timer);
@@ -2950,7 +2978,8 @@ export class Orchestrator {
       try { ctrl.abort(new Error('全局中止')); } catch { /* 已中止 */ }
     }
     this.sessionAbortControllers.clear();
-    this.startingChats.clear();
+    // abort 只是发出取消信号；必须等会话、提醒和记忆写入收尾，调用方才能删数据。
+    await Promise.allSettled([...this.#pendingTasks]);
     logger.info('orchestrator', `abortAll：已中断 ${ctrls.length} 个在途会话`);
   }
 

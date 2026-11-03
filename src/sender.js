@@ -203,6 +203,13 @@ export class SendQueue {
     }
   }
 
+  // 入队检查不能覆盖排队、真人化延迟或媒体回退期间的配置变更。
+  // 每次协议调用前同步检查，确保撤销准入后不会继续发送。
+  #sendAllowed(chatKey, method, ...args) {
+    this.#ensureAllowed(chatKey);
+    return this.onebot[method](...args);
+  }
+
   async sendTextBatch(chatKey, messages, options = {}) {
     const [kind, id] = String(chatKey).split(':');
     if (kind !== 'group' && kind !== 'private') throw new Error(`非法会话 key：${chatKey}`);
@@ -246,7 +253,7 @@ export class SendQueue {
           console.warn(`[sender] 跳过重复消息（${this.#dedupeWindow()}ms 内已发过相同内容）：${String(text).slice(0, 30)}`);
           return { text, messageId: null, at: formatClockTime(Date.now()), deduped: true };
         }
-        const data = await this.onebot.sendText(kind, id, text, {
+        const data = await this.#sendAllowed(chatKey, 'sendText', kind, id, text, {
           replyToMessageId: i === 0 ? options.replyToMessageId : null, // 引用挂在第一条上：回的就是那条
           atUserId: i === 0 ? options.atUserId : null
         });
@@ -324,7 +331,7 @@ export class SendQueue {
       //   3. 空地址，直接报错给模型
       // 失败自愈：http 直链失败时，用 OneBot get_image（拿协议端本地缓存）
       // 重发一次；再不行转成 base64 内联发（体积上限 15MB，超限明确报错）。
-      const sendVia = (ref) => this.onebot.sendSticker(kind, id, ref, {
+      const sendVia = (ref) => this.#sendAllowed(chatKey, 'sendSticker', kind, id, ref, {
         replyToMessageId: options.replyToMessageId ?? null,
         atUserId: options.atUserId ?? null
       });
@@ -425,7 +432,7 @@ export class SendQueue {
 
       let data;
       try {
-        data = await this.onebot.sendImage(kind, id, ref, {
+        data = await this.#sendAllowed(chatKey, 'sendImage', kind, id, ref, {
           replyToMessageId: options.replyToMessageId ?? null,
           atUserId: options.atUserId ?? null
         });
@@ -441,7 +448,7 @@ export class SendQueue {
             if (st && st.size > 0 && st.size <= 15 * 1024 * 1024) {
               const buf = fs.readFileSync(localPath);
               this.log?.(`[sender] 本地图片路径发送失败（${error?.message ?? error}），改 base64 发送`);
-              data = await this.onebot.sendImage(kind, id, `base64://${buf.toString('base64')}`, {
+              data = await this.#sendAllowed(chatKey, 'sendImage', kind, id, `base64://${buf.toString('base64')}`, {
                 replyToMessageId: options.replyToMessageId ?? null,
                 atUserId: options.atUserId ?? null
               });
@@ -449,7 +456,7 @@ export class SendQueue {
           } catch { /* 读不到就走下面的 dataUrl 回退 */ }
           if (!data && dataUrl) {
             this.log?.(`本地路径发送失败（${error?.message ?? error}），回退 base64 重试一次`);
-            data = await this.onebot.sendImage(kind, id, dataUrl, {
+            data = await this.#sendAllowed(chatKey, 'sendImage', kind, id, dataUrl, {
               replyToMessageId: options.replyToMessageId ?? null,
               atUserId: options.atUserId ?? null
             });
@@ -459,7 +466,7 @@ export class SendQueue {
           // 无本地文件：只有 dataUrl 备份可用，回退一次
           if (!dataUrl) throw error;
           this.log?.(`本地路径发送失败（${error?.message ?? error}），回退 base64 重试一次`);
-          data = await this.onebot.sendImage(kind, id, dataUrl, {
+          data = await this.#sendAllowed(chatKey, 'sendImage', kind, id, dataUrl, {
             replyToMessageId: options.replyToMessageId ?? null,
             atUserId: options.atUserId ?? null
           });
@@ -508,7 +515,7 @@ export class SendQueue {
       await sleep(randInt(800, 1800));   // 视频/多图体积大，停顿比文字长一点
       let data;
       try {
-        data = await this.onebot.sendSegments(kind, id, segs);
+        data = await this.#sendAllowed(chatKey, 'sendSegments', kind, id, segs);
       } catch (error) {
         // 本地文件段被协议端拒绝（跨机 / 沙箱读不到本机路径）：把其中的图片段读回字节
         // 转 base64 内联重发一次，与 sendImage/sendSticker 对称。视频/音频/文件段内联
@@ -517,7 +524,7 @@ export class SendQueue {
         const retrySegs = this.#localSegmentsToBase64(segs);
         if (retrySegs) {
           this.log?.(`[sender] 媒体本地路径发送失败（${error?.message ?? error}），图片段改 base64 重发`);
-          data = await this.onebot.sendSegments(kind, id, retrySegs);
+          data = await this.#sendAllowed(chatKey, 'sendSegments', kind, id, retrySegs);
         } else {
           throw error;
         }
@@ -540,7 +547,7 @@ export class SendQueue {
       // 可以绕过 maxPerMinute/maxPerHour 刷屏
       this.#checkRate(chatKey);
       await sleep(randInt(300, 900));
-      const data = await this.onebot.sendPoke(kind, id, targetUserId);
+      const data = await this.#sendAllowed(chatKey, 'sendPoke', kind, id, targetUserId);
       const ts = Date.now();
       const target = kind === 'group' && targetUserId != null ? ` ${targetUserId}` : '对方';
       this.store.appendSelf(chatKey, { text: `[拍一拍] 你拍了拍${target}`, ts, mid: data?.message_id ?? null });

@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { SKILLS_DIR, PLUGINS_DIR } from './plugin-loader.js';
-import { unzipToModuleDir, parseZip } from './zip-install.js';
+import { unzipToModuleDir, parseZip, writeModuleDirectory } from './zip-install.js';
 
 const BANNED_EXT = /\.(exe|dll|bat|cmd|com|msi|scr|ps1|vbs|sh|lnk)$/i;
 const SKIP_DIR = new Set(['node_modules', '.git', '.svn', '__pycache__', '.DS_Store']);
@@ -22,16 +22,6 @@ function safeDirName(name, fallback = 'module') {
   const cleaned = base.replace(/\.(zip|ZIP)$/, '').replace(/[^a-zA-Z0-9._-]/g, '-').replace(/^[.-]+/, '');
   if (!cleaned || !/^[a-zA-Z0-9]/.test(cleaned)) return fallback;
   return cleaned.slice(0, 64);
-}
-
-/** 目标目录未占用时才用原名，否则递增 _1/_2… */
-function allocateDir(baseDir, name) {
-  let finalName = name;
-  for (let n = 1; n <= 100; n++) {
-    if (!fs.existsSync(path.join(baseDir, finalName))) break;
-    finalName = `${name}_${n}`;
-  }
-  return finalName;
 }
 
 /**
@@ -88,11 +78,10 @@ export function importPath(src, { kind = 'skill' } = {}) {
     const detected = detectKind([path.basename(abs)], kind);
     const baseDir = dirOf(detected);
     fs.mkdirSync(baseDir, { recursive: true });
-    const id = allocateDir(baseDir, safeDirName(abs, 'module'));
-    const target = path.join(baseDir, id);
-    fs.mkdirSync(target, { recursive: true });
-    fs.copyFileSync(abs, path.join(target, path.basename(abs)));
-    return { kind: detected, id, dir: target, files: 1 };
+    const installed = writeModuleDirectory(baseDir, safeDirName(abs, 'module'), (target) => {
+      fs.copyFileSync(abs, path.join(target, path.basename(abs)));
+    });
+    return { kind: detected, ...installed, files: 1 };
   }
 
   // 目录：先整棵扫一遍（順便校验），再复制
@@ -139,20 +128,20 @@ export function importPath(src, { kind = 'skill' } = {}) {
   const keep = prefix ? collected.filter((f) => f.rel.startsWith(prefix)) : collected;
   if (!keep.length) throw new Error('这个文件夹里没有可安装的模块文件');
 
-  const id = allocateDir(baseDir, safeDirName(nameHint || path.basename(abs), 'module'));
-  const target = path.join(baseDir, id);
-  for (const f of keep) {
-    const rel = f.rel.slice(prefix.length);
-    const dest = path.join(target, ...rel.split('/'));
-    // 二次防线：解析后必须仍在 target 内（符号链接 / 奇怪文件名也挡在这）
-    const relCheck = path.relative(target, dest);
-    if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
-      throw new Error(`包含非法路径：${f.rel}`);
+  const installed = writeModuleDirectory(baseDir, safeDirName(nameHint || path.basename(abs), 'module'), (target) => {
+    for (const f of keep) {
+      const rel = f.rel.slice(prefix.length);
+      const dest = path.join(target, ...rel.split('/'));
+      // 二次防线：解析后必须仍在本次独占创建的 target 内。
+      const relCheck = path.relative(target, dest);
+      if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
+        throw new Error(`包含非法路径：${f.rel}`);
+      }
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(f.abs, dest);
     }
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
-    fs.copyFileSync(f.abs, dest);
-  }
-  return { kind: detected, id, dir: target, files: keep.length };
+  });
+  return { kind: detected, ...installed, files: keep.length };
 }
 
 /**

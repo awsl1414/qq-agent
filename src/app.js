@@ -1152,7 +1152,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         sender,
         store,
         log,
-        sendSegments: (k, id2, segs) => onebot.sendSegments(k, id2, segs),
+        sendSegments: sendHookSegments,
         // opts 可选透传（如 { dedupe: false }），给"进度提示"这类本就该重复的内容用。
         // 不传时走默认去重。
         send: (messages, opts) => sender.sendTextBatch(`${kind}:${id}`, Array.isArray(messages) ? messages : [String(messages)], opts || {})
@@ -1409,14 +1409,18 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     // ctx 必须带齐 onebot/sender/store/log/sendSegments：runHook 原样透传 ctx，
     // 缺任何一项都会让 anti-recall 的 sendSegmentsSafe 三级回退落空（ctx.onebot.call
     // 抛 TypeError 被 catch 吞掉），撤回时机器人毫无反应。见 CORE-PATCH.md 的契约。
-    // 段发送用 onebot.sendSegments，SendQueue 没有同名方法（只有 sendMedia /
-    // sendTextBatch）。
+    // 段发送通过 SendQueue，准入、限频、去重与留档口径一致。
     try {
       skillManager.runHook('onRecall', {
         event, chatKey, mid, onebot, sender, store, log,
-        sendSegments: (kind, id2, segs) => onebot.sendSegments(kind, id2, segs)
+        sendSegments: sendHookSegments
       }).catch(() => {});
     } catch { /* ignore */ }
+  }
+
+  async function sendHookSegments(kind, id, segments) {
+    const label = await segmentsToText(segments, { includeReply: false });
+    return sender.sendMedia(`${kind}:${id}`, segments, { label, dedupeKey: JSON.stringify(segments) });
   }
 
   // ── HTTP API ──
@@ -1662,7 +1666,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   // 声明式路由表（src/routes.js）：把所有依赖一次性注入。
   // 路由 handler 通过闭包取用这些依赖，handleHttp 只负责匹配分发。
   const apiRoutes = createRoutes({
-    store, memory, sessions, onebot, orchestrator,
+    store, memory, sessions, onebot, orchestrator, sender,
     emit, log,
     localVersion, compareSemver,
     sanitizeConfig, keyEndpointAllowed, sanitizeProvider,
@@ -2131,20 +2135,6 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     }, 2000);
     obPortPollTimer.unref?.();
 
-    // ── WS 就绪后的账号信息兜底
-    // 协议端重启/换号后，QQ Agent 侧的 WS 可能先于 OneBot 实例完全就绪连上，
-    // open 时的 get_login_info 失败 → selfInfo 恒空 → UI"检测不到账号"。
-    // onebot.js 里已有 15 秒延迟补拉；这里再挂一道 45 秒后的终检。
-    setTimeout(() => {
-      if (!onebot.connected || onebot.selfInfo) return;
-      onebot.call('get_login_info').then((info) => {
-        if (info) {
-          onebot.selfInfo = info;
-          emit('onebot-status', { connected: true, everConnected: true, error: '' });
-          log('[onebot] 账号信息延迟恢复成功');
-        }
-      }).catch(() => { /* 仍失败：连接层已尽力，UI 状态如实反映 */ });
-    }, 45_000).unref?.();
     if (getConfig().proactive?.enabled) orchestrator.startProactiveLoop();
     orchestrator.startReminderLoop();   // 提醒（闹钟）调度：到点往群里发提醒
     log(`控制台已就绪：http://127.0.0.1:${port}`);
@@ -3541,7 +3531,7 @@ async function buildUsageStats({ range = '7', force = false } = {}) {
   // 覆盖掉前一个，于是切 range 时前后两个 range 会同时全量重算，把刚做的缓存优化
   // 全还回去。改成 Map：每个 key 各有各的在途 Promise，互不覆盖。
   const inflight = usageStatsInflight.get(key);
-  if (inflight) return infight;
+  if (inflight) return inflight;
   const promise = (async () => {
     let stats = null;
     try {

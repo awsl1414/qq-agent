@@ -66,7 +66,7 @@ export async function detectModelVision({ baseUrl, apiKey, model, protocol = '' 
     baseUrl: String(baseUrl).trim(), apiKey, model: modelId, openaiBody
   });
 
-  let res;
+  let res, body;
   try {
     res = await fetch(built.url, {
       method: 'POST',
@@ -75,11 +75,11 @@ export async function detectModelVision({ baseUrl, apiKey, model, protocol = '' 
       signal: AbortSignal.timeout(timeoutMs),
       dispatcher: dispatcherFor()   // 网络代理：与真实对话同一条通道
     });
+    body = await res.json();
   } catch (error) {
     return { ...base, note: error?.name === 'TimeoutError' ? '探测请求超时' : `网络错误：${error?.message ?? error}` };
   }
   const latencyMs = Date.now() - started;
-  const body = await res.json().catch(() => ({}));
   const errText = String(body?.error?.message ?? body?.message ?? body?.detail?.error?.message ?? '');
 
   if (res.ok) {

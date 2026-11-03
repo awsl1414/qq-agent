@@ -40,7 +40,7 @@ import { runGates, GATE_MAX_FILES, draftDigest } from './gate.js';
 // zip 解析复用核心那套（项目里"往磁盘写可执行 JS 的入口"的集中实现）。
 // 插件 import src/ 下工具模块是本项目既有做法（media-download → safe-fetch、
 // reply-safety → llm），不是特例。
-import { parseZip } from '../../zip-install.js';
+import { parseZip, writeModuleDirectory } from '../../zip-install.js';
 // 数据目录以核心的 DATA_DIR 为唯一真源（含 QQ_AGENT_PROFILE 推导），
 // 不用 `QQ_AGENT_DATA_DIR || '.'` 拼（那样会回落到进程 cwd）。
 import { DATA_DIR } from '../../config.js';
@@ -616,10 +616,14 @@ export const providers = {
         confirmIssues: confirmIssues === true
       }, null, 2), 'utf8');
     } catch (e) {
-      try { fs.rmSync(targetBase, { recursive: true, force: true }); copyDir(backupDir, targetBase, []); }
-      catch { /* 恢复也失败时，备份目录仍在，可手工恢复 */ }
+      let recoveryError = '';
+      try {
+        fs.rmSync(targetBase, { recursive: true, force: true });
+        fs.mkdirSync(targetBase, { recursive: true });
+        copyDir(backupDir, targetBase, []);
+      } catch (error) { recoveryError = `；恢复原版也失败：${error.message}，备份保留在 ${backupDir}`; }
       markApprovalConsumed(tctx, id, false);
-      return { ok: false, error: `覆盖失败（已尽力从备份恢复原版）：${e.message}`, backup: backupDir };
+      return { ok: false, error: `覆盖失败${recoveryError ? '' : '（已恢复原版）'}：${e.message}${recoveryError}`, backup: backupDir };
     }
 
     // ⑤ 内置模块被覆盖后，随包基线的指纹不再一致：下一轮热重扫会被准入闸
@@ -667,28 +671,32 @@ export const providers = {
     const backupDir = path.join(backupsRoot, latest);
     const now = new Date().toISOString().replace(/[:.]/g, '-');
     const revertedDir = path.join(backupsRoot, `reverted-${now}`);
+    let savedCurrent = false;
     try {
       fs.mkdirSync(backupsRoot, { recursive: true });
       // 当前版本挪走。rename 失败（典型：data 目录与扩展跨盘，EXDEV）退回复制+删除
-      try { fs.renameSync(targetBase, revertedDir); }
+      try { fs.renameSync(targetBase, revertedDir); savedCurrent = true; }
       catch {
         fs.mkdirSync(revertedDir, { recursive: true });
         copyDir(targetBase, revertedDir, []);
+        savedCurrent = true;
         fs.rmSync(targetBase, { recursive: true, force: true });
       }
       // 挪走后 targetBase 已不存在，恢复前必须重建根目录（copyDir 不建根）
       fs.mkdirSync(targetBase, { recursive: true });
       copyDir(backupDir, targetBase, []);
     } catch (e) {
+      let recoveryError = '';
       try {
-        if (!fs.existsSync(targetBase)) {
+        if (savedCurrent) {
           // 复原也走"复制+删除"，rename 在跨盘场景同样会炸
+          fs.rmSync(targetBase, { recursive: true, force: true });
           fs.mkdirSync(targetBase, { recursive: true });
           copyDir(revertedDir, targetBase, []);
           fs.rmSync(revertedDir, { recursive: true, force: true });
         }
-      } catch { /* 尽力复原 */ }
-      return { ok: false, error: `回滚失败：${e.message}` };
+      } catch (error) { recoveryError = `；恢复回滚前版本也失败：${error.message}，现场保留在 ${revertedDir}`; }
+      return { ok: false, error: `回滚失败：${e.message}${recoveryError}` };
     }
     // 回滚把文件换回了升级前的版本：基线若在升级时重算过，这里也要重算回来，
     // 否则同一个陷阱会以反方向再踩一次（升级过的模块在回滚后反被拦）。
@@ -856,22 +864,17 @@ export const providers = {
 
     // ③ 目录名：用清单 id，冲突则递增（绝不覆盖：覆盖写一半会让热重载加载出半截代码）
     const wantName = sanitizeDraftId(String(gate.manifest?.id || id));
-    let finalName = wantName;
-    for (let n = 1; n <= 100; n++) {
-      if (!fs.existsSync(path.join(baseDir, finalName))) break;
-      finalName = `${wantName}_${n}`;
-    }
-    const target = path.join(baseDir, finalName);
-
     // ④ 复制（不是移动：保留暂存副本便于回溯"当初怎么生成的"）
     const copied = [];
+    let finalName, target;
     try {
-      fs.mkdirSync(target, { recursive: true });
-      const src = draftDir(tctx, id);
-      copyDir(src, target, copied);
+      const installed = writeModuleDirectory(baseDir, wantName, (dir) => {
+        copyDir(draftDir(tctx, id), dir, copied);
+      });
+      finalName = installed.id;
+      target = installed.dir;
     } catch (e) {
-      // 失败要清理半成品，否则会留下一个残缺目录被当成扩展加载
-      try { fs.rmSync(target, { recursive: true, force: true }); } catch { /* ignore */ }
+      // 独占目录的创建/清理由 writeModuleDirectory 负责，不能删已有同名模块。
       // 票还回去：内容没落地，人刚才的确认不该白白消耗掉
       markApprovalConsumed(tctx, id, false);
       return { ok: false, error: `落地失败：${e.message}` };

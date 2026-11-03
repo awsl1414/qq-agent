@@ -152,7 +152,7 @@ export async function refreshPriceFeed(_url) {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json().catch(() => { throw new Error('返回的不是合法 JSON'); });
+    const data = await res.json().catch((error) => { if (error instanceof SyntaxError) throw new Error('返回的不是合法 JSON'); throw error; });
     const norm = normalizePriceFeed(data);
     if (!norm) throw new Error('JSON 里没有可用的价格条目');
     applyPrices(norm.prices, 'remote');

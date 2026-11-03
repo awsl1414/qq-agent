@@ -10,7 +10,7 @@
 //   · dev_run 在项目根**启动 shell 执行任意命令**。
 //     cwd 只是**起始目录，不是沙箱**：命令能 cd 到别处、按绝对路径读写项目外文件、
 //     执行任意程序、连任意主机。所以"不越出项目目录"只对文件工具有效。
-//   · 文件工具还缺 realpath 校验（junction 可绕过），属已知缺口。
+//   · 文件工具同时检查实际路径；符号链接与 junction 不能指向项目外。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -20,7 +20,7 @@ import { getConfig } from '../../config.js';
 import { chatCompletionWithRetry, resolveApiKey } from '../../llm.js';
 import { toOpenAiTools, executeTool } from '../../tools.js';
 import { safeFetch } from '../../safe-fetch.js';
-import { marketFetch, MARKET_API_BASE } from '../../market.js';
+import { marketFetch, downloadModuleZip } from '../../market.js';
 import { unzipToModuleDir } from '../../zip-install.js';
 
 const MAX_FILE_BYTES = 1024 * 1024;        // 单文件 1MB
@@ -182,6 +182,20 @@ function resolveInRoot(root, rel) {
   const abs = path.resolve(root, ...segs);
   const r = path.relative(root, abs);
   if (r.startsWith('..') || path.isAbsolute(r)) return null;
+  try {
+    const realRoot = fs.realpathSync(root);
+    let current = root;
+    for (const segment of segs) {
+      current = path.join(current, segment);
+      try { fs.lstatSync(current); }
+      catch (error) {
+        if (error.code === 'ENOENT') break; // 后续尚不存在的路径由已验证的父目录创建。
+        throw error;
+      }
+      const relative = path.relative(realRoot, fs.realpathSync(current));
+      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
+    }
+  } catch { return null; }
   return abs;
 }
 
@@ -346,7 +360,6 @@ export function shouldSendNotice(round, lastAtMs, nowMs, gapMs) {
 //   · 第三方还要过准入闸（含 fs/网络的会被拦下等信任），体验也不顺。
 //   落沙箱 → 模型先读先改 → 采用时再把（改过的）文件写进 plugins/ 并重算基线。
 const MARKET_FETCH_TIMEOUT_MS = 20000;
-const MARKET_MAX_ZIP_BYTES = 8 * 1024 * 1024;   // 与后端 MAX_UPLOAD 对齐
 
 /**
  * 广场条目按关键词排序（纯函数，便于测试）。
@@ -705,12 +718,7 @@ export function buildDevTools(projectRoot, workDir) {
           const code = String(it.installCode || '').trim();
           if (!code) return { content: `错误：「${want}」当前没有可下载的安装口令（可能还在审核中）。`, isError: true };
 
-          const res = await fetch(`${MARKET_API_BASE}/install/${encodeURIComponent(code.toUpperCase())}/download`, {
-            signal: AbortSignal.timeout(120000)
-          });
-          if (!res.ok) return { content: `错误：下载失败 HTTP ${res.status}`, isError: true };
-          const buf = Buffer.from(await res.arrayBuffer());
-          if (buf.length > MARKET_MAX_ZIP_BYTES) return { content: '错误：安装包超过 8MB 上限', isError: true };
+          const { buffer: buf } = await downloadModuleZip({ code });
 
           const type = String(it.type || '').toLowerCase() === 'plugin' ? 'plugin' : 'skill';
           const pulledRoot = path.join(workDir, 'pulled');

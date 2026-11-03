@@ -198,7 +198,7 @@ export async function publishModule({ kind, id, displayName, description, token,
     body: form,
     signal: AbortSignal.timeout(120000)
   });
-  const data = await res.json().catch(() => ({}));
+  const data = await res.json();
   if (!res.ok) throw new Error(data?.error || `发布失败：HTTP ${res.status}`);
   return data;
 }
@@ -347,13 +347,21 @@ export async function downloadModuleZip({ code, verified = null } = {}) {
     const text = await res.text().catch(() => '');
     throw new Error(`下载失败：HTTP ${res.status} ${text.slice(0, 120)}`);
   }
-  // 先按 content-length 预拦再整体读入：读完才查 8MB 上限的话，恶意/损坏
-  // 服务端推超大 body 时内存已经爆了。（content-length 可能缺失/说谎，
-  // 下面的长度复查保留。）
+  // 声明长度仅作预检；逐块累计真实字节，超限立即取消流，不先整体读入。
   const declared = Number(res.headers.get('content-length') || 0);
-  if (declared > MAX_ZIP_BYTES) throw new Error('安装包超过 8MB 上限');
-  const zipBuffer = Buffer.from(await res.arrayBuffer());
-  if (zipBuffer.length > MAX_ZIP_BYTES) throw new Error('安装包超过 8MB 上限');
+  if (declared > MAX_ZIP_BYTES) {
+    await res.body?.cancel();
+    throw new Error('安装包超过 8MB 上限');
+  }
+  if (!res.body) throw new Error('安装包内容为空');
+  const chunks = [];
+  let bytes = 0;
+  for await (const chunk of res.body) {
+    bytes += chunk.byteLength;
+    if (bytes > MAX_ZIP_BYTES) throw new Error('安装包超过 8MB 上限');
+    chunks.push(chunk);
+  }
+  const zipBuffer = Buffer.concat(chunks, bytes);
   // 结构校验放在下载之后、落地之前：这条路径同样要过（forge 侧还会再过一遍，
   // 两边口径一致，不信任任何传输环节）。
   const { validateZipStructure } = await import('./zip-install.js');

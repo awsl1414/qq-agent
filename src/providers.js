@@ -350,7 +350,7 @@ export async function fetchModelsFrom(baseUrl, apiKey, timeoutMs = 15000, protoc
   }
   // 先取文本再解析：直接 res.json() 在服务端返回 HTML（反代欢迎页/错端口）时
   // 只会冒一句 "Unexpected token '<'"，看不出到底连到了什么。
-  const raw = await res.text().catch(() => '');
+  const raw = await res.text();
   let data;
   try {
     data = JSON.parse(raw);
@@ -404,7 +404,7 @@ export async function testModelChat({ baseUrl, apiKey, model, protocol = 'openai
       dispatcher: dispatcherFor()   // 网络代理：测试也要走用户配的通道，否则"测试通过、实跑失败"
     });
     const latencyMs = Date.now() - startedAt;
-    const body = await res.json().catch(() => ({}));
+    const body = await res.json();
     if (!res.ok) {
       const errText = String(body?.error?.message ?? body?.message ?? '').slice(0, 200);
       // 401/403 单独给一句可操作的话：这是"测试"最常见的失败，而原文（invalid api key）

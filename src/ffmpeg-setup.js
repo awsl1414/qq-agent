@@ -676,22 +676,20 @@ function installBinaries(found) {
   const parent = path.dirname(destDir);
   fs.mkdirSync(parent, { recursive: true });
   const staging = `${destDir}.new-${process.pid}-${Date.now().toString(36)}`;
-  fs.mkdirSync(staging, { recursive: true });
-  const destFfmpeg = path.join(staging, exeName('ffmpeg'));
-  fs.copyFileSync(found.ffmpeg, destFfmpeg);
-  // Linux 上 zip 条目未必带执行位，copyFile 会原样保留该属性，不显式 chmod
-  // 就会出现"文件在、-version 跑不起来"。Windows 没有执行位概念，no-op。
-  fs.chmodSync(destFfmpeg, 0o755);
-  if (found.ffprobe) {
-    const destFfprobe = path.join(staging, exeName('ffprobe'));
-    fs.copyFileSync(found.ffprobe, destFfprobe);
-    fs.chmodSync(destFfprobe, 0o755);
-  }
-
   // 旧目录先挪开，成功后删除；失败则挪回，不能让用户从"能用"变成"没有"
   const backup = `${destDir}.old-${process.pid}-${Date.now().toString(36)}`;
   let hadOld = false;
   try {
+    fs.mkdirSync(staging, { recursive: true });
+    const destFfmpeg = path.join(staging, exeName('ffmpeg'));
+    fs.copyFileSync(found.ffmpeg, destFfmpeg);
+    // zip 条目未必带执行位；Windows 上 chmod 不改变执行权限。
+    fs.chmodSync(destFfmpeg, 0o755);
+    if (found.ffprobe) {
+      const destFfprobe = path.join(staging, exeName('ffprobe'));
+      fs.copyFileSync(found.ffprobe, destFfprobe);
+      fs.chmodSync(destFfprobe, 0o755);
+    }
     if (fs.existsSync(destDir)) { fs.renameSync(destDir, backup); hadOld = true; }
     fs.renameSync(staging, destDir);
   } catch (e) {

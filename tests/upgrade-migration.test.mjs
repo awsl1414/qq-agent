@@ -460,8 +460,8 @@ test('retire-bundled-ffmpeg：同名文件两处来源时只搬一个，不覆�
   const { appRoot, dataDir } = sandbox();
   const pkg = path.join(appRoot, 'runtime', 'ffmpeg');
   fs.mkdirSync(path.join(pkg, 'bin'), { recursive: true });
-  fs.writeFileSync(path.join(pkg, 'ffprobe'), 'FROM-ROOT', 'utf8');
-  fs.writeFileSync(path.join(pkg, 'bin', 'ffprobe'), 'FROM-BIN', 'utf8');
+  fs.writeFileSync(path.join(pkg, ffprobeExe), 'FROM-ROOT', 'utf8');
+  fs.writeFileSync(path.join(pkg, 'bin', ffprobeExe), 'FROM-BIN', 'utf8');
 
   const managed = managedDir(dataDir);
   fs.mkdirSync(managed, { recursive: true });
@@ -471,9 +471,9 @@ test('retire-bundled-ffmpeg：同名文件两处来源时只搬一个，不覆�
   assert.equal(r.ran.length, 1);
   // 只搬一份：根目录那份优先
   assert.equal(r.ran[0].changed.length, 1, `changed 不应记录被覆盖的重复项：${JSON.stringify(r.ran[0].changed)}`);
-  assert.equal(fs.readFileSync(path.join(managed, 'ffprobe'), 'utf8'), 'FROM-ROOT');
+  assert.equal(fs.readFileSync(path.join(managed, ffprobeExe), 'utf8'), 'FROM-ROOT');
   // 未选中的第二份留在原位（不删非空目录），日志里要有交代
-  assert.equal(fs.existsSync(path.join(pkg, 'bin', 'ffprobe')), true, '多余来源应留在原处，不该被静默删除');
+  assert.equal(fs.existsSync(path.join(pkg, 'bin', ffprobeExe)), true, '多余来源应留在原处，不该被静默删除');
   assert.match(r.ran[0].note, /同名文件/);
 });
 

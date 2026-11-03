@@ -399,20 +399,41 @@ export function commit(root, id, appRoot, dataRoot, rec) {
 export function rollback(root, id, appRoot, dataRoot, rec) {
   const snap = rec?.snapshot?.files || [];
   if (!snap.length) return { ok: false, error: '这个工单没有快照，无法回滚' };
+  if (typeof id !== 'string' || id !== sanitizeId(id)) return { ok: false, error: '非法工单 id' };
+  const plans = [];
+  try {
+    const boundary = path.resolve(backupDir(root, id));
+    for (const f of snap) {
+      const r = resolveTarget(root, appRoot, dataRoot, { scope: f.scope, path: f.path });
+      if (!r.ok) throw new Error(r.error);
+      let source = null;
+      if (!f.isNew) {
+        if (typeof f.backupRel !== 'string' || !f.backupRel) throw new Error(`快照缺失：${f.path}`);
+        source = path.resolve(root, f.backupRel);
+        const relative = path.relative(boundary, source);
+        if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+          throw new Error('快照源越出本工单备份目录');
+        }
+        let cursor = path.resolve(root);
+        for (const part of path.relative(cursor, source).split(path.sep)) {
+          cursor = path.join(cursor, part);
+          if (fs.lstatSync(cursor).isSymbolicLink()) throw new Error('快照源不能包含符号链接或目录联接');
+        }
+        if (!fs.statSync(source).isFile()) throw new Error(`快照不是文件：${f.backupRel}`);
+      }
+      plans.push({ f, r, source });
+    }
+  } catch (error) { return { ok: false, error: `回滚预检失败：${error.message}` }; }
   const restored = [], removed = [];
-  for (const f of snap) {
-    const t = { scope: f.scope, path: f.path };
-    const r = resolveTarget(root, appRoot, dataRoot, t);
-    if (!r.ok) return { ok: false, error: r.error };
-    if (f.isNew || !f.backupRel) {
-      try { fs.rmSync(r.abs, { force: true }); removed.push(f.path); } catch { /* ignore */ }
+  for (const { f, r, source } of plans) {
+    if (f.isNew) {
+      try { fs.rmSync(r.abs, { force: true }); removed.push(f.path); }
+      catch (error) { return { ok: false, error: `回滚删除失败：${f.path} —— ${error.message}` }; }
       continue;
     }
-    const b = path.join(root, f.backupRel);
-    if (!fs.existsSync(b)) return { ok: false, error: `快照缺失：${f.backupRel}` };
     try {
       ensureDir(path.dirname(r.abs));
-      fs.copyFileSync(b, r.abs);
+      fs.copyFileSync(source, r.abs);
       restored.push(f.path);
     } catch (e) {
       return { ok: false, error: `回滚失败：${f.path} —— ${e.message}` };
