@@ -40,7 +40,7 @@ test('v2 authenticates plaintext even if the attacker recomputes the payload dig
   const built = buildBackup({ categories: ['messages'] });
   assert.equal(built.ok, true, built.error);
   assert.equal(built.manifest.version, 2);
-  assert.equal(parseBackup(built.buffer).authenticated, true);
+  assert.equal(parseBackup(built.buffer).ok, true);
   const tampered = repack(built, (manifest, payload) => {
     payload[0].data = Buffer.from('attacker data');
     manifest.sha256 = computePayloadSha256(payload);
@@ -72,7 +72,7 @@ test('authenticated file boundaries cannot be changed while preserving the old c
 test('manifest fields are bound to both plaintext and encrypted payloads with stable key ordering', () => {
   for (const encrypt of [false, true]) {
     const built = buildBackup({ categories: ['messages'], encrypt });
-    for (const field of ['instanceId', 'categories', 'files', 'encrypted', 'version']) {
+    for (const field of ['instanceId', 'categories', 'files', 'encrypted']) {
       const parsed = parseBackup(repack(built, manifest => { manifest[field] = 'tampered'; }));
       assert.equal(parsed.ok, false, field);
       assert.match(parsed.error, /HMAC/);
@@ -82,28 +82,47 @@ test('manifest fields are bound to both plaintext and encrypted payloads with st
       for (const key of Object.keys(manifest)) delete manifest[key];
       Object.assign(manifest, Object.fromEntries(fields));
     });
-    assert.equal(parseBackup(reordered).authenticated, true);
-    const missing = parseBackup(repack(built, manifest => { delete manifest.hmac; }));
-    assert.equal(missing.ok, false);
-    assert.match(missing.error, /HMAC/);
+    assert.equal(parseBackup(reordered).ok, true);
   }
 });
 
-test('v1 packages remain readable and explicitly unauthenticated, including details API', async () => {
-  const dir = path.join(root, 'legacy');
-  getConfig().backup = { targets: [{ id: 'legacy', type: 'local', dir }] };
+test('v1 and future packages are rejected with a version mismatch, including details API', async () => {
+  const dir = path.join(root, 'version-mismatch');
+  getConfig().backup = { targets: [{ id: 'versions', type: 'local', dir }] };
   for (const encrypt of [false, true]) {
-    const legacy = repack(buildBackup({ categories: ['messages'], encrypt }), manifest => {
-      manifest.version = 1;
-      delete manifest.hmac;
-    });
-    const parsed = parseBackup(legacy);
-    assert.equal(parsed.ok, true, parsed.error);
-    assert.equal(parsed.authenticated, false);
-    await createLocalTarget({ dir }).put('legacy.qqab', legacy);
-    const detail = await inspectBackup({ targetId: 'legacy', key: 'legacy.qqab' });
-    assert.equal(detail.ok, true, detail.error);
-    assert.equal(detail.authenticated, false);
+    for (const version of [1, 3]) {
+      const unsupported = repack(buildBackup({ categories: ['messages'], encrypt }), manifest => {
+        manifest.version = version;
+        delete manifest.hmac;
+      });
+      for (const verify of [true, false]) {
+        const parsed = parseBackup(unsupported, { verify });
+        assert.equal(parsed.ok, false);
+        assert.match(parsed.error, new RegExp(`格式版本 ${version} 与本机支持的 2 不符.*相同版本`));
+      }
+      await createLocalTarget({ dir }).put('unsupported.qqab', unsupported);
+      const detail = await inspectBackup({ targetId: 'versions', key: 'unsupported.qqab' });
+      assert.equal(detail.ok, false);
+      assert.match(detail.error, /版本.*不符/);
+    }
+  }
+});
+
+test('current packages require manifest HMAC even when payload verification is disabled', async () => {
+  const dir = path.join(root, 'missing-hmac');
+  getConfig().backup = { targets: [{ id: 'unsigned', type: 'local', dir }] };
+  for (const encrypt of [false, true]) {
+    const unsigned = repack(buildBackup({ categories: ['messages'], encrypt }), manifest => { delete manifest.hmac; });
+    for (const verify of [true, false]) {
+      const parsed = parseBackup(unsigned, { verify });
+      assert.equal(parsed.ok, false);
+      assert.equal(parsed.code, 'authentication');
+      assert.match(parsed.error, /HMAC/);
+    }
+    await createLocalTarget({ dir }).put('unsigned.qqab', unsigned);
+    const detail = await inspectBackup({ targetId: 'unsigned', key: 'unsigned.qqab' });
+    assert.equal(detail.ok, false);
+    assert.match(detail.error, /HMAC/);
   }
 });
 

@@ -9,8 +9,8 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qqagent-restore-test-'));
 process.env.QQ_AGENT_DATA_DIR = root;
 const { getConfig } = await import('../src/config.js');
 const { runRestore, restorePreview } = await import('../src/backup/index.js');
-const { computePayloadSha256, BACKUP_FORMAT } = await import('../src/backup/archive.js');
-const { encryptPayload } = await import('../src/backup/crypto.js');
+const { computePayloadSha256, BACKUP_FORMAT, BACKUP_VERSION } = await import('../src/backup/archive.js');
+const { encryptPayload, signManifest } = await import('../src/backup/crypto.js');
 const { buildZip } = await import('../src/zip-build.js');
 const { createLocalTarget } = await import('../src/backup/targets/local.js');
 const { listBackups, rollbackImport } = await import('../src/migrate.js');
@@ -32,8 +32,11 @@ function pack(payload = entries, overrides = {}) {
   const sha256 = overrides.encrypted === true
     ? createHash('sha256').update(payload[0].data).digest('hex')
     : computePayloadSha256(payload);
-  const manifest = { format: BACKUP_FORMAT, version: 1, encrypted: false,
-    categories: ['messages', 'memory'], sha256, ...overrides };
+  const plainEntries = overrides.encrypted === true ? entries : payload;
+  const manifest = { format: BACKUP_FORMAT, version: BACKUP_VERSION, encrypted: false,
+    categories: ['messages', 'memory'], sha256,
+    files: plainEntries.map(e => ({ path: e.name, bytes: e.data.length })).sort((a, b) => a.path.localeCompare(b.path)), ...overrides };
+  manifest.hmac = signManifest(manifest);
   return buildZip([{ name: 'manifest.json', data: JSON.stringify(manifest) }, ...payload]);
 }
 async function put(buffer, key = 'qq-agent/backup-test.qqab') {

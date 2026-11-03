@@ -239,7 +239,7 @@ async function withRestoreSource({ targetId, key }, action) {
     const sourceDir = path.join(extractDir, 'data');
     const scan = scanSource(extractDir);
     if (!scan.ok) return scan;
-    return await action({ packageRoot: extractDir, sourceDir, scan, authenticated: parsed.authenticated, manifest: parsed.manifest, key: k });
+    return await action({ packageRoot: extractDir, sourceDir, scan, manifest: parsed.manifest, key: k });
   } catch (error) {
     return { ok: false, error: String(error?.message ?? error) };
   } finally {
@@ -284,12 +284,12 @@ export async function runRestore({ targetId, key, options = {}, selection, hooks
   if (restoreInFlight || backupInFlight) return { ok: false, error: '已有一个备份或恢复正在进行，请等它完成' };
   restoreInFlight = true;
   try {
-    restoreTask = withRestoreSource({ targetId, key }, async ({ packageRoot, sourceDir, scan, authenticated, manifest, key: k }) => {
+    restoreTask = withRestoreSource({ targetId, key }, async ({ packageRoot, sourceDir, scan, manifest, key: k }) => {
       const picked = options.selection ?? selection ?? defaultRestoreSelection(packageRoot, sourceDir, scan);
       const report = await importData(packageRoot, picked, options.hooks ?? hooks ?? {});
       if (!report.ok) return { ok: false, backupId: report.backupId, error: report.error || '导入失败', report };
       logger.info('backup', `恢复完成：${targetId} / ${k}`);
-      return { ok: true, backupId: report.backupId, source: `${targetId}:${k}`, authenticated, manifest, report };
+      return { ok: true, backupId: report.backupId, source: `${targetId}:${k}`, manifest, report };
     });
     return await restoreTask;
   } finally { restoreInFlight = false; restoreTask = null; }
@@ -297,9 +297,9 @@ export async function runRestore({ targetId, key, options = {}, selection, hooks
 
 /** scanSource 提供包内、本机和预计新增消息数；预览结束立即清理临时数据。 */
 export async function restorePreview({ targetId, key } = {}) {
-  return withRestoreSource({ targetId, key }, ({ scan, authenticated, manifest }) => {
+  return withRestoreSource({ targetId, key }, ({ scan, manifest }) => {
     const { sourceDir, ...preview } = scan;
-    return { ok: true, authenticated, manifest, scan: preview };
+    return { ok: true, manifest, scan: preview };
   });
 }
 
@@ -375,7 +375,7 @@ export async function inspectBackup({ targetId, key } = {}) {
   try {
     const buffer = await createTarget(entry).get(String(key || ''));
     const parsed = parseRestoreBackup(buffer);
-    return parsed.ok ? { ok: true, authenticated: parsed.authenticated, manifest: parsed.manifest, bytes: buffer.length } : parsed;
+    return parsed.ok ? { ok: true, manifest: parsed.manifest, bytes: buffer.length } : parsed;
   } catch (error) {
     return { ok: false, error: String(error?.message ?? error) };
   }

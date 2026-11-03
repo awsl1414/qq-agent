@@ -167,7 +167,7 @@ export function buildBackup({ categories = [], appVersion = '', instanceId = '',
  *
  * @param {Buffer} buffer
  * @param {{verify?: boolean}} opts verify=false 仅供已校验过的内部调用方
- * @returns {{ok:true, authenticated:boolean, manifest:object, entries:Array<{name:string,data:Buffer}>, files:number, bytes:number, ciphertext?:Buffer, code?:string}
+ * @returns {{ok:true, manifest:object, entries:Array<{name:string,data:Buffer}>, files:number, bytes:number, ciphertext?:Buffer, code?:string}
  *          | {ok:false, error:string, code?:string}}
  */
 export function parseBackup(buffer, { verify = true } = {}) {
@@ -191,22 +191,17 @@ export function parseBackup(buffer, { verify = true } = {}) {
   } catch (error) {
     return { ok: false, error: `manifest.json 不是合法 JSON：${error.message}` };
   }
-  // 新格式必须认证后才能使用清单字段；verify=false 也不能绕过认证。
-  const hasHmac = manifest && Object.hasOwn(manifest, 'hmac');
-  let authenticated = false;
-  if (hasHmac) {
-    try { authenticated = verifyManifest(manifest); }
-    catch { /* 本机密钥不可用与认证不匹配都必须拒绝，不能降级读取。 */ }
-    if (!authenticated) return { ok: false, code: 'authentication', error: '备份包清单认证失败（HMAC 不匹配，已被篡改或不属于本机实例）' };
-  }
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) || manifest.format !== BACKUP_FORMAT) {
     return { ok: false, error: `不是本程序的备份包（format=${manifest?.format ?? '缺失'}）` };
   }
-  if (Number(manifest.version) > BACKUP_VERSION) {
-    return { ok: false, error: `备份包格式版本 ${manifest.version} 比本机支持的 ${BACKUP_VERSION} 新，请升级应用后再恢复` };
+  if (Number(manifest.version) !== BACKUP_VERSION) {
+    return { ok: false, error: `备份包格式版本 ${manifest.version} 与本机支持的 ${BACKUP_VERSION} 不符，请用相同版本的应用恢复` };
   }
-  if (![1, BACKUP_VERSION].includes(manifest.version)) return { ok: false, error: '不支持的备份包格式版本' };
-  if (manifest.version === BACKUP_VERSION && !authenticated) return { ok: false, error: '备份包清单缺少 HMAC 认证' };
+  // 当前格式必须认证后才能读取载荷；verify=false 也不能绕过认证。
+  let verified = false;
+  try { verified = verifyManifest(manifest); }
+  catch { /* 本机密钥不可用与认证不匹配都必须拒绝，不能降级读取。 */ }
+  if (!verified) return { ok: false, code: 'authentication', error: '备份包清单认证失败（HMAC 不匹配，已被篡改或不属于本机实例）' };
   if (manifest.encrypted === true) {
     const payload = entries.filter((e) => e.name !== MANIFEST_NAME);
     if (entries.length !== 2 || payload.length !== 1 || payload[0].name !== 'payload.enc') {
@@ -216,7 +211,7 @@ export function parseBackup(buffer, { verify = true } = {}) {
     if (verify && manifest.sha256 !== crypto.createHash('sha256').update(ciphertext).digest('hex')) {
       return { ok: false, error: '备份包已损坏、被篡改，或来自另一台机器（sha256 不匹配）' };
     }
-    return { ok: true, code: 'encrypted', authenticated, manifest, ciphertext, entries: [], files: 0, bytes: ciphertext.length };
+    return { ok: true, code: 'encrypted', manifest, ciphertext, entries: [], files: 0, bytes: ciphertext.length };
   }
 
   const payload = entries.filter((e) => e.name !== MANIFEST_NAME);
@@ -226,17 +221,15 @@ export function parseBackup(buffer, { verify = true } = {}) {
       return { ok: false, error: '备份包校验失败（sha256 不匹配），文件可能已损坏或被篡改' };
     }
   }
-  if (authenticated) {
-    // 旧摘要按路径与内容拼接，文件边界本身没有编码；认证过的文件清单
-    // 必须与实际条目一致，防止把内容中的路径字节拆成额外文件而保留同一摘要。
-    const files = payload.map(e => ({ path: e.name, bytes: e.data.length })).sort((a, b) => a.path.localeCompare(b.path));
-    if (!Array.isArray(manifest.files) || manifest.files.length !== files.length
-      || files.some((file, i) => file.path !== manifest.files[i]?.path || file.bytes !== manifest.files[i]?.bytes)) {
-      return { ok: false, error: '备份包文件清单与载荷不匹配，文件可能已损坏或被篡改' };
-    }
+  // 摘要按路径与内容拼接，文件边界本身没有编码；认证过的文件清单
+  // 必须与实际条目一致，防止把内容中的路径字节拆成额外文件而保留同一摘要。
+  const files = payload.map(e => ({ path: e.name, bytes: e.data.length })).sort((a, b) => a.path.localeCompare(b.path));
+  if (!Array.isArray(manifest.files) || manifest.files.length !== files.length
+    || files.some((file, i) => file.path !== manifest.files[i]?.path || file.bytes !== manifest.files[i]?.bytes)) {
+    return { ok: false, error: '备份包文件清单与载荷不匹配，文件可能已损坏或被篡改' };
   }
   const bytes = payload.reduce((n, e) => n + e.data.length, 0);
-  return { ok: true, authenticated, manifest, entries: payload, files: payload.length, bytes };
+  return { ok: true, manifest, entries: payload, files: payload.length, bytes };
 }
 
 /**
@@ -272,7 +265,7 @@ export function extractBackup(buffer, destDir, { verify = true } = {}) {
   if (parsed.manifest.encrypted === true) return { ok: false, code: 'encrypted', error: '加密备份包请通过恢复入口解密' };
   const out = extractEntries(parsed.entries, destDir);
   if (!out.ok) return out;
-  return { ...out, authenticated: parsed.authenticated, manifest: parsed.manifest };
+  return { ...out, manifest: parsed.manifest };
 }
 
 export default {

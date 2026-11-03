@@ -8,10 +8,10 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'backup-routes-'));
 process.env.QQ_AGENT_DATA_DIR = temp;
 const { createRoutes } = await import('../src/routes.js');
 const { getConfig } = await import('../src/config.js');
-const { decryptCredential } = await import('../src/backup/crypto.js');
+const { decryptCredential, signManifest } = await import('../src/backup/crypto.js');
 const { registerTarget } = await import('../src/backup/targets/index.js');
 const { buildZip } = await import('../src/zip-build.js');
-const { BACKUP_FORMAT, computePayloadSha256 } = await import('../src/backup/archive.js');
+const { BACKUP_FORMAT, BACKUP_VERSION, computePayloadSha256 } = await import('../src/backup/archive.js');
 const { skillManager } = await import('../src/skills/manager.js');
 const routes = createRoutes({ readBody: async (body) => body, emit() {}, sanitizeConfig: (config) => config });
 after(() => fs.rmSync(temp, { recursive: true, force: true }));
@@ -122,7 +122,10 @@ test('backup restore routes forward selection and forge hooks with the recorded 
     { name: 'modules/plugins/route-demo/plugin.json', data: Buffer.from(JSON.stringify({ id: 'route-demo', entry: 'index.js' })) },
     { name: 'modules/plugins/route-demo/index.js', data: Buffer.from('export default {};') }
   ];
-  const manifest = { format: BACKUP_FORMAT, version: 1, encrypted: false, categories: [{ key: 'customPersonas' }, { key: 'extensions' }], sha256: computePayloadSha256(entries) };
+  const manifest = { format: BACKUP_FORMAT, version: BACKUP_VERSION, encrypted: false,
+    categories: [{ key: 'customPersonas' }, { key: 'extensions' }], sha256: computePayloadSha256(entries),
+    files: entries.map(e => ({ path: e.name, bytes: e.data.length })).sort((a, b) => a.path.localeCompare(b.path)) };
+  manifest.hmac = signManifest(manifest);
   const zip = buildZip([{ name: 'manifest.json', data: JSON.stringify(manifest) }, ...entries]);
   registerTarget('route-restore', () => ({ async get() { return zip; } }));
   await request('POST', '/api/backup/config', { targets: [{ id: 'restore', type: 'route-restore', enabled: true }] });
@@ -139,7 +142,6 @@ test('backup restore routes forward selection and forge hooks with the recorded 
   const input = { targetId: 'restore', key: 'route-backup.zip' };
   const preview = await request('POST', '/api/backup/preview', input);
   assert.equal(preview.status, 200, JSON.stringify(preview.data));
-  assert.equal(preview.data.authenticated, false);
   assert.equal(preview.data.scan.modules.length, 1);
   const restored = await request('POST', '/api/backup/restore', { ...input, selection: { customPersonas: true, modules: ['plugin:route-demo'] } });
   assert.equal(restored.status, 200, JSON.stringify(restored.data));
