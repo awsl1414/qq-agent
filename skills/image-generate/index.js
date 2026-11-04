@@ -27,6 +27,8 @@ let warn = () => {};
 // api.fetch：只有清单声明了 permissions: ["web_fetch"] 才是真的 fetch。
 // 这是能力引用不是配置，可以 setup 时存；配置仍然每次执行现读。
 let apiFetch = null;
+// 扩展 API（setup 注入）：只用来取 localImageSrc 这类宿主提供的受控地址
+let api = null;
 
 const MAX_COUNT = 4;
 const MAX_PROMPT_CHARS = 2000;
@@ -58,7 +60,8 @@ const RESPONSE_FORMATS = ['auto', 'url', 'b64_json'];
  */
 const BUILD_TAG = 'v1.2.0-local-file-send';
 
-export function setup(api) {
+export function setup(skillApi) {
+  api = skillApi;
   cfg = api.config;
   log = api.log || (() => {});
   warn = api.warn || (() => {});
@@ -127,6 +130,11 @@ export function setup(api) {
         let sent = 0;
         const sendFailed = [];
         for (const image of ready) {
+          // 发送前先登记受控预览地址：saveLocal 写的是 os.tmpdir() 下的绝对路径，
+          // 浏览器读不到，必须由核心换成同源地址（路径校验 + 签名在 media-registry）。
+          const src = typeof api.localImageSrc === 'function' && image.filePath
+            ? api.localImageSrc('generate', image.filePath, ctx)
+            : null;
           try {
             // 优先传本地路径：图已落盘，让协议端自己读文件，body 从 MB 级降到百字节级
             //（见 sender.sendImage 的注释）。dataUrl 作为回退，协议端不同机/路径不可读时用。
@@ -139,7 +147,8 @@ export function setup(api) {
             ctx.session?.sent?.push({
               type: 'image',
               text: '[图片:AI绘图]',
-              at: new Date().toLocaleTimeString('zh-CN', { hour12: false })
+              at: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+              src
             });
           } catch (error) {
             // 发送失败时把本地留档路径给出去，省得白画一张

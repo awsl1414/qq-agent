@@ -269,7 +269,18 @@ function registerTools(a) {
         });
         instance().markUsed(sticker.id, String(ctx.session?.triggerText || '').slice(0, 100));
         writeViewSnapshot({});   // 使用次数变了，页面上的"用过"计数跟着更新
-        ctx.session?.sent?.push({ type: 'sticker', text: `[表情包:${sticker.desc || sticker.localNote || sticker.id}]`, at: new Date().toLocaleTimeString('zh-CN', { hour12: false }) });
+        // 受控预览地址由核心签发（localStickerPath 已把 file:/// 归一成白名单内的绝对路径）。
+        // 远端直链（还没转存成功的极少数情况）浏览器能直接取，原样当 src。
+        const localFile = isLocalFile ? localStickerPath(sticker.url) : '';
+        const src = localFile && typeof api?.localImageSrc === 'function'
+          ? api.localImageSrc('sticker', localFile, ctx)
+          : (!isLocalFile ? String(sticker.url) : null);
+        ctx.session?.sent?.push({
+          type: 'sticker',
+          text: `[表情包:${sticker.desc || sticker.localNote || sticker.id}]`,
+          at: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+          src
+        });
         ctx.emit?.('session-update', ctx.session?.id);
         return ok({ sent: true, messageId: result?.message_id ?? null, note: '表情已发送。' });
       } catch (error) {

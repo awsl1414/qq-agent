@@ -192,10 +192,16 @@
 
   // ── 装监听 ────────────────────────────────────────────────────────────
   // capture=true 才能收到**资源加载失败**（<img>/<script> 的 error 事件不冒泡到 window）
+  //
+  // data-error-quiet="1"：该元素自己已经处理了加载失败（例如会话「已发送」里的
+  // 图片缩略图，加载失败会就地换成一行说明）。缩略图地址来自外部图床，图被删 /
+  // 过期是常态，若每次都弹「软件界面出了点问题」，用户会以为程序坏了。约定：
+  // 只有**页面上已经给出等价反馈**的元素才可以带这个属性。
   window.addEventListener('error', function (ev) {
     try {
       var t = ev && ev.target;
       if (t && t !== window && t.tagName && (t.src || t.href)) {
+        if (t.getAttribute && t.getAttribute('data-error-quiet') === '1') return;
         record('资源加载失败', '<' + String(t.tagName).toLowerCase() + '> ' + (t.src || t.href), '');
         return;
       }

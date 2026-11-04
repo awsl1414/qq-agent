@@ -107,15 +107,31 @@ const STICKER_GRACE_MAX = 500;
  * 工具结果是否**明确**说了"没发出去"（全被去重 / 显式 sent:false / 只是预览）。
  * 只有这种情况才不该补记"已发送"，其余一律以"没报错就是发出去了"为准。
  *
- * content 可能是 parts 数组（媒体类工具返回 [{type:'text'},…]），
- * 直接 String(array) 会得到 "[object Object]"，正则永远匹配不到 ——
- * 那会让 send_image 的预览调用被补记成「已发送到 QQ」。
+ * 检查范围是**整个 result 对象**，不只是 content：
+ *   · ok(payload) 会把对象序列化进 content，标志位在 content 里；
+ *   · 媒体类工具（send_image 预览）返回的是 { content: parts数组, sent: false }，
+ *     标志位在**顶层**，content 只是描述文字。
+ * 只读 content 时，第二种形态的 sent:false 永远看不见，于是预览会被补记成
+ * 「已发送到 QQ」——界面上说发出去了，实际一张图都没发。
+ *
+ * content 还可能是 parts 数组 [{type:'text'},…]，直接 String(array) 得到
+ * "[object Object]"，正则同样匹配不到，所以数组要先抽 text 再拼。
  */
-function reportsNothingSent(content) {
-  const s = Array.isArray(content)
+export function reportsNothingSent(result) {
+  const content = result?.content;
+  const fromContent = Array.isArray(content)
     ? content.map((p) => (p && typeof p.text === 'string' ? p.text : '')).join('\n')
-    : String(content ?? '');
-  return /"(sent|delivered)"\s*:\s*(0|false)\b/i.test(s);
+    : (typeof content === 'string' ? content : '');
+  // 顶层标志位直接按键取值判断，不拼字符串塞进正则：
+  // 顶层是 JS 对象（sent: false 是布尔），content 里才是 JSON 文本（"sent":false）。
+  // 混用同一个正则会出现"顶层写法匹配不到"的假阴性。
+  const explicitlyNothing = ['sent', 'delivered'].some((k) => {
+    if (!result || !Object.prototype.hasOwnProperty.call(result, k)) return false;
+    const v = result[k];
+    return v === false || v === 0 || v === 'false' || v === '0';
+  });
+  if (explicitlyNothing) return true;
+  return /"(sent|delivered)"\s*:\s*(0|false)\b/i.test(fromContent);
 }
 
 export class Orchestrator {
@@ -1887,12 +1903,15 @@ export class Orchestrator {
         if (!result.isError
           && session.sent.length === sentBeforeCall
           && isDeliverTool(name, autoEndExtra)
-          && !reportsNothingSent(result.content)) {
+          && !reportsNothingSent(result)) {
           const isVoice = /voice|audio|record|tts/i.test(String(name));
+          // 补记的条目没有可预览地址：src 显式为 null，前端走「无图」分支，
+          // 不让"类型说是媒体、却既无 src 又无说明"的第四种状态出现。
           session.sent.push({
             type: 'tool',
             text: `[${isVoice ? '语音' : '消息'} · ${name}]`,
-            at: new Date().toLocaleTimeString('zh-CN', { hour12: false })
+            at: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+            src: null
           });
         }
         // 工具结果：文本走 tool 消息；媒体（parts 数组）不能塞进 tool 消息，

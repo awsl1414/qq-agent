@@ -23,7 +23,7 @@ import { ChatStore } from './store.js';
 import { MemoryStore } from './memory.js';
 import { cacheIncomingImages } from './image-cache.js';
 import { SendQueue } from './sender.js';
-import { SessionRegistry } from './sessions.js';
+import { SessionRegistry, publicSentEntries, sentCountOf } from './sessions.js';
 import { Orchestrator } from './orchestrator.js';
 import { ReminderStore } from './reminders.js';
 import { VideoReader } from './video-reader.js';
@@ -830,7 +830,9 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
             // sent/finishReason/error/endedAt 必须随 SSE 推下去：会话一结束轮询就
             // 不再拉详情（只刷 running/waiting），载荷里没有它们的话，"已发送到 QQ"
             // 徽标要等用户手动刷新才看得到。
-            sent: s.sent ?? [],
+            sent: publicSentEntries(s),
+            // 列表摘要里也有同名字段；SSE patch 合并后不会把它冲成旧值。
+            sentCount: sentCountOf(s),
             finishReason: s.finishReason ?? null,
             error: s.error ?? null,
             endedAt: s.endedAt ?? null

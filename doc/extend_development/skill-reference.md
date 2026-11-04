@@ -184,9 +184,31 @@
 | `qqCall` | `(method, params?) => Promise` | 需要 `permissions: ['qq_sticker']`，见 [onebot-capabilities.md](onebot-capabilities.md) |
 | `utils.sleep` | `(ms) => Promise` | 定时 |
 | `utils.safeJsonParse` | `(text, fallback?) => any` | 解析失败返回 fallback |
+| `localImageSrc` | `(kind, path, ctx) => string \| null` | 本机图片的受控预览地址，见下 |
 
 ⚠️ `api.capability()` 只取第一个生效的提供者，并且内部 try/catch 后返回 `undefined`，
 调用方拿不到失败原因。要诊断用 `hasCapability()`。
+
+### 6.1 已发送图片的预览地址
+
+工具把本机图片发给 QQ 之后，控制台会话详情要显示缩略图。浏览器读不到宿主绝对路径，
+所以地址由核心签发，扩展**不要自己拼 URL**：
+
+```js
+await ctx.sender.sendImage(ctx.chatKey, { file: localPath });
+const src = api.localImageSrc('generate', localPath, ctx);   // 失败返回 null
+ctx.session?.sent?.push({ type: 'image', text: '[图片:AI绘图]', at: timeText, src });
+```
+
+- `kind` 必须是白名单里的来源，决定允许的根目录：`setu`（`<DATA_DIR>/setu-tmp/`）、
+  `generate`（`os.tmpdir()/qq-agent-image-generate/`）、`sticker`
+  （`<DATA_DIR>/sticker-images/` 与 `<DATA_DIR>/plugin-data/sticker/img/`）。
+  其它来源的图片请先落到这些目录，或直接用 http(s) 直链作为 `src`。
+- 返回值形如 `/api/sessions/<id>/image/<token>`（HMAC 绑定会话与相对路径）；
+  路径越界、文件不存在或为空、`kind` 未知时返回 `null`，此时 `src` 留空即可。
+- `session.sent` 的每一条对外只暴露 `{ type, text, at, src, preview }`；核心负责剥掉
+  内部字段并做协议校验，扩展不要往 `sent` 里塞宿主路径。`preview` 由核心按
+  `src` 与 `type` 现算（`ok` / `missing` / `none`），扩展不要自己写。
 
 ---
 

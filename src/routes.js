@@ -50,6 +50,8 @@ import { collect as collectBackupSources, listBackupCategories } from './backup/
 import { listBundleOptions, exportBundle, inspectBundle, moduleZipOf, dataDirOf, discardBundle } from './bundle.js';
 import { SKILLS_DIR, PLUGINS_DIR, isBuiltinModuleDir } from './plugin-loader.js';
 import { toOpenAiTools, executeTool } from './tools.js';
+import { publicSentEntries } from './sessions.js';
+import { readLocalImage } from './media-registry.js';
 // 探测结果的"可对外"视图：删掉两枚令牌，只留有无标记。
 // 令牌不越过 HTTP 边界的保证在这个纯函数里，路由只负责调它。
 import { publicView as protocolDetectView } from './protocol-detect.js';
@@ -4244,7 +4246,34 @@ export function createRoutes(deps) {
       handler: async ({ res, json, match }) => {
         const s = sessions.get(match[1]);
         if (!s) return json(res, 404, { error: '会话不存在' });
-        return json(res, 200, s);
+        // sent 的对外形状只有一处（sessions.publicSentEntries），SSE 出口共用同一个函数：
+        // 两处各写一遍映射就是本任务要根治的分裂。
+        return json(res, 200, { ...s, sent: publicSentEntries(s) });
+      }
+    },
+    {
+      // 「已发送」里本地图片的受控取图端点。地址由 media-registry 的
+      // registerLocalImage 签发（HMAC 绑定会话 + 相对路径 + kind），这里只负责校验与读盘：
+      //   验签失败 / 跨会话 / 越界 / 非图片 / 超限 → 一律 404，不回显路径与错误细节。
+      method: 'GET', pattern: /^\/api\/sessions\/([\w-]+)\/image\/([^/]+)$/,
+      handler: async ({ res, match }) => {
+        const found = readLocalImage(match[1], match[2]);
+        if (!found) {
+          res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+          res.end('Not found');
+          return;
+        }
+        res.writeHead(200, {
+          // Content-Type 只信魔数结果，不信扩展名（.png 里放文本必须被拒）
+          'content-type': found.mime,
+          'content-length': found.buffer.length,
+          // no-cache：允许缓存但每次回源校验。本地图随时可能被清理（setu-tmp 老化、
+          // 表情剪枝、AI 绘图只留最近 20 张），max-age 会让"文件已删"在缓存期内
+          // 仍显示旧图，用户刷新看不到「图片加载失败」这个真实状态。
+          'cache-control': 'private, no-cache',
+          'x-content-type-options': 'nosniff'
+        });
+        res.end(found.buffer);
       }
     },
     {

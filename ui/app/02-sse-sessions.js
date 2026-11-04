@@ -51,6 +51,7 @@ function connectSSE() {
     // sent/finishReason 等收尾字段：后端给了才进 patch。
     // 不能无脑写 null，pending 合并时 null 会把之前已有的值冲掉。
     if (Array.isArray(data.sent)) patch.sent = data.sent;
+    if (Number.isFinite(data.sentCount)) patch.sentCount = data.sentCount;
     if (data.finishReason !== undefined) patch.finishReason = data.finishReason;
     if (data.error !== undefined) patch.error = data.error;
     // 「人话解释」跟着 error 一起走。undefined 时不写，免得把先前拿到的解释
@@ -447,8 +448,10 @@ function renderSessionList() {
     const statsText = s.status !== 'waiting' ? statParts.join(' · ') : '';
     const isNew = !state.seenSessionIds.has(s.id);
     // 失败会话的重试按钮：只有 error 状态且没发出过消息的才显示
-    // （已发言的重试会导致群里重复内容，后端同样会拒绝）
-    const retryHtml = s.status === 'error' && !(s.sent && s.sent.length)
+    // （已发言的重试会导致群里重复内容，后端同样会 409 拒绝）。
+    // 判据读列表摘要里的 sentCount：列表出口不带整份 sent，自己从 s.sent 推断
+    // 会恒为"没发过"，已发过消息的失败会话也会长出这颗按钮。
+    const retryHtml = s.status === 'error' && !(Number(s.sentCount) > 0)
       ? `<button class="btn btn-small session-retry-btn" data-id="${esc(s.id)}" title="把这条会话的触发消息翻回未读并重新处理">重试</button>`
       : '';
     // 运行中/等待中会话的中止按钮：运行中在下一轮请求前安全收尾，等待中直接干净消失
@@ -749,6 +752,106 @@ function bindSessionErrorFix() {
   });
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// 会话「已发送」里的图片缩略图
+// ---------------------------------------------------------------------------
+// 后端（src/sessions.js 的 publicSentEntry）对外只给两个渲染相关字段：
+// `src` 与 `preview`。
+//
+// `preview` 是后端算好的语义，前端**只按它落三种状态，不自己判断 type**：
+//   'ok'      有可预览地址 → 缩略图
+//   'missing' 媒体类条目但拿不到预览地址 → 文字徽标 +「（无预览）」
+//   'none'    纯文字等非媒体条目 → 原文字徽标，不加提示
+// 这样"本条本来就没图"和"有图但预览拿不到"在界面上可区分，新增来源也不用再动前端。
+//
+// src 来自模型 / 外部输入 / 会话文件。esc() 只解决 HTML 特殊字符，挡不住
+// `javascript:` 这类协议，所以进 src 属性之前必须单独校验：只放行 http(s)，
+// 或形如 /api/sessions/<id>/image/<payload>.<sig> 的同源相对路径。
+// ══════════════════════════════════════════════════════════════════════════
+const SENT_IMAGE_PROTOCOLS = new Set(['http:', 'https:']);
+const SENT_LOCAL_IMAGE_RE = /^\/api\/sessions\/[\w-]+\/image\/[A-Za-z0-9_-]+\.[0-9a-f]{32}$/;
+
+/**
+ * 取出一条「已发送」记录里可安全渲染的缩略图地址。
+ * src 缺失、协议不是 http(s)、相对路径不是受控取图地址时返回空串（退回文字徽标）。
+ * @param {object} entry session.sent 里的一条记录
+ * @param {function} [tokenize] 给同源地址补控制台令牌（默认用 00-core.js 的 withToken）
+ * @returns {string} 可放进 <img src> 的地址，或 ''
+ */
+function sentImageUrl(entry, tokenize) {
+  if (!entry) return '';
+  const raw = typeof entry.src === 'string' ? entry.src.trim() : '';
+  if (!raw) return '';
+  if (SENT_LOCAL_IMAGE_RE.test(raw)) {
+    // 浏览器原生加载发不了自定义头：设置 server.token 后必须带 ?token=
+    const addToken = typeof tokenize === 'function'
+      ? tokenize
+      : (typeof withToken === 'function' ? withToken : (u) => u);
+    return addToken(raw);
+  }
+  let parsed;
+  try { parsed = new URL(raw); } catch { return ''; }
+  return SENT_IMAGE_PROTOCOLS.has(parsed.protocol) ? parsed.href : '';
+}
+
+/** 一条「已发送」记录的 HTML：按后端给的 preview 落三种状态之一。 */
+function sentBadgeHtml(sent) {
+  const label = `已发送到 QQ${sent.at ? ` · ${esc(sent.at)}` : ''}`;
+  // preview 是后端唯一措辞来源（见 src/sessions.js publicSentEntry）；
+  // 这里只在 'ok' 分支才尝试取地址，取不到时仍按媒体无预览降级，
+  // 避免"后端说可预览、地址却过不了前端协议校验"时静默变成纯文字。
+  if (sent.preview === 'ok') {
+    const imageUrl = sentImageUrl(sent);
+    if (imageUrl) {
+      // 缩略图放在独立块里，note（sent.text）单独一行：图片本身没有文字信息量，
+      // 配的那句话仍要能被读出来，alt 也用它（读屏与图片加载失败时都有内容）。
+      // data-error-quiet：加载失败由下面的兜底就地换成一行说明，不再触发全局
+      // 「软件界面出了点问题」提示条（外部图床的图过期是常态，见 ui/error-boot.js）。
+      return `
+        <div class="sent-badge sent-badge--image">
+          <div class="asr-label">${label}</div>
+          <div class="sent-thumb"><img class="sent-thumb__img" data-error-quiet="1" src="${esc(imageUrl)}" alt="${esc(sent.text)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" /></div>
+          <div class="sent-thumb__broken" hidden>图片加载失败（链接可能已失效）</div>
+          <div class="sent-thumb__note">${esc(sent.text)}</div>
+        </div>`;
+    }
+  }
+  // 'missing'：媒体条目但拿不到预览，明确标出来，与纯文字条目区分。
+  // 旧会话数据 / 预览模式里的条目没有 preview：按 'none' 处理（原文字徽标），
+  // 不为旧数据保留第二套推断逻辑，也不凭 type 自己猜。
+  if (sent.preview === 'missing' || sent.preview === 'ok') {
+    return `
+        <div class="sent-badge sent-badge--nopreview">
+          <div class="asr-label">${label} <span class="sent-nopreview-tag">（无预览）</span></div>
+          ${esc(sent.text)}
+        </div>`;
+  }
+  return `
+        <div class="sent-badge">
+          <div class="asr-label">${label}</div>
+          ${esc(sent.text)}
+        </div>`;
+}
+
+/**
+ * 缩略图加载失败 → 藏掉坏图、露出文字兜底。事件委托挂在长期容器 #session-detail
+ * 上绑一次即可（renderSessionDetail 每次整体重画也还在）。
+ * ⚠️ error 事件不冒泡，必须捕获阶段监听。
+ */
+function bindSentImageFallback() {
+  const box = $('#session-detail');
+  if (!box || box.dataset.sentImgBound === '1') return;
+  box.dataset.sentImgBound = '1';
+  box.addEventListener('error', (e) => {
+    const img = e.target;
+    if (!img || img.tagName !== 'IMG' || !img.classList.contains('sent-thumb__img')) return;
+    const thumb = img.closest('.sent-thumb');
+    const broken = thumb?.parentElement?.querySelector('.sent-thumb__broken');
+    if (thumb) thumb.hidden = true;
+    if (broken) broken.hidden = false;
+  }, true);
+}
+
 let sessionDetailLoadGeneration = 0;
 
 async function loadSessionDetail(id, { quiet = false } = {}) {
@@ -879,13 +982,7 @@ function renderSessionDetail(s) {
       }
     }
     // 发出的消息
-    for (const sent of s.sent || []) {
-      html.push(`
-        <div class="sent-badge">
-          <div class="asr-label">已发送到 QQ${sent.at ? ` · ${esc(sent.at)}` : ''}</div>
-          ${esc(sent.text)}
-        </div>`);
-    }
+    for (const sent of s.sent || []) html.push(sentBadgeHtml(sent));
   }
   if (s.error) html.push(sessionErrorHtml(s));
   if (s.finishReason) html.push(`<div class="bubble bubble-user">finish：${esc(s.finishReason)}</div>`);
@@ -897,6 +994,7 @@ function renderSessionDetail(s) {
   detail.innerHTML = html.join('');
   detail.querySelectorAll('details.collapsible').forEach((d, i) => { if (openStates.has(i)) d.open = openStates.get(i); });
   bindSessionErrorFix();   // 错误卡片上的「去改设置」按钮（委托，幂等）
+  bindSentImageFallback(); // 图片缩略图加载失败的兜底（委托，幂等）
   const jsonBtn = $('#json-mode-btn');
   if (jsonBtn) jsonBtn.addEventListener('click', () => {
     state.sessionJsonMode = state.sessionJsonMode === s.id ? null : s.id;

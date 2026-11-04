@@ -37,6 +37,7 @@ import { logger } from './logger.js';
 import { PANEL_ROUTE_PREFIX, PANEL_DATA_FILE, normalizePanelAsset, panelUrl, panelDataUrl } from './skills/panel.js';
 import { skillErrorText } from './skills/errors.js';
 import { getConfig, DATA_DIR } from './config.js';
+import { registerLocalImage } from './media-registry.js';
 // 受保护 fetch（H3）：扩展的 api.fetch 必须走这里，不能给裸 globalThis.fetch
 import { guardedFetch } from './safe-fetch.js';
 
@@ -521,6 +522,24 @@ function makeSkillStorage(skillId) {
 }
 
 /**
+ * 扩展可用的「已发送」记账辅助。
+ *
+ * 扩展把图发出去之后要往 session.sent 记一条，但**受控预览地址**不能由它自己拼：
+ * 路径白名单、相对化、HMAC 签名都在 media-registry 里，核心不把这套散给扩展。
+ * 这里只做两件事：从当前 ctx 取会话 id、把 kind/path 交给 registerLocalImage。
+ * 失败返回 null —— 扩展照常记账，只是 src 为空（界面显示文字徽标）。
+ *
+ * @param {string} kind      'setu' | 'generate' | 'sticker'
+ * @param {string} filePath  刚落盘、准备发送的图片绝对路径
+ * @param {object} [ctx]     工具的执行上下文（含 session.id）
+ */
+export function localImageSrc(kind, filePath, ctx = {}) {
+  const sessionId = String(ctx?.session?.id ?? '').trim();
+  if (!sessionId) return null;
+  return registerLocalImage(sessionId, { kind, path: filePath });
+}
+
+/**
  * 构造暴露给 Skill 的安全 API。
  * 与旧插件 API 的差别：多了 config / hook 注册 / 能力查询，但仍然只给白名单能力。
  */
@@ -608,6 +627,8 @@ export function createSkillApi(skillId, permissions = []) {
       return undefined;
     },
     hasCapability: (name) => skillManager.hasCapability(name),
+    // 本地图片的受控预览地址（见 localImageSrc 注释）。扩展不要自己拼 URL。
+    localImageSrc,
     // 日志（改道 logger，落盘 + 分级 + 脱敏）。
     // 原先只进 console：`data/logs/*.log` 里 [skill: 行数为 0，插件写的
     // 「群 X 进入禁言」这类关键证据只出现在 stdout，排障时等于不存在

@@ -60,7 +60,7 @@ function loadTotals() {
   // 实测 data/sessions 已达 185MB / 1963 个文件，耗时 20 秒以上，而 loadTotals()
   // 在 report() 的 setTimeout 回调里跑，会同步阻塞主线程，期间界面完全无响应。
   //
-  // session-index-cache.json（v2）里已包含每条会话的 usage 与 toolCalls 摘要，
+  // session-index-cache.json 里已包含每条会话的 usage 与 toolCalls 摘要，
   // 不需要读全文。它不可用时（老版本缓存 / 损坏）才回退到全量重扫。
   const fromIndex = loadTotalsFromIndex();
   if (fromIndex) {
@@ -99,9 +99,10 @@ function loadTotalsFromIndex() {
   try {
     idx = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'session-index-cache.json'), 'utf8'));
   } catch { return null; }
-  // 版本必须是 2：v1 的摘要里没有 toolCalls，用它会漏统计。
-  // 也不能是 3+：将来摘要结构变了，这里的算法需要同步更新，宁可回退重扫。
-  if (idx?.version !== 2 || !Array.isArray(idx.entries) || !idx.entries.length) return null;
+  // 版本必须与 sessions.js 的 INDEX_CACHE_VERSION 一致：缓存条目结构变了
+  // （v3 加了 sentCount），旧版摘要不能直接拿来统计。
+  // 比它更高的版本同样回退——将来结构再变时，这里的算法需要同步更新。
+  if (idx?.version !== 3 || !Array.isArray(idx.entries) || !idx.entries.length) return null;
   const t = { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, toolCounts: {} };
   for (const e of idx.entries) {
     const u = e?.usage || {};

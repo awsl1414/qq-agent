@@ -7,6 +7,7 @@ import { DATA_DIR } from './config.js';
 import { logger } from './logger.js';
 import { atomicWriteText } from './atomic-write.js';
 import { appendUsageLedger } from './usage-ledger.js';
+import { publicSentSrc } from './media-registry.js';
 
 const SESSIONS_DIR = path.join(DATA_DIR, 'sessions');
 // 索引缓存：启动加速的关键。没有它时 #loadIndex 要逐个 readFileSync+JSON.parse
@@ -14,10 +15,10 @@ const SESSIONS_DIR = path.join(DATA_DIR, 'sessions');
 // ~0.5MB 的单文件（3ms 级）。缓存与磁盘文件的增量校验在后台异步做（见
 // reconcileInBackground），所以缓存缺失/过期都只是"首次启动慢"，不会错。
 const INDEX_CACHE_FILE = path.join(DATA_DIR, 'session-index-cache.json');
-// v2：摘要里新增了 toolCalls（工具调用次数）。旧缓存里的条目没有这个字段，
-// 而缓存只有摘要、没有 messages，算不出来，只能让版本号失效，
-// 启动时从会话文件重建一次索引把计数补上。一次性代价，之后照旧走缓存。
-const INDEX_CACHE_VERSION = 2;
+// v3：摘要里新增了 sentCount（已发送条数）。旧缓存条目没有这个字段，而缓存只有
+// 摘要、没有 sent，算不出来，只能让版本号失效，启动时从会话文件重建一次索引。
+// （v2 曾因新增 toolCalls 同样失效过一次；一次性代价，之后照旧走缓存。）
+const INDEX_CACHE_VERSION = 3;
 
 /**
  * 会话文件的原子写（tmp + rename）。
@@ -64,6 +65,68 @@ export function sessionFile(id) {
   const safe = String(id ?? '');
   if (!/^[\w-]+$/.test(safe)) throw new Error(`非法会话 id：${safe.slice(0, 40)}`);
   return path.join(SESSIONS_DIR, `${safe}.json`);
+}
+
+/**
+ * 「已发送」里属于媒体类的 type：图片 / 表情包 / 语音 / 视频等。
+ *
+ * 这些条目**可能**拿不到预览地址（远端表情直链过期、base64 发图没有本地留档、
+ * AI 绘图没留档成功……），此时 `src` 为 null。没有这个集合的话，媒体条目与
+ * 纯文字条目在界面上一模一样，用户无法区分「本来就没图」和「有图但预览不了」。
+ * 新增媒体类型只改这里。
+ */
+const SENT_MEDIA_TYPES = new Set(['image', 'sticker', 'voice', 'audio', 'video', 'record']);
+
+function isMediaType(type) {
+  return SENT_MEDIA_TYPES.has(String(type ?? ''));
+}
+
+/**
+ * 「已发送」条目的对外形状：type / text / at / src / preview 五个字段。
+ *
+ * HTTP 详情与 SSE 广播共用这一个函数，是"内外契约只有一份"的唯一落点。
+ * 之前每新增一种图片来源就要同时改记账、序列化、渲染三层，分裂正是这样长出来的。
+ *
+ * `preview` 是**后端算好的渲染语义**，前端只按它落三种状态，不再自己判断 type：
+ *   ok      有可预览地址 → 缩略图
+ *   missing 媒体条目但拿不到预览地址 → 文字徽标 +「（无预览）」
+ *   none    纯文字 / 非媒体条目 → 原文字徽标
+ * 旧会话文件里没有 preview，这里按 src 与 type 现算，不需要迁移。
+ *
+ * 内部字段（localFile、url、messageId、to 等）在这里剥掉：绝对路径绝不能
+ * 出现在响应里；src 只放行 http(s) 直链与受控同源地址（见 media-registry）。
+ *
+ * @param {unknown} entry session.sent 里的原始记录
+ * @returns {{ type: string, text: string, at: string, src: string|null, preview: 'ok'|'missing'|'none' }}
+ */
+export function publicSentEntry(entry) {
+  const e = entry && typeof entry === 'object' ? entry : {};
+  const type = String(e.type ?? '');
+  const src = publicSentSrc(e.src);
+  return {
+    type,
+    text: String(e.text ?? ''),
+    at: String(e.at ?? ''),
+    src,
+    preview: src ? 'ok' : (isMediaType(type) ? 'missing' : 'none')
+  };
+}
+
+/** 一条会话的对外 `sent` 数组（统一走 publicSentEntry）。 */
+export function publicSentEntries(session) {
+  const list = Array.isArray(session?.sent) ? session.sent : [];
+  return list.map(publicSentEntry);
+}
+
+/**
+ * 「这条会话发出去过多少条」的唯一口径。
+ *
+ * 列表摘要（#summary 的 sentCount）与 SSE 广播共用它：前端两处需要这个事实
+ * （引导第 5 步的完成判据、"发了就别重试"的按钮条件），而列表出口不带整份 sent，
+ * 各自从 s.sent 推断只会在列表出口上恒为「没发过」。
+ */
+export function sentCountOf(session) {
+  return Array.isArray(session?.sent) ? session.sent.length : 0;
 }
 
 export class SessionRegistry {
@@ -330,6 +393,12 @@ export class SessionRegistry {
       activity: s.activity ?? '',
       webSearchCount: s.webSearchCount ?? 0,
       toolCalls: toolCallCount(s),            // 工具调用次数（列表行要显示，见 toolCallCount 的说明）
+      // 已发送条数：**列表出口唯一的"有没有发过话"口径**。
+      // 列表不能带上整份 sent（体积 + 只暴露必要信息），但前端确有两处需要这个事实：
+      // 引导第 5 步的完成判据、失败会话「重试」按钮的显示条件（发过就重试会导致
+      // 群里重复发言，后端会 409 拒绝）。少这个字段时它们只能各自猜，前者永远
+      // 不打勾、后者对已发过消息的失败会话也显示按钮。
+      sentCount: sentCountOf(s),
       outcome: s.outcome ?? null,            // { sent: n, finishReason }
       usage: s.usage ?? null,
       model: s.model ?? '',

@@ -261,7 +261,7 @@ function registerAllTools() {
           atUserId: args.atUserId ?? null
         });
         const realSent = result.sent.filter((s) => !s.deduped);
-        ctx.session.sent.push(...realSent.map((s) => ({ type: 'text', text: s.text, at: s.at })));
+        ctx.session.sent.push(...realSent.map((s) => ({ type: 'text', text: s.text, at: s.at, src: null })));
         ctx.emit('session-update', ctx.session.id);
         const note = ['已发送。不要输出"已发送"类汇报，继续思考下一步或直接结束。'];
         if (result.failed.length) {
@@ -343,7 +343,7 @@ function registerAllTools() {
         if (!messages.length) return err('消息内容为空');
         const result = await ctx.sender.sendTextBatch(wantTarget, messages, {});
         const realSent = result.sent.filter((s) => !s.deduped);
-        ctx.session.sent.push(...realSent.map((s) => ({ type: 'text', text: s.text, to: wantTarget })));
+        ctx.session.sent.push(...realSent.map((s) => ({ type: 'text', text: s.text, at: s.at, src: null })));
         ctx.emit('session-update', ctx.session.id);
         const note = [`已发送到 ${wantTarget}。不要输出汇报。`];
         if (result.failed.length) note.push(`（另有 ${result.failed.length} 条发送失败：${result.failed.map((f) => f.error).join('；')}）`);
@@ -1048,10 +1048,18 @@ function registerAllTools() {
           atUserId: args.atUserId ?? null
         });
         st.sent += 1;
+        // src 存**原始 http(s) 直链**，供控制台渲染缩略图：
+        //   · 这个地址刚经 safeFetchBinary 下载并校验过（魔数确认是真图），
+        //     浏览器端 <img src> 能直接取（实测不带 Referer 也是 200 image/*）。
+        //   · sender.sendImage 只回传 message_id，OneBot 的 image 段不回显远端地址，
+        //     没有更稳定的候选，所以就用调用方给的这个。
+        // 不存 dataUrl / 本地路径：控制台在浏览器里读不到宿主文件，base64 还会
+        // 把整份会话 JSON 撑大（src/sessions.js 每次整份落盘）。
         ctx.session.sent.push({
           type: 'image',
           text: `[图片${args.note ? `:${String(args.note).slice(0, 40)}` : ''}]`,
-          at: new Date().toLocaleTimeString('zh-CN', { hour12: false })
+          at: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+          src: url
         });
         ctx.emit('session-update', ctx.session.id);
         return ok({ sent: true, messageId: result?.message_id ?? null, note: '图片已发送。' });
