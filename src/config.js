@@ -161,7 +161,9 @@ export const DEFAULT_CONFIG = {
   trustedPlugins: [],
   // 安全例外（默认全部关闭）
   security: {
-    allowPrivateImageHosts: false,          // true 时图片下载允许内网地址（仅本地测试/自建图床）
+    // true 时所有出站请求（网页抓取 / 图片下载 / 扩展联网）允许访问内网地址。
+    // 键名沿用历史名称（用户配置里已存在），语义已统一为「允许出站访问内网」。
+    allowPrivateImageHosts: false,
     // 外链白名单。主进程把页面里的链接交给系统浏览器前，要走
     // electron/external-link.js 的四道判据：
     //   ① 协议只允许 http/https（`file:` / `ms-msdt:` 这类交给 shell 是"执行"不是"打开"）；

@@ -162,7 +162,8 @@ function openSendConfigModal() {
  * 三个字段（全部在 config.security 下）：
  *   browseLock.enabled / browseLock.hosts / browseLock.siteSearchUrl
  *，浏览锁定：fetch 与发图逐跳校验域名白名单
- *   allowPrivateImageHosts，允许图片下载走内网地址（自建图床 / 本地测试）
+ *   allowPrivateImageHosts，允许所有出站请求（网页抓取 / 图片下载 / 扩展联网）访问内网地址
+ *     （自建图床、本地测试等场景；键名沿用历史名称，语义已是整个出站面）
  *   externalHosts，外部链接额外放行的主机
  *
  * ⚠️ deepMerge 对数组是整体替换：这里每次都提交完整列表，不做增量。
@@ -192,10 +193,13 @@ function openSecurityModal() {
       <div class="hint" id="sec-lock-warn" style="color:var(--red);display:none"></div>
 
       <div class="checkbox-row" style="margin-top:14px"><input type="checkbox" class="sw" id="sec-private-image" ${sec.allowPrivateImageHosts === true ? 'checked' : ''} />
-        <label for="sec-private-image">允许图片下载访问内网地址（127.0.0.1 / 10.x / 192.168.x …）</label></div>
+        <label for="sec-private-image">允许出站请求访问内网地址（127.0.0.1 / 10.x / 192.168.x …）</label></div>
       <div class="hint" style="margin:-2px 0 10px">
-        默认关闭，这是一层 SSRF 防护。只有自建图床、本地测试这类场景才需要打开；
-        开启后机器人可能被诱导去访问你内网的 HTTP 服务。
+        默认关闭，这是一层 SSRF 防护（防止外部内容诱导机器人去请求你内网的 HTTP 服务）。
+        出站请求指机器人主动向外发起的联网 —— <b>网页抓取、图片下载、扩展联网</b>都走同一条通道，这个开关对三者同时生效。
+        开启后，机器人在上述任一功能里都能访问 <code>127.0.0.1</code> / <code>10.x</code> / <code>192.168.x</code> /
+        云元数据地址（<code>169.254.169.254</code>）等内网服务，可能被群消息或搜索结果诱导读取内网管理后台、云主机凭据，
+        再写进群消息。只有自建图床、本地测试这类场景才需要打开。
       </div>
 
       <div class="field"><label>外部链接额外放行的主机（每行一个）</label>
