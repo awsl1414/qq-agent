@@ -1472,6 +1472,37 @@ tr.quote-selected td { background: color-mix(in srgb, var(--accent) 10%, transpa
 }
 .sent-badge .asr-label { color: color-mix(in srgb, var(--green) 70%, transparent); font-size: 11px; margin-bottom: 3px; }
 
+/* 有媒体但拿不到预览（src 为空）的「已发送」条目：与纯文字条目同形，
+   只在标签行补一个中性色标记，避免把「本来就没图」和「有图但预览不了」混为一谈。
+   颜色用 --fg-mute（与 .sent-thumb__broken 同一语义：不可预览的说明文字），
+   不用警告色——发送本身是成功的，图拿不到预览不是错误。 */
+.sent-nopreview-tag { color: var(--fg-mute); font-size: 11px; }
+
+/* 已发送里的图片缩略图（send_image 记账带 url 时由 02-sse-sessions.js 渲染）。
+   尺寸上限 240×180（4:3）：会话详情内容列约 940px，缩略图只用于确认「发的是哪张图」，
+   再宽会把同轮其它消息挤出视野；两个值都是 4px 的整数倍，与间距阶梯同源。
+   宽度用 max-width 而不是固定值，窄屏 / 小窗时随气泡收缩，不会溢出。
+   ⚠️ 原型覆盖层 #cc-cards .bs-cb 把 .sent-badge 换成了右侧气泡，这里只约束
+      .sent-thumb 本身，不碰气泡背景与内边距，两种上下文都能照常显示。 */
+.sent-thumb {
+  display: block;
+  max-width: 240px;
+  margin: var(--space-xs) 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--layer-2);
+  overflow: hidden;
+}
+.sent-thumb__img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 180px;
+  object-fit: contain;
+}
+.sent-thumb__broken { color: var(--fg-mute); font-size: 12px; }
+.sent-thumb__note { margin-top: var(--space-xs); }
+
 .session-error {
   border: 1px solid var(--border); background: color-mix(in srgb, var(--red) 8%, transparent);
   box-shadow: var(--inset-edge);
