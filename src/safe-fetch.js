@@ -2,13 +2,17 @@
 //
 // - 仅 http/https；禁止 URL 内嵌凭据；
 // - 禁止 localhost / .local / 私有 IP / 环回 / 链路本地 / CGNAT 等内网地址；
+// - 代理 fake-ip 合成地址（RFC 2544 / RFC 5180 基准测试保留段）不是内网，
+//   放行并记录一次；见 isProxyFakeIp；
 // - 域名先做 DNS 解析并检查全部解析结果；解析后固定到已校验的 IP 发请求（防 DNS rebinding）；
 // - 手动跟随重定向，每一跳重新校验；
 // - 响应体限量读取，避免超大响应拖垮进程；
 // - 大文件（视频）走 safeFetchBinaryToFile：边收边写盘，内存占用与文件大小无关。
 //
-// 例外开关：security.allowPrivateImageHosts = true 时，图片下载跳过内网检查
-// （仅供本地测试/自建图床使用，默认关闭）。
+// 例外开关：security.allowPrivateImageHosts = true 时，本模块所有出站路径
+// （网页抓取 / 图片下载 / 扩展 fetch / 流式下载）统一跳过内网检查
+// （仅供本地测试/自建图床使用，默认关闭）。开关名沿用了历史名称，
+// 语义已统一为「允许出站访问内网地址」。
 import dns from 'node:dns';
 import net from 'node:net';
 import http from 'node:http';
@@ -18,6 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { getConfig } from './config.js';
+import { logger } from './logger.js';
 
 const dnsLookup = dns.promises.lookup;
 
@@ -35,6 +40,17 @@ function ipv4FromLast32(lower) {
     return `${(num >>> 24) & 255}.${(num >>> 16) & 255}.${(num >>> 8) & 255}.${num & 255}`;
   }
   return null;
+}
+
+// 6to4（2002::/16）把 IPv4 嵌在第 2、3 组：2002:AABB:CCDD::/48 ↔ AABB.CCDD 对应的 IPv4。
+// 提取逻辑必须与下面 isProxyFakeIp / isPrivateIp 共用：两份正则各自维护时，
+// 基准测试段从内网分类移出后，isProxyFakeIp 没跟上 6to4 解析，6to4 内嵌的
+// fake-ip（2002:c612:1::1）就变成两边都不判定的覆盖缺口。
+function ipv4From6to4(h) {
+  const m = String(h || '').match(/^2002:([0-9a-f]{1,4}):([0-9a-f]{1,4}):/i);
+  if (!m) return null;
+  const num = (parseInt(m[1], 16) << 16) + parseInt(m[2], 16);
+  return `${(num >>> 24) & 255}.${(num >>> 16) & 255}.${(num >>> 8) & 255}.${num & 255}`;
 }
 
 function parseEmbeddedIpv4(h) {
@@ -61,9 +77,53 @@ function parseEmbeddedIpv4(h) {
     const num = (parseInt(nat64[1], 16) << 16) + parseInt(nat64[2], 16);
     return `${(num >>> 24) & 255}.${(num >>> 16) & 255}.${(num >>> 8) & 255}.${num & 255}`;
   }
+  const sixToFour = ipv4From6to4(lower);
+  if (sixToFour) return sixToFour;
   return null;
 }
 
+// RFC 2544 网络设备基准测试保留段。IANA 保留、公网不可路由，
+// 正常 DNS 不会返回这些地址；只有 Clash/Mihomo 等代理的 fake-ip
+// 模式会把任意域名映射到这里（实测 6 个互不相关的域名全部命中）。
+// 见 https://www.rfc-editor.org/rfc/rfc2544 与 RFC 5180（IPv6 对应段）。
+const FAKE_IP_TEST_NETS_V4 = '198.18.0.0/15';
+const FAKE_IP_TEST_NETS_V6 = '2001:2::/48';
+
+// 用 net.BlockList 而不是字符串前缀比较：IPv6 有多种等价写法
+// （2001:2::9e / 2001:0002::9e / 2001:2:0::9e），前缀比较会既漏判又误判。
+const FAKE_IP_NETS = new net.BlockList();
+for (const [cidr, family] of [[FAKE_IP_TEST_NETS_V4, 'ipv4'], [FAKE_IP_TEST_NETS_V6, 'ipv6']]) {
+  const [address, prefix] = cidr.split('/');
+  FAKE_IP_NETS.addSubnet(address, Number(prefix), family);
+}
+
+/**
+ * 是否为代理 fake-ip 合成地址（RFC 2544 / RFC 5180 基准测试保留段）。
+ *
+ * 这两个段不属于内网语义：攻击者无法让它们指向本机或内网服务（公网不可路由），
+ * 正常 DNS 也不可能返回；命中即说明是本地代理在替外部域名合成地址，
+ * 连接目标仍然是代理隧道里的那个公网域名（Host / SNI 不变）。
+ * 只认这两个段，不做任何放宽。
+ */
+export function isProxyFakeIp(ip) {
+  const h = String(ip ?? '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (!h) return false;
+  if (h.includes(':')) {
+    const embedded = parseEmbeddedIpv4(h);
+    if (embedded) return isProxyFakeIp(embedded);
+  }
+  const family = net.isIP(h);
+  if (family === 4) return FAKE_IP_NETS.check(h, 'ipv4');
+  if (family === 6) return FAKE_IP_NETS.check(h, 'ipv6');
+  return false;
+}
+
+/**
+ * 真实内网地址判定：本机 / 私网 / 链路本地 / CGNAT / 组播 / 文档保留段。
+ *
+ * 基准测试保留段（198.18.0.0/15、2001:2::/48）见 isProxyFakeIp，不放这里：
+ * 它们不是内网，且只有代理 fake-ip 会产生。
+ */
 export function isPrivateIp(ip) {
   const h = String(ip || '').toLowerCase().replace(/^\[|\]$/g, '');
   if (!h) return true;
@@ -77,7 +137,6 @@ export function isPrivateIp(ip) {
     if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
     if (parts[0] === 192 && parts[1] === 168) return true;
     if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true;
-    if (parts[0] === 198 && parts[1] >= 18 && parts[1] <= 19) return true;
     if (parts[0] === 192 && parts[1] === 0 && parts[2] === 0) return true;
     if (parts[0] >= 224) return true;
     return false;
@@ -89,17 +148,20 @@ export function isPrivateIp(ip) {
     if (/^fe[89ab]/.test(h)) return true;
     if (h.startsWith('fec') || h.startsWith('fed') || h.startsWith('fee') || h.startsWith('fef')) return true;
     if (h.startsWith('2001:db8')) return true;
-    if (h.startsWith('2001:2:') || h.startsWith('2001:10:') || h.startsWith('2001:20:')) return true;
-    const sixth4 = h.match(/^2002:([0-9a-f]{1,4}):([0-9a-f]{1,4}):/i);
-    if (sixth4) {
-      const num = (parseInt(sixth4[1], 16) << 16) + parseInt(sixth4[2], 16);
-      const ipv4 = `${(num >>> 24) & 255}.${(num >>> 16) & 255}.${(num >>> 8) & 255}.${num & 255}`;
-      if (isPrivateIp(ipv4)) return true;
-    }
+    if (h.startsWith('2001:10:') || h.startsWith('2001:20:')) return true;
     if (h.startsWith('ff')) return true;
     return false;
   }
   return false;
+}
+
+// 放行 fake-ip 是正常用法，不是异常：只在首次遇到时说明一次，避免刷屏。
+let fakeIpNoticeLogged = false;
+function noteProxyFakeIp(address, hostname) {
+  if (fakeIpNoticeLogged) return;
+  fakeIpNoticeLogged = true;
+  logger.info('safe-fetch', `检测到代理 fake-ip 合成地址 ${address}（${hostname}），已放行。`
+    + '这通常说明本机启用了 Clash/Mihomo 等代理的 TUN + fake-ip 模式。');
 }
 
 // ── 主机名校验（含 DNS） ────────────────────────────────────────────────
@@ -119,7 +181,10 @@ async function resolveSafeHost(hostname, { allowPrivate = false } = {}) {
     throw new Error('禁止访问内网/本机地址');
   }
   if (net.isIP(h)) {
+    // fake-ip 字面量也允许：它是代理对外部域名的合成，不是本机服务；
+    // 真实内网字面量仍然拦。
     if (!allowPrivate && isPrivateIp(h)) throw new Error('禁止访问内网/本机地址');
+    if (!allowPrivate && isProxyFakeIp(h)) noteProxyFakeIp(h, h);
     return h;
   }
   let addresses;
@@ -131,6 +196,7 @@ async function resolveSafeHost(hostname, { allowPrivate = false } = {}) {
   if (!addresses.length) throw new Error('域名没有解析结果');
   if (!allowPrivate) {
     for (const { address } of addresses) {
+      if (isProxyFakeIp(address)) { noteProxyFakeIp(address, h); continue; }   // 代理合成地址，放行
       if (isPrivateIp(address)) throw new Error('域名解析到内网/本机地址，已阻止');
     }
   }
@@ -149,6 +215,18 @@ export async function validateFetchUrl(raw, { allowPrivate = false } = {}) {
   if (url.username || url.password) throw new Error('URL 不能包含凭据');
   const ip = await resolveSafeHost(url.hostname, { allowPrivate });
   return { url, ip };
+}
+
+/**
+ * 内网例外开关的唯一读取点。
+ *
+ * 开关语义是「本模块是否允许出站访问内网地址」，与具体抓取的是网页还是图片
+ * 无关。历史上只有图片路径读了它、网页抓取没读，于是勾选该选项后
+ * 「图片能下载但图片搜索仍被 SSRF 拒绝」——同一个开关在两条路径上行为相反。
+ * 现在所有出站路径统一从这里取。
+ */
+function allowPrivateOutbound() {
+  return getConfig().security?.allowPrivateImageHosts === true;
 }
 
 // 浏览锁定（browseLock）
@@ -371,7 +449,10 @@ export function resolveTextCap(maxBytes) {
   return Math.max(1000, Math.min(TEXT_BODY_MAX, Number(maxBytes) || TEXT_BODY_DEFAULT));
 }
 
-/** 抓取网页文本（≤50000 字符），SSRF 全防护（不做内网例外）。 */
+/**
+ * 抓取网页文本（≤50000 字符）。SSRF 全防护；内网例外遵循
+ * security.allowPrivateImageHosts（与图片下载、扩展 fetch 同口径）。
+ */
 export async function safeFetch(urlString, { browseLocked = false, headers = null, maxBytes = TEXT_BODY_DEFAULT, timeoutMs = null, proxy = '' } = {}) {
   // `maxBytes` 必须真的生效。此前签名里没有这个参数，调用方传进来的 maxBytes
   // 被静默忽略，实际恒为 50KB。后果有两处：
@@ -388,7 +469,8 @@ export async function safeFetch(urlString, { browseLocked = false, headers = nul
   // 锁定校验放在最前面，连 DNS 都不做：不在白名单就根本不该发起连接
   const lock = browseLocked ? checkBrowseLock(urlString) : { enabled: false, allowed: true, host: '' };
   if (!lock.allowed) throw new Error(`浏览锁定：${lock.host || '该地址'} 不在允许的域名清单内`);
-  let { url, ip } = await validateFetchUrl(urlString);
+  const allowPrivate = allowPrivateOutbound();
+  let { url, ip } = await validateFetchUrl(urlString, { allowPrivate });
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     const result = await requestOnce(url, ip, { asBinary: false, maxBytes: cap, headers, timeoutMs: timeout });
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
@@ -400,7 +482,7 @@ export async function safeFetch(urlString, { browseLocked = false, headers = nul
         const nl = checkBrowseLock(next);
         if (!nl.allowed) throw new Error(`浏览锁定：重定向目标 ${nl.host || '未知'} 不在允许的域名清单内`);
       }
-      ({ url, ip } = await validateFetchUrl(next));
+      ({ url, ip } = await validateFetchUrl(next, { allowPrivate }));
       continue;
     }
     const body = result.body || '';
@@ -443,8 +525,9 @@ export async function safeFetch(urlString, { browseLocked = false, headers = nul
 // 真正会被利用的实际目标（内网/环回/链路本地/CGNAT IPv4 与 IPv6 内嵌形态）
 // 已由入口的 DNS 全记录检查挡住。
 //
-// 例外：security.allowPrivateImageHosts = true 时同样放行内网（与 safeFetchBinary /
-// validateImageUrl 一致），供"接口/图床就架在本机或内网"的场景使用，默认关闭。
+// 例外：security.allowPrivateImageHosts = true 时同样放行内网（与 safeFetch /
+// safeFetchBinary / validateImageUrl 一致，统一由 allowPrivateOutbound 读取），
+// 供"接口/图床就架在本机或内网"的场景使用，默认关闭。
 const REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);
 // 跨源重定向时必须丢掉的凭据类请求头（同 fetch 规范）：否则 API Key / Cookie
 // 会被顺手带到第三方站点去。
@@ -469,7 +552,7 @@ async function discardBody(res) {
  */
 export async function guardedFetch(input, init = {}, { browseLocked = true, allowPrivate, maxRedirects = MAX_REDIRECTS } = {}) {
   const doAllowPrivate = allowPrivate === undefined
-    ? getConfig().security?.allowPrivateImageHosts === true
+    ? allowPrivateOutbound()
     : allowPrivate === true;
 
   const rawUrl = typeof input === 'string'
@@ -538,7 +621,7 @@ export async function safeFetchBinary(urlString, maxBytes = 12 * 1024 * 1024, { 
   // timeoutMs 真的生效；proxy 不支持则明确告知一次（不静默忽略）
   const timeout = resolveTimeoutMs(timeoutMs);
   noteProxyUnsupported(proxy);
-  const allowPrivate = getConfig().security?.allowPrivateImageHosts === true;
+  const allowPrivate = allowPrivateOutbound();
   let { url, ip } = await validateFetchUrl(urlString, { allowPrivate });
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     const result = await requestOnce(url, ip, { asBinary: true, maxBytes, headers, timeoutMs: timeout });
@@ -754,7 +837,7 @@ export async function safeFetchBinaryToFile(urlString, destPath, maxBytes, { tim
 
   const lock = browseLocked ? checkBrowseLock(urlString) : { enabled: false, allowed: true, host: '' };
   if (!lock.allowed) throw new Error(`浏览锁定：${lock.host || '该地址'} 不在允许的域名清单内`);
-  const allowPrivate = getConfig().security?.allowPrivateImageHosts === true;
+  const allowPrivate = allowPrivateOutbound();
 
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   let ok = false;
@@ -802,7 +885,7 @@ export async function validateImageUrl(raw) {
     throw new Error('图片地址不合法');
   }
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('只允许 http(s) 图片地址');
-  if (getConfig().security?.allowPrivateImageHosts === true) return url.toString();
+  if (allowPrivateOutbound()) return url.toString();
   const { url: safeUrl } = await validateFetchUrl(url.toString());
   return safeUrl.toString();
 }
