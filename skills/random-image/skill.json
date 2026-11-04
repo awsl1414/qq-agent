@@ -11,12 +11,18 @@
   ],
   "requires": [],
   "settings": {
+    "apiBaseUrl": "https://api.lolicon.app/setu/v2",
     "maxCount": 3,
     "maxImageBytes": 4194304,
     "safeMode": true,
     "source": "auto"
   },
   "configSchema": {
+    "apiBaseUrl": {
+      "type": "string",
+      "label": "接口地址",
+      "description": "随机发图用的取图接口，留空则用默认地址。默认 https://api.lolicon.app/setu/v2（lolicon v2，返回 {data:[{urls:{regular}}]}）。"
+    },
     "maxCount": {
       "type": "number",
       "label": "单次图片数量",

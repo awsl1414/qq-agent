@@ -7,7 +7,7 @@ import { safeFetchBinary } from '../../src/safe-fetch.js';
 import { detectMime } from '../../src/image-type.js';
 import {
   TMP_DIR, TMP_MAX_AGE_MS, IMAGE_UA, IMAGE_REFERER,
-  PXIMG_MIRRORS, PXIMG_BAD_TTL_MS, PROXY_DOWN_COOLDOWN_MS, DEDUP_FILE
+  PXIMG_MIRRORS, PXIMG_BAD_TTL_MS, PROXY_DOWN_COOLDOWN_MS, DEDUP_FILE, SETU_DOWNLOAD_TIMEOUT_MS
 } from './config.js';
 
 // ── 图片完整性校验 ──────────────────────────────────────────────────
@@ -193,7 +193,7 @@ export function savePayload(buffer, mode) {
  */
 export async function downloadImage(url, cfg, opts = {}) {
   const maxBytes = Math.max(1, Math.trunc(Number(cfg.send?.maxImageBytes) || 8 * 1024 * 1024));
-  const defaultTimeout = Number(cfg.api?.downloadTimeoutMs) > 0 ? Number(cfg.api.downloadTimeoutMs) : 30000;
+  const defaultTimeout = Number(cfg.api?.downloadTimeoutMs) > 0 ? Number(cfg.api.downloadTimeoutMs) : SETU_DOWNLOAD_TIMEOUT_MS;
   const timeoutMs = opts.timeoutMs > 0 ? Math.trunc(opts.timeoutMs) : defaultTimeout;
   const pxveOrigin = cfg.booru?.baseUrl ? (() => { try { return new URL(cfg.booru.baseUrl).origin; } catch { return null; } })() : null;
   let buffer;

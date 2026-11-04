@@ -14,6 +14,20 @@ export const TMP_DIR = path.join(DATA_DIR, 'setu-tmp');
 export const TMP_MAX_AGE_MS = 60 * 60 * 1000;
 export const DEDUP_FILE = path.join(DATA_DIR, 'setu-dedup.json');
 
+// ── 取图接口 ──────────────────────────────────────────────────
+// 默认接口是 lolicon v2（实测 200，返回 {data:[{urls:{regular}}]}）。
+// skill.json 的 settings.apiBaseUrl 写着同一地址：JSON 引不到 JS 常量，
+// 两处必须同步修改，改一处就会被「界面上显示的是默认值、实际请求另一个地址」骗到。
+export const DEFAULT_SETU_BASE_URL = 'https://api.lolicon.app/setu/v2';
+// 请求 size=regular（master1200）：实测 original 单张可达 10.4MB，超过
+// send.maxImageBytes 的硬上限 4MB，下载会被截断并整张失败；regular 实测 0.3~0.7MB。
+export const SETU_IMAGE_SIZE = 'regular';
+// sort 是 cnmiw（MirlKoi / 上游插件契约）的分类参数，lolicon v2 会忽略它。
+export const SETU_NSFW_SORT = 'CDNsetu';
+export const SETU_SFW_SORT = 'CDNcat';
+export const SETU_REQUEST_TIMEOUT_MS = 20000;
+export const SETU_DOWNLOAD_TIMEOUT_MS = 30000;
+
 // ── 下载常量 ──────────────────────────────────────────────────
 export const MAX_COUNT = 10;
 export const IMAGE_REFERER = 'https://weibo.com/';

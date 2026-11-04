@@ -15,8 +15,12 @@ import { safeFetch } from '../../src/safe-fetch.js';
 
 // 常量与标签 Set 在 config.js，这里只导入本文件直接使用的
 import {
-  MAX_COUNT, NSFW_TRIGGER_RE, MULTI_PERSON_TAGS, MALE_CHARACTER_TAGS, HORROR_TAGS
+  MAX_COUNT, NSFW_TRIGGER_RE, MULTI_PERSON_TAGS, MALE_CHARACTER_TAGS, HORROR_TAGS,
+  DEFAULT_SETU_BASE_URL, SETU_IMAGE_SIZE, SETU_NSFW_SORT, SETU_SFW_SORT, SETU_REQUEST_TIMEOUT_MS
 } from './config.js';
+
+// 响应解析是纯函数（可独立单测），见 response.js
+import { extractImageUrls } from './response.js';
 
 // 过滤函数在 filters.js（纯函数，可独立单元测试）
 import {
@@ -95,8 +99,9 @@ export function categoryLabel(category) {
   return category === 'nsfw' ? '色图' : '无色图';
 }
 
+/** sort 参数只对 cnmiw（MirlKoi）这类接口有意义，lolicon v2 会忽略它。 */
 function sortKeyFor(api, category) {
-  return category === 'nsfw' ? (api.nsfwSort || 'CDNsetu') : (api.sfwSort || 'CDNcat');
+  return category === 'nsfw' ? (api.nsfwSort || SETU_NSFW_SORT) : (api.sfwSort || SETU_SFW_SORT);
 }
 
 function clampCount(value) {
@@ -105,23 +110,49 @@ function clampCount(value) {
   return Math.min(n, MAX_COUNT);
 }
 
-/** 调取图接口拿一批 URL。失败返回 []（与原版一致：网络错误表现为"拉不到图"）。 */
-async function fetchPicUrls(api, sortKey, num) {
-  const n = clampCount(num);
-  let target;
+/**
+ * 组装取图请求 URL。
+ * 参数按各接口的公开契约组织（均经实测）：
+ *   num          —— lolicon v1/v2、cnmiw 都支持
+ *   r18          —— lolicon v2 支持（0/1）；cnmiw/anosu 忽略
+ *   size=regular —— lolicon v2 支持，取值依据见 config.js 的 SETU_IMAGE_SIZE
+ *   sort / type  —— cnmiw 只有 type=json 才返回 JSON，且需要 sort 选分类；
+ *                   lolicon 忽略这两个参数。保留它们是为兼容 cnmiw 与用户自填的同类接口，
+ *                   不是无理由的遗留参数。
+ * 不传 tag：关键词请求走 Pixiv 标签搜索（见 runKeywordSearch），参数到不了这里，
+ * 传空 tag 只会让接口把它当过滤条件，命中 0 条。
+ *
+ * 导出仅为单测：这些 query 参数拼错时接口照常 200，只是返回空或错误尺寸，
+ * 表现为"拉不到图"/"单图超大下载失败"，从发送链路看不出来源。
+ * 用户自填地址里已有的 query 会保留（URL.searchParams.set 是增量改写，不是整体替换）。
+ */
+export function buildPicUrl(api, sortKey, num, { nsfw }) {
+  const base = String(api?.baseUrl ?? '').trim();
+  if (!base) throw new Error('随机图片接口地址为空');
+  let u;
   try {
-    const u = new URL(String(api?.baseUrl || '').trim());
-    u.searchParams.set('sort', String(sortKey || ''));
-    u.searchParams.set('type', 'json');
-    u.searchParams.set('num', String(n));
-    target = u.toString();
+    u = new URL(base);
   } catch {
-    throw new Error('setu.api.baseUrl 不是合法 URL');
+    throw new Error(
+      `随机图片接口地址不是合法 URL：${base}。请到「设置 → 工具与技能 → 二次元随机图片 → 接口地址」改成完整地址，例如 ${DEFAULT_SETU_BASE_URL}`
+    );
   }
+  u.searchParams.set('num', String(clampCount(num)));
+  u.searchParams.set('r18', nsfw ? '1' : '0');
+  u.searchParams.set('size', SETU_IMAGE_SIZE);
+  u.searchParams.set('type', 'json');
+  u.searchParams.set('sort', String(sortKey || ''));
+  return u.toString();
+}
+
+/** 调取图接口拿一批 URL。失败返回 []（网络错误表现为"拉不到图"，不抛错）。 */
+async function fetchPicUrls(cfg, sortKey, num, { category }) {
+  const api = cfg.api;
+  const target = buildPicUrl(api, sortKey, num, { nsfw: category === 'nsfw' });
   let body;
   try {
     ({ body } = await safeFetch(target, {
-      timeoutMs: Number(api?.requestTimeoutMs) > 0 ? Number(api.requestTimeoutMs) : 20000
+      timeoutMs: Number(api?.requestTimeoutMs) > 0 ? Number(api.requestTimeoutMs) : SETU_REQUEST_TIMEOUT_MS
     }));
   } catch (error) {
     console.warn(`[setu] 取图接口请求失败 ${sortKey}: ${error?.message ?? error}`);
@@ -132,8 +163,7 @@ async function fetchPicUrls(api, sortKey, num) {
     console.warn('[setu] 取图接口返回不是合法 JSON');
     return [];
   }
-  const pics = data && typeof data === 'object' && Array.isArray(data.pic) ? data.pic : null;
-  return pics ? pics.filter((u) => typeof u === 'string' && u) : [];
+  return extractImageUrls(data);
 }
 
 function dedupeInBatch(batch, limit) {
@@ -149,16 +179,15 @@ function dedupeInBatch(batch, limit) {
 }
 
 /** 取去重后的 URL 列表，最多 limit 个。去重过严时退化为不去重再取一次保证可用性。 */
-async function fetchFreshUrls(cfg, source, sortKey, limit) {
-  const api = cfg.api;
+async function fetchFreshUrls(cfg, source, sortKey, limit, category) {
   if (cfg.send?.dedupEnabled === false) {
-    return dedupeInBatch(await fetchPicUrls(api, sortKey, limit), limit);
+    return dedupeInBatch(await fetchPicUrls(cfg, sortKey, limit, { category }), limit);
   }
   const collected = [];
   for (let round = 0; round < 2; round++) {
     const need = limit - collected.length;
     if (need <= 0) break;
-    const batch = await fetchPicUrls(api, sortKey, need);
+    const batch = await fetchPicUrls(cfg, sortKey, need, { category });
     if (!batch.length) break;
     for (const u of batch) {
       if (collected.includes(u) || source.isRecent(u)) continue;
@@ -168,7 +197,7 @@ async function fetchFreshUrls(cfg, source, sortKey, limit) {
     if (batch.length < need) break;   // API 没给够，再请求也无意义
   }
   if (!collected.length) {
-    return dedupeInBatch(await fetchPicUrls(api, sortKey, limit), limit);
+    return dedupeInBatch(await fetchPicUrls(cfg, sortKey, limit, { category }), limit);
   }
   return collected;
 }
@@ -241,7 +270,7 @@ async function runSetuRequestGuarded({ cfg, chatKey, requested, keyword, source 
   const label = categoryLabel(category);
   // 多要 3 张备胎：随机池同样存在"唯一候选下载失败 → 整次失败"的单点，
   // spares 让 pickBestImages 失败时有下一个可换（与关键词路径同一机制）
-  const urls = await fetchFreshUrls(cfg, source, sortKeyFor(cfg.api, category), limit + 3);
+  const urls = await fetchFreshUrls(cfg, source, sortKeyFor(cfg.api, category), limit + 3, category);
   if (!urls.length) return { outcome: 'no-image', message: `${label}接口暂时拉不到图，稍后再试试吧～` };
 
   const picked = await pickBestImages(

@@ -147,7 +147,7 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "index.js": "8615631c43b7a0e4",
+        "index.js": "a27273a08d8160a7",
         "lib/manager.js": "886f8b39db8ec672",
         "lib/stickers.js": "0f1095ea2d74017d",
         "panel/viewer.css": "8468268adf34937f",
@@ -182,7 +182,7 @@
       "kind": "skill",
       "entry": "index.js",
       "files": {
-        "index.js": "b7bedd11a8dceab8",
+        "index.js": "bd50a2ebf4db42fb",
         "skill.json": "6670fc92455a187f"
       }
     },
@@ -223,13 +223,14 @@
       "kind": "skill",
       "entry": "index.js",
       "files": {
-        "config.js": "76ebe7309835b9f8",
-        "downloader.js": "8952cf4d0bd380f4",
+        "config.js": "48ebab8e5d2d87a7",
+        "downloader.js": "5fb58220ba319e23",
         "filters.js": "734263f6b0b367ea",
-        "index.js": "2310e47f6570b7c4",
+        "index.js": "007cc8f0c57eda1f",
         "pixiv.js": "6f71d49a3e5cbad9",
-        "setu.js": "4597bd9cc3cade01",
-        "skill.json": "0cc082eeed97508f"
+        "response.js": "fe319d89b54ffb45",
+        "setu.js": "71723a65f4cf3af0",
+        "skill.json": "de96e90b08d6d353"
       }
     },
     {
