@@ -3009,6 +3009,12 @@ input.sw[data-pending] { cursor: progress; }
 .conn-check-note { margin-top: 6px; font-size: 11.5px; color: var(--accent-hi); }
 .conn-check-note:empty { display: none; }
 
+/* 令牌输入与附属操作始终同排；沿用 .btn / .btn-small 的全部主题、交互状态，
+   这里只统一布局与宽度，56px 为两个汉字及按钮内边距预留空间。 */
+.conn-token-control { display: flex; flex-wrap: nowrap; align-items: center; gap: var(--space-xs); }
+.conn-token-control > input { flex: 1; min-width: 0; }
+.conn-token-control > .btn { width: 56px; flex-shrink: 0; }
+
 /* 安装说明：折叠起来，summary 长得像分区标题（含尾随细线） */
 .conn-setup > summary {
   display: flex; align-items: center; gap: 10px;

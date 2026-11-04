@@ -194,20 +194,26 @@ function renderConnectionPage(v, appLogsData) {
           <summary>端点设置：换了端口、加了令牌才需要动</summary>
           <div class="sl-adv-body">
             <div class="field-row">
-              <div class="field"><label>WebSocket 地址（收消息）</label>
+              <div class="field"><label for="conn-wsurl">WebSocket 地址（收消息）</label>
                 <input type="text" id="conn-wsurl" value="${esc(wsUrl)}" placeholder="ws://127.0.0.1:3001" /></div>
-              <div class="field"><label>HTTP 地址（发消息）</label>
+              <div class="field"><label for="conn-httpurl">HTTP 地址（发消息）</label>
                 <input type="text" id="conn-httpurl" value="${esc(httpUrl)}" placeholder="http://127.0.0.1:3000" /></div>
-              <div class="field"><label>WebSocket 令牌</label>
-                <div style="display:flex;gap:8px">
-                  <input type="password" id="conn-wstoken" value="${esc(proto.hasAccessToken ? '******' : '')}" placeholder="协议端没设令牌就留空" autocomplete="new-password" style="flex:1" />
-                  <button class="btn btn-small" id="conn-wstoken-toggle" type="button">显示</button>
-                </div></div>
-              <div class="field"><label>HTTP 令牌（与 WS 不同时才填）</label>
-                <div style="display:flex;gap:8px">
-                  <input type="password" id="conn-httptoken" value="${esc(proto.hasHttpAccessToken ? '******' : '')}" placeholder="留空 = 与 WS 令牌相同" autocomplete="new-password" style="flex:1" />
-                  <button class="btn btn-small" id="conn-httptoken-toggle" type="button">显示</button>
-                </div></div>
+            </div>
+            <div class="field-row">
+              <div class="field"><label for="conn-wstoken">WebSocket 令牌</label>
+                <div class="conn-token-control">
+                  <input type="password" id="conn-wstoken" value="${esc(proto.hasAccessToken ? '******' : '')}" placeholder="输入 WS 令牌" autocomplete="new-password" aria-describedby="conn-wstoken-hint" />
+                  <button class="btn btn-small" id="conn-wstoken-toggle" type="button" aria-controls="conn-wstoken" aria-label="显示 WebSocket 令牌">显示</button>
+                </div>
+                <div class="hint" id="conn-wstoken-hint">与协议端一致；未设置则留空。</div>
+              </div>
+              <div class="field"><label for="conn-httptoken">HTTP 令牌</label>
+                <div class="conn-token-control">
+                  <input type="password" id="conn-httptoken" value="${esc(proto.hasHttpAccessToken ? '******' : '')}" placeholder="输入独立 HTTP 令牌" autocomplete="new-password" aria-describedby="conn-httptoken-hint" />
+                  <button class="btn btn-small" id="conn-httptoken-toggle" type="button" aria-controls="conn-httptoken" aria-label="显示 HTTP 令牌">显示</button>
+                </div>
+                <div class="hint" id="conn-httptoken-hint">留空沿用 WS 令牌；不同时才填。</div>
+              </div>
             </div>
             <div class="sl-adv-row">
               <button class="btn btn-small" id="conn-autofill-btn" title="直接读 SnowLuma 的 config/onebot_&lt;QQ号&gt;.json，把端点与令牌填好并立刻重连">自动读取协议端配置</button>
@@ -565,30 +571,44 @@ function bindConnectionPage(box, v, appLogsData) {
   });
 
   // ── 令牌显示 / 隐藏（明文走 /api/onebot-token，与设置页同一条）──
-  const wireTokenToggle = (btnId, inputId, which) => {
+  const wireTokenToggle = (btnId, inputId, which, label) => {
     const btn = $(btnId);
     const inp = $(inputId);
     if (!btn || !inp) return;
+    let edited = false;
+    inp.addEventListener('input', () => { edited = true; });
+    const setVisible = (visible) => {
+      inp.type = visible ? 'text' : 'password';
+      btn.textContent = visible ? '隐藏' : '显示';
+      btn.setAttribute('aria-label', `${btn.textContent} ${label}令牌`);
+    };
     btn.addEventListener('click', async () => {
-      if (btn.dataset.on === '1') {
-        inp.value = '******';
-        btn.dataset.on = '0';
-        btn.textContent = '显示';
+      if (inp.type === 'text') {
+        // 未编辑的已存令牌恢复掩码；新输入或清空的值必须保留给保存操作。
+        if (!edited && inp.value) inp.value = '******';
+        setVisible(false);
         return;
       }
+      btn.disabled = true;
       try {
-        const r = await api(`/api/onebot-token?which=${which}`);
-        inp.value = String((r && r.token) || '');
-        btn.dataset.on = '1';
-        btn.textContent = '隐藏';
+        // 未编辑时按需读取，避免自动读取协议端配置后显示旧令牌；不缓存明文。
+        if (!edited) {
+          const r = await api(`/api/onebot-token?which=${which}`);
+          if (!inp.isConnected) return;
+          // 请求期间仍允许编辑，迟到的响应不能覆盖用户刚输入的内容。
+          if (!edited) inp.value = String(r.token ?? '');
+        }
+        setVisible(true);
       } catch (e) {
         const hint = $('#conn-save-hint');
         if (hint) hint.textContent = `读取令牌失败：${e.message}`;
+      } finally {
+        btn.disabled = false;
       }
     });
   };
-  wireTokenToggle('#conn-wstoken-toggle', '#conn-wstoken', 'ws');
-  wireTokenToggle('#conn-httptoken-toggle', '#conn-httptoken', 'http');
+  wireTokenToggle('#conn-wstoken-toggle', '#conn-wstoken', 'ws', 'WebSocket ');
+  wireTokenToggle('#conn-httptoken-toggle', '#conn-httptoken', 'http', 'HTTP ');
 
   // ── 应用日志：级别切换 + 手动刷新 ──
   const levelSel = $('#app-log-level');
