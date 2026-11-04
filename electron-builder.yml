@@ -1,10 +1,20 @@
 # electron-builder 配置（QQ Agent 桌面版）
 #
-# ⚠️ asar 必须是 false。这不是风格选择，是硬约束：
-#   src/config.js 的 ROOT、src/plugin-loader.js 的 APP_ROOT 都由 import.meta.url
-#   上溯两级得到「代码根」，而运行时会往代码根写文件 —— 市场装扩展、锻造台、
-#   自动修复都直接落盘到 plugins/ 与 skills/，builtin-modules.json 也会被
-#   refreshBuiltinEntry 重写。asar 打包后这些路径不可写，上述功能会集体失效。
+# ⚠️ asar 必须是 false。这不是风格选择，是硬约束。
+#
+# src/config.js 的 ROOT、src/plugin-loader.js 的 APP_ROOT 都由 import.meta.url
+# 上溯两级得到「代码根」，运行时会往代码根写文件：市场装扩展与锻造台落盘到
+# plugins/ 与 skills/，builtin-modules.json 被 refreshBuiltinEntry 重写，
+# community.key 也存在这里。
+#
+# 试过 asar: true + asarUnpack 解包上述目录（实测，非推测）：
+#   · 插件 13 / 技能 8 仍能加载，但写 app.asar/ 内的路径直接 ENOENT；
+#   · fs.watch(app.asar/skills) 报 ENOENT —— 扩展热重载整个失效；
+#   · 桌宠默认角色导入失败：c_0120.model3.json「在导入过程中发生变化」，
+#     asar 的虚拟文件系统与逐文件读取不兼容；
+#   · 体积从 332MB 只降到 331MB —— asar 只是打包成单文件，不做压缩。
+# 收益 1MB，代价是至少改 APP_ROOT 解析、watch 降级、桌宠模型导入、市场安装
+# 路径四处，任一处漏改用户装完扩展重启就失效。不值得。
 #
 # ⚠️ 同理，安装目录必须可写 → nsis.perMachine 为 false（装到
 #   %LOCALAPPDATA%\Programs\...）。运行时扩展仍需写入安装目录；用户数据由

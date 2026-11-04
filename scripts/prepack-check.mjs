@@ -202,8 +202,9 @@ function checkBuilderConfig() {
   if (config.asar === true) {
     fail(
       'asar 被设为 true。运行时会写代码根：市场装扩展写 plugins/ 与 skills/，' +
-        'builtin-modules.json 也会被 refreshBuiltinEntry 重写；asar 打包后这些路径不可写，' +
-        '上述功能会集体失效。请改回 asar: false。'
+        'builtin-modules.json 也会被 refreshBuiltinEntry 重写；asar 打包后这些路径不可写。' +
+        '实测（asar + asarUnpack 解包上述目录）还会让 fs.watch 报 ENOENT 导致热重载失效、' +
+        '桌宠默认角色模型导入失败，而体积只从 332MB 降到 331MB。请改回 asar: false。'
       );
   } else {
     pass(`asar = ${config.asar === undefined ? '未设置（默认 false）' : config.asar}，符合硬约束`);
