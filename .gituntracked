@@ -9,17 +9,17 @@ defaults:
   conflict: skip    # skip | overwrite | backup
   link: relative    # relative | absolute
 rules:
-  # API Key / 模型配置。没有它，worktree 里的应用起不来（就绪度体检卡在 Base URL）。
-  # 各 worktree 跑起来后会各自改写这份副本，所以必须是 skip：覆盖会冲掉
-  # 某个 worktree 上改过的配置。
-  # ⚠️ 副本与原实例是同一个 QQ 号，同机同时跑会出现双份回复；要并行跑请设
-  #    QQ_AGENT_PROFILE（见 src/profile.js）。
-  - path: data/config.json
-    action: copy
-
   # Claude Code 的个人设置（启用的插件）。AO / Orca 托管的 worktree 自带一份
   # hooks 配置，skip 会让它保持原样，不会被这里覆盖。
   - path: .claude/settings.local.json
+    action: copy
+
+  # 整个数据目录。worktree 里跑起来就要有配置、记忆、壁纸、桌宠模型，
+  # 否则每个新会话都要重新填 API Key、重新导入壁纸。
+  # 复制而非链接：本机没有 SeCreateSymbolicLinkPrivilege（见下方说明）。
+  # 冲突策略用 defaults 的 skip：worktree 里跑过后会各自改写 config.json，
+  # 覆盖会冲掉某个 worktree 上改过的配置。
+  - path: data
     action: copy
 
 # ── 本机（Windows）不可用或不该同步的，故意不启用 ──────────────────────
