@@ -117,8 +117,12 @@ function updateReadinessDots(s) {
   // 协议端是否在运行，判据是 WS 端口在不在监听（协议端由用户自装，我们只能看端口）。
   const protoUp = !!s?.protocol?.portOpen;
   const obConnected = !!s?.onebot?.connected;
-  const cfg = state.config || {};
-  const cfgReady = !!(cfg.api?.baseUrl && cfg.api?.model && (cfg.allow?.groups?.length || cfg.allow?.private?.length || cfg.allowAllWhenEmpty));
+  // 「配置」这一项不在这里自算：地址 / 模型 / 白名单是否算配好，唯一口径是
+  // 00-core.js 的 assessReadiness（经 readinessByKey 取按 key 的结论）。
+  // 自算一份的下场是判法漂移 —— 曾因这里不 trim 而把纯空格的 Base URL 当成已填，
+  // 顶栏显示"配置已完成"，同一时刻体检卡却说"还没有填接口地址"。
+  const flags = readinessByKey(state.config, s);
+  const cfgReady = !!(flags.baseUrl && flags.model && flags.allow);
 
   // 四项统一由这张表驱动。ok 时只有圆点；未就绪时圆点旁补一个极短缩写
   // （⚠QQ / ⚠连接 / ⚠配置），不用悬停也知道缺哪一项。缩写压到 1~2 个字加前缀符号，

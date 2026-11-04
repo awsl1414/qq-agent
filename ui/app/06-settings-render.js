@@ -20,6 +20,46 @@ function visionVerdictOf(providerId, model) {
 // 模型选择控件的 id 是 #cfg-model-pick / #cfg-model（记忆页是 #cfg-mem-model-pick）。
 // 将来若要一个"点击外部/Esc 收起目录"的通用行为，在 modelModalShell 里统一实现。
 
+/** 侧栏「配置就绪」三枚小标的结论（以及菜单橙点的依据）。
+ *
+ *  口径直接取 assessReadiness() 按 key 的结论，不在这里另抄一份判断式：
+ *  抄一份的下场是改了体检口径（如"地址 + 模型算一项"）侧栏不跟，两处说法打架。
+ *  侧栏把 baseUrl + model 合并显示成「模型」一项，所以两项都 ok 才算 ok。
+ *  键名与 data-rs-goto / 菜单 data-section 对齐（api / onebot / allow）。 */
+function settingsSidebarReady() {
+  const flags = readinessByKey(state.config, state.status);
+  return {
+    api: !!(flags.baseUrl && flags.model),
+    onebot: !!flags.onebot,
+    allow: !!flags.allow
+  };
+}
+
+// 侧栏就绪小标的悬停提示：文案只在这里定义一份，首次渲染与
+// refreshSettingsReadiness() 局部刷新共用（复制字符串必然漂移：小标已变绿、
+// 悬停还写着"还没配白名单"）。
+const SETTINGS_CHIP_TITLES = {
+  api: { ok: '接口地址与模型已配置', bad: '还缺接口地址或模型 —— 点这里去填' },
+  onebot: { ok: 'QQ 已连上', bad: 'QQ 还没连上 —— 点这里去启动' },
+  allow: { ok: '已配置允许的群 / 好友', bad: '还没配白名单 —— 点这里去勾选' }
+};
+
+// 菜单项「还没配置」小橙点的提示，渲染与局部刷新共用。
+const SETTINGS_MENU_DOT_TITLE = '这项还没配置，点这里去设置';
+
+/** 取侧栏小标的 title。未知 key 返回空串（不会把 undefined 写进 DOM）。 */
+function settingsChipTitle(id, ok) {
+  const t = SETTINGS_CHIP_TITLES[id];
+  return t ? (ok ? t.ok : t.bad) : '';
+}
+
+/** 菜单项是否要点「还没配置」小橙点。
+ *  ready 只覆盖模型 / QQ / 白名单三项，其余分区没有可靠判据 → 视为已配。
+ *  渲染与局部刷新共用同一份，避免两处口径漂移。 */
+function settingsMenuNeedsDot(id, ready) {
+  return !(ready[id] ?? true);
+}
+
 function renderSettingsSidebar() {
   const s = state.status;
   const sidebar = $('#settings-sidebar');
@@ -92,10 +132,12 @@ function renderSettingsSidebar() {
   ];
   // 侧栏常驻"配置就绪"三枚小标：体检卡只在未就绪时出现在页头，老用户不被打扰，
   // 但新人在任何分区都应该随时看到"还差哪一项"。
-  // 口径与 assessReadiness 一致（地址+模型算「模型」一项）。
-  const readyModel = !!String(qc.api?.baseUrl || '').trim() && !!String(qc.api?.model || '').trim();
-  const readyAllow = !!(qc.allow?.groups?.length || qc.allow?.private?.length || qc.allowAllWhenEmpty);
-  const readyQq = !!s?.onebot?.connected;
+  // 结论统一由 settingsSidebarReady() 给出（内部取 assessReadiness 的 key 结论），
+  // 渲染与保存后的 refreshSettingsReadiness() 共用同一份，不各抄一份判断式。
+  const ready = settingsSidebarReady();
+  const readyModel = ready.api;
+  const readyQq = ready.onebot;
+  const readyAllow = ready.allow;
   sidebar.innerHTML = `
     <div class="settings-runstate">
       <div class="rs-title">机器人运行状态</div>
@@ -103,10 +145,10 @@ function renderSettingsSidebar() {
       <div class="rs-row muted">${state.paused ? '⏸ 已暂停' : (s?.orchestrator?.model ? `模型：${esc(s.orchestrator.model)}` : '模型：未设置')}</div>
       <div class="rs-ready" role="group" aria-label="配置就绪情况">
         ${[
-          { k: 'api', t: '模型', ok: readyModel, tip: readyModel ? '接口地址与模型已配置' : '还缺接口地址或模型 —— 点这里去填' },
-          { k: 'onebot', t: 'QQ', ok: readyQq, tip: readyQq ? 'QQ 已连上' : 'QQ 还没连上 —— 点这里去启动' },
-          { k: 'allow', t: '白名单', ok: readyAllow, tip: readyAllow ? '已配置允许的群 / 好友' : '还没配白名单 —— 点这里去勾选' }
-        ].map((x) => `<button type="button" class="rs-chip ${x.ok ? 'ok' : 'bad'}" data-rs-goto="${x.k}" title="${esc(x.tip)}"><span class="rs-dot"></span>${x.t}</button>`).join('')}
+          { k: 'api', t: '模型', ok: readyModel },
+          { k: 'onebot', t: 'QQ', ok: readyQq },
+          { k: 'allow', t: '白名单', ok: readyAllow }
+        ].map((x) => `<button type="button" class="rs-chip ${x.ok ? 'ok' : 'bad'}" data-rs-goto="${x.k}" title="${esc(settingsChipTitle(x.k, x.ok))}"><span class="rs-dot"></span>${x.t}</button>`).join('')}
       </div>
     </div>
     <div class="settings-menu">
@@ -114,8 +156,8 @@ function renderSettingsSidebar() {
         // 未配过的分区在菜单项上点小橙点，配好消失。口径与侧栏就绪标三枚 chip
         // 完全一致（模型/QQ/白名单三项首次必配），不扩到全部六项：
         // "配没配过"对 persona/tools/app 没有可靠判据，乱点圆点反而误导。
-        const needDot = (id === 'api' && !readyModel) || (id === 'onebot' && !readyQq) || (id === 'allow' && !readyAllow);
-        return `<button class="settings-menu-item ${state.settingsSection === id ? 'active' : ''}" data-section="${id}"><svg class="sm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="${ico}" stroke-linejoin="round" stroke-linecap="round"/></svg><span class="sm-t">${label}</span>${needDot ? '<span class="sm-dot" title="这项还没配置，点这里去设置"></span>' : ''}${id === 'app' && updateAvailable ? '<span class="update-dot" title="发现新版本"></span>' : ''}</button>`;
+        const needDot = settingsMenuNeedsDot(id, ready);
+        return `<button class="settings-menu-item ${state.settingsSection === id ? 'active' : ''}" data-section="${id}"><svg class="sm-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="${ico}" stroke-linejoin="round" stroke-linecap="round"/></svg><span class="sm-t">${label}</span>${needDot ? `<span class="sm-dot" title="${esc(SETTINGS_MENU_DOT_TITLE)}"></span>` : ''}${id === 'app' && updateAvailable ? '<span class="update-dot" title="发现新版本"></span>' : ''}</button>`;
       }).join('')}
       <!-- 滑动高亮条：切分区时平滑滑到当前项（首次定位不加过渡） -->
       <span class="settings-menu-ind" aria-hidden="true"></span>
@@ -238,6 +280,42 @@ function renderSettingsSidebar() {
       settingsGuard.needRerender = false;
       if (state.settingsSection === 'backup') $('#backup-section-title')?.scrollIntoView({ block: 'start' });
     });
+  });
+}
+
+/** 只刷侧栏「配置就绪」三枚小标 + 菜单橙点，用当前 state 现算，不重建整栏。
+ *
+ *  为什么需要：renderSettingsSidebar() 只在整页渲染时调用一次，而就绪状态来自
+ *  state.config / state.status（纯函数 assessReadiness）。设置页是静默自动保存，
+ *  保存完成后状态已是新值而侧栏还是旧的 —— 用户填好白名单，左栏仍亮着「白名单」橙点。
+ *  整栏重建（renderSettingsSidebar）也能修，但会连同快捷开关的 DOM、指示条过渡一起换掉，
+ *  保存每次触发都闪一下；这里只改结论相关的 class 与节点。 */
+function refreshSettingsReadiness() {
+  const sidebar = $('#settings-sidebar');
+  if (!sidebar) return;
+  const ready = settingsSidebarReady();
+  sidebar.querySelectorAll('[data-rs-goto]').forEach((chip) => {
+    const id = chip.dataset.rsGoto;
+    const ok = !!ready[id];
+    chip.classList.toggle('ok', ok);
+    chip.classList.toggle('bad', !ok);
+    // class 与悬停提示必须同步：只改 class 会让小标变绿而 title 还写着"还没配"。
+    chip.title = settingsChipTitle(id, ok);
+  });
+  sidebar.querySelectorAll('.settings-menu-item[data-section]').forEach((item) => {
+    const id = item.dataset.section;
+    // 没配过的分区在菜单项上点小橙点，配好消失（与渲染分支同一份口径：
+    // 只覆盖模型 / QQ / 白名单三项，其它分区 ready[id] 为 undefined → 视为已配）。
+    const needDot = settingsMenuNeedsDot(id, ready);
+    const dot = item.querySelector('.sm-dot');
+    if (needDot && !dot) {
+      const span = document.createElement('span');
+      span.className = 'sm-dot';
+      span.title = SETTINGS_MENU_DOT_TITLE;
+      item.appendChild(span);
+    } else if (!needDot && dot) {
+      dot.remove();
+    }
   });
 }
 
@@ -486,10 +564,10 @@ function setPageHeadHtml() {
         <button class="set-hint-x" type="button" id="set-hint-close" title="以后收成一行">知道了</button>
       </div>`;
   // 就绪度体检卡：没填接口地址 / 模型 / 白名单时，界面上只剩顶栏就绪圆点的 hover
-  // 提示，新用户没有任何主动文案告诉他缺什么、去哪填。按钮绑定（.hc-fix-btn /
-  // #test-api-btn）一直在 bindSettingsEvents 里，这里负责渲染。
-  // 口径：只在未就绪时显示，就绪后不该被常驻卡片打扰；保存配置后重渲染，
-  // 缺失项补齐后卡片自动消失。
+  // 提示，新用户没有任何主动文案告诉他缺什么、去哪填。按钮绑定见 07-settings-events.js
+  // 的模块级点击委托（重建后依然生效），这里负责首次渲染。
+  // 口径：只在未就绪时显示，就绪后不该被常驻卡片打扰；保存配置后由 refreshHealthCard()
+  // 单独重建这一张卡，缺失项补齐后卡片消失，不整页重渲染。
   // OneBot 连接状态是渲染时刻快照（略滞后），实时口径以横幅 / 就绪圆点为准。
   const healthReady = assessReadiness(state.config, state.status).ready;
   return `
@@ -507,6 +585,33 @@ function setPageHeadHtml() {
       ${hintHtml}
       ${healthReady ? '' : renderHealthCard()}
     </div>`;
+}
+
+/** 按当前 state.config / state.status 单独重建页头体检卡，不动页面的其它部分。
+ *
+ *  为什么必须单独重建：assessReadiness() 是纯函数，就绪状态只在渲染那一刻求值一次，
+ *  之后 state.config 变了 DOM 也不会自己跟。而整页 renderSettings() 会吹掉用户正在
+ *  输入的表单（settingsGuard 防的正是这个），不能靠全量重渲染补齐。
+ *
+ *  契约与 setPageHeadHtml() 一致：
+ *    · 已就绪 → 卡片从 DOM 移除（就绪后不常驻）；
+ *    · 未就绪 → 用 renderHealthCard() 的新内容替换旧卡，没有旧卡就追加到 .set-page 末尾
+ *      （卡片在页头里的位置就是提示条之后）。
+ *  卡内按钮走 07-settings-events.js 的模块级点击委托，重建节点不会丢监听。 */
+function refreshHealthCard() {
+  const page = $('#settings-form > .set-page');
+  if (!page) return;   // 不在设置页（#settings-form 被会话设置借走 / 尚未渲染）→ 没有页头可刷
+  const card = page.querySelector('#health-card');
+  if (assessReadiness(state.config, state.status).ready) {
+    card?.remove();
+    return;
+  }
+  const tpl = document.createElement('template');
+  tpl.innerHTML = renderHealthCard().trim();
+  const fresh = tpl.content.firstElementChild;
+  if (!fresh) return;
+  if (card) card.replaceWith(fresh);
+  else page.appendChild(fresh);
 }
 
 /* ── 设置搜索索引 ────────────────────────────────────────────────────
@@ -575,8 +680,9 @@ function renderApiSection(c) {
   //   · 未配置（新人第一次进来）→ 整张卡只有两个输入框 + 一个按钮，不把
   //     「模型配置 / 模型管理 / 添加提供商 / 模型目录 / 批量价格」5 个入口一次摊开；
   //   · 已配置 → 两按钮 + provider-hint 摘要 + 备用模型区块。
-  // 口径与 assessReadiness / 侧栏就绪标一致：地址 + 模型都有了才算"已连接"。
-  const readyModel = !!String(c.api?.baseUrl || '').trim() && !!String(c.api?.model || '').trim();
+  // 口径与 assessReadiness / 侧栏就绪标同一份结论：地址 + 模型都有了才算"已配置"。
+  const apiFlags = readinessByKey(c, state.status);
+  const readyModel = !!(apiFlags.baseUrl && apiFlags.model);
   // ⚠️ 三个 hidden input 两个态都必须渲染：saveConfig 读它们带出
   //    model/provider/baseUrl（08-modals.js 的模型编辑弹窗）。val() 的兜底虽也是旧值，
   //    但字段与改版前完全一致更稳（合并保存时不丢模型身份）。

@@ -906,8 +906,10 @@ function renderHealthCard() {
         <span id="test-api-result" class="muted"></span>
       </span>
     </div>`;
+  // id 是稳定锚点：自动保存完成后 06-settings-render.js 的 refreshHealthCard()
+  // 靠它单独重建这一张卡，不整页重渲染（会吹掉用户正在输入的框）。
   return `
-    <div class="health-card ${ready ? 'all-ok' : ''}">
+    <div class="health-card ${ready ? 'all-ok' : ''}" id="health-card">
       <div class="h-title">${ready ? '✅ 一切就绪，机器人运行中' : '🧭 完成下面缺失项就能跑起来'}</div>
       ${rows}
       ${testRow}

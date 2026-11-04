@@ -48,6 +48,96 @@ document.addEventListener('click', (e) => {
   panel.hidden = true;
 });
 
+/* ── 体检卡按钮（委托）───────────────────────────────────────────────────
+   卡片由 06-settings-render.js 的 refreshHealthCard() 在每次自动保存后单独重建，
+   绑定在卡片节点上的监听会随旧节点一起消失。所以挂在**模块顶层**委托到 document：
+   每次点击现找节点，重建多少次都只有这一份监听，不会叠加。
+
+   与 02-sse-sessions.js 的 bindSessionErrorFix 同一思路（重建节点 + 事件委托）。 */
+
+/** 健康卡「测试一下」：真实连通性请求。按钮状态也在委托里自己管。 */
+async function runConnectivityTest(btn, out, idleLabel) {
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = '测试中…';
+  if (out) out.textContent = '';
+  try {
+    // 连接信息（地址 / 密钥）只在「管理服务商」里维护，页面上只剩隐藏字段。
+    // 按「隐藏字段兜底、最后用已保存配置」的顺序取值，否则健康卡片上的
+    // 「测试一下」永远拿空 baseUrl，必报"请先填写 Base URL"。
+    const baseUrl = ($('#cfg-baseurl-value')?.value || state.config?.api?.baseUrl || '').trim();
+    const model = ($('#cfg-model')?.value || state.config?.api?.model || '').trim();
+    // 不带 apiKey：服务端按 providerId / 已保存配置解析，不依赖明文读取端点，
+    // 未设 token 时也能测试。带上 providerId 才能用对那一家的 Key（多服务商场景）。
+    const providerId = String($('#cfg-provider')?.value || state.config?.api?.provider || '').trim();
+    const r = await api('/api/providers/test-chat', {
+      method: 'POST',
+      body: JSON.stringify({ baseUrl, providerId, model })
+    });
+    const res = r.result || {};
+    // 思考方言由服务端 model.thinking-detect 能力给出，让用户提前知道这个模型
+    // 会走哪套思考参数（避免"开了思考但实际没生效"的黑箱感）。
+    const dialect = res.thinking?.label ? ` · 思考参数：${res.thinking.label}` : '';
+    if (out) out.textContent = res.ok
+      ? `✓ 测试通过（${res.latencyMs}ms）：${res.note || '请求成功'}${dialect}`
+      : `✗ 测试失败：${res.note || '未知错误'}`;
+  } catch (e) {
+    if (out) out.textContent = `测试失败：${e.message}`;
+  }
+  btn.disabled = false;
+  btn.textContent = idleLabel;
+}
+
+/** 健康卡「去连接页 / 去填写 / 去勾选」：跳到对应位置并高亮。 */
+function healthCardGoto(target) {
+  if (target === 'connection') {
+    // 跳「工具 → 连接」页：协议端由用户自装，那一页给的是状态 +
+    // 装什么 / 怎么配的指引，比把用户丢进设置分区里找按钮更有用。
+    flushSettingsSaves();   // 换页前先把 600ms 防抖窗口内的改动落盘
+    switchTab('connection');
+  } else if (target === 'settings-api') {
+    // 切换到 API 设置区块
+    flushSettingsSaves();   // 同上：换区块前先把旧分区挂起的改动落盘
+    state.settingsSection = 'api';
+    renderSettingsSidebar();
+    renderSettings();
+    // 高亮模型配置入口按钮：Base URL 不再是页面输入框，引导用户进「模型配置」弹窗
+    setTimeout(() => {
+      const input = $('#open-model-config-btn');
+      if (input) {
+        input.focus();
+        input.style.boxShadow = '0 0 0 3px var(--accent)';
+        setTimeout(() => { input.style.boxShadow = ''; }, 2000);
+      }
+    }, 100);
+  } else if (target === 'settings-allow') {
+    // 切换到白名单设置区块
+    flushSettingsSaves();   // 同上
+    state.settingsSection = 'allow';
+    renderSettingsSidebar();
+    renderSettings();
+    // 高亮白名单区域
+    setTimeout(() => {
+      const section = $('#settings-form');
+      if (section) {
+        section.style.boxShadow = '0 0 0 3px var(--accent)';
+        setTimeout(() => { section.style.boxShadow = ''; }, 2000);
+      }
+    }, 100);
+  }
+}
+
+document.addEventListener('click', (e) => {
+  // 按钮本身会被 runConnectivityTest 改写文字，得在点击时现取节点而不是缓存。
+  const btn = e.target?.closest?.('#test-api-btn, .hc-fix-btn');
+  if (!btn) return;
+  if (btn.id === 'test-api-btn') {
+    runConnectivityTest(btn, $('#test-api-result'), '测试一下');
+  } else {
+    healthCardGoto(btn.dataset.target);
+  }
+});
+
 /* ── 自动保存状态字 ───────────────────────────────────────────────────────
    设置页是**静默自动保存**：改完没有任何反馈，用户只能靠"下次进来值还在"推断
    存没存上，后端抖动时这正是"设置自己变回去了"的体感来源之一。
@@ -498,6 +588,13 @@ function bindSettingsEvents(c) {
         flashSaveState(`✓ 已保存 ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`, 'ok');
       } catch { /* 反馈失败不影响保存本身 */ }
       refreshStatus();
+      // 页头体检卡 + 侧栏「配置就绪」小标按新的 state.config 就地刷新：
+      // 两处结论都来自 assessReadiness() 这个纯函数，只在渲染那一刻求值一次，
+      // 保存完成后 state 已是新值而 DOM 还是旧的（填好白名单，卡片仍说"还没配置"）。
+      // 不用整页 renderSettings()：那会吹掉用户正在输入的表单（settingsGuard 防的
+      // 就是这件事）。必须放在 saveConfig 之后，此刻 state.config 才是新值。
+      refreshHealthCard();
+      refreshSettingsReadiness();
       startListPoller();
       // 刷新间隔可能刚被改过：重建状态轮询，让新间隔立刻生效
       startStatusPoller();
@@ -1280,85 +1377,9 @@ function bindSettingsEvents(c) {
   // 拿当前 API Key 真实值的函数已删除：唯一调用点随「模型配置」弹窗改版消失，
   // 它引用的 #cfg-apikey 也不存在了。弹窗内自带取 Key 逻辑。
 
-  // 连通性测试：抽成公共逻辑，两个入口共用
-  // （健康卡片的 test-api-btn 与「模型配置」弹窗里的测试按钮做的是同一件事）
-  async function runConnectivityTest(btn, out, idleLabel) {
-    if (!btn) return;
-    btn.disabled = true;
-    btn.textContent = '测试中…';
-    if (out) out.textContent = '';
-    try {
-      // 连接信息（地址 / 密钥）只在「管理服务商」里维护，页面上只剩隐藏字段。
-      // 按「隐藏字段兜底、最后用已保存配置」的顺序取值，否则健康卡片上的
-      // 「测试一下」永远拿空 baseUrl，必报"请先填写 Base URL"。
-      const baseUrl = ($('#cfg-baseurl-value')?.value || state.config?.api?.baseUrl || '').trim();
-      const model = ($('#cfg-model')?.value || state.config?.api?.model || '').trim();
-      // 不带 apiKey：服务端按 providerId / 已保存配置解析，不依赖明文读取端点，
-      // 未设 token 时也能测试。带上 providerId 才能用对那一家的 Key（多服务商场景）。
-      const providerId = String($('#cfg-provider')?.value || state.config?.api?.provider || '').trim();
-      const r = await api('/api/providers/test-chat', {
-        method: 'POST',
-        body: JSON.stringify({ baseUrl, providerId, model })
-      });
-      const res = r.result || {};
-      // 思考方言由服务端 model.thinking-detect 能力给出，让用户提前知道这个模型
-      // 会走哪套思考参数（避免"开了思考但实际没生效"的黑箱感）。
-      const dialect = res.thinking?.label ? ` · 思考参数：${res.thinking.label}` : '';
-      if (out) out.textContent = res.ok
-        ? `✓ 测试通过（${res.latencyMs}ms）：${res.note || '请求成功'}${dialect}`
-        : `✗ 测试失败：${res.note || '未知错误'}`;
-    } catch (e) {
-      if (out) out.textContent = `测试失败：${e.message}`;
-    }
-    btn.disabled = false;
-    btn.textContent = idleLabel;
-  }
-
-  // 健康卡片上的「测试一下」（按钮 id 是 test-api-btn，不是 test-provider-btn）
-  const testApiBtn = $('#test-api-btn');
-  if (testApiBtn) testApiBtn.addEventListener('click', () => runConnectivityTest(testApiBtn, $('#test-api-result'), '测试一下'));
-
-  // 健康卡片上的「去设置」按钮：点击跳转到对应设置区块并高亮
-  $$('.hc-fix-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const target = btn.dataset.target;
-      if (target === 'connection') {
-        // 跳「工具 → 连接」页：协议端由用户自装，那一页给的是状态 +
-        // 装什么 / 怎么配的指引，比把用户丢进设置分区里找按钮更有用。
-        flushSettingsSaves();   // 换页前先把 600ms 防抖窗口内的改动落盘
-        switchTab('connection');
-      } else if (target === 'settings-api') {
-        // 切换到 API 设置区块
-        flushSettingsSaves();   // 同上：换区块前先把旧分区挂起的改动落盘
-        state.settingsSection = 'api';
-        renderSettingsSidebar();
-        renderSettings();
-        // 高亮模型配置入口按钮：Base URL 不再是页面输入框，引导用户进「模型配置」弹窗
-        setTimeout(() => {
-          const input = $('#open-model-config-btn');
-          if (input) {
-            input.focus();
-            input.style.boxShadow = '0 0 0 3px var(--accent)';
-            setTimeout(() => { input.style.boxShadow = ''; }, 2000);
-          }
-        }, 100);
-      } else if (target === 'settings-allow') {
-        // 切换到白名单设置区块
-        flushSettingsSaves();   // 同上
-        state.settingsSection = 'allow';
-        renderSettingsSidebar();
-        renderSettings();
-        // 高亮白名单区域
-        setTimeout(() => {
-          const section = $('#settings-form');
-          if (section) {
-            section.style.boxShadow = '0 0 0 3px var(--accent)';
-            setTimeout(() => { section.style.boxShadow = ''; }, 2000);
-          }
-        }, 100);
-      }
-    });
-  });
+  // 健康卡片的「测试一下 / 去连接页 / 去填写 / 去勾选」不在这里绑定：
+  // 卡片会被 refreshHealthCard() 单独重建，绑定节点会随旧节点丢失；
+  // 统一走本文件顶层的 document 点击委托（runConnectivityTest / healthCardGoto）。
 
 
 

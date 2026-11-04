@@ -1091,38 +1091,52 @@ async function bootLoop() {
 }
 
 // ── 就绪度体检（傻瓜式引导的核心） ──
+// key 是这一项的稳定标识：页头体检卡、侧栏就绪小标等消费方按 key 取结论，
+// 不要按数组下标或文案匹配（改顺序 / 改措辞就会静默错位）。
 function assessReadiness(cfg, status) {
   const checks = [];
-  if (!cfg) return { ready: false, checks: [{ ok: false, label: '配置加载失败' }] };
+  if (!cfg) return { ready: false, checks: [{ key: 'config', ok: false, label: '配置加载失败' }] };
   // 拆成"接口地址"与"模型"两步：合并判断时新手分不清到底缺哪个。
   // 出厂 baseUrl 为空，第一条会直接指出该填什么。
   const urlOk = !!String(cfg.api.baseUrl || '').trim();
   checks.push({
+    key: 'baseUrl',
     ok: urlOk,
     label: urlOk ? `接口地址：${cfg.api.baseUrl}` : '还没有填接口地址（Base URL，必填）：官方 API 或中转站提供的 OpenAI 兼容地址',
     fix: urlOk ? null : 'settings-api'
   });
   const modelOk = !!String(cfg.api.model || '').trim();
   checks.push({
+    key: 'model',
     ok: modelOk,
     label: modelOk ? `模型已选择：${cfg.api.model}` : '还没有选择模型（填好地址后点「获取列表」或手动添加）',
     fix: modelOk ? null : 'settings-api'
   });
   const allowOk = (cfg.allow?.groups?.length || cfg.allow?.private?.length || cfg.allowAllWhenEmpty);
-  checks.push({ ok: !!allowOk, label: allowOk ? `白名单：${(cfg.allow.groups || []).length} 个群 / ${(cfg.allow.private || []).length} 个好友` : '还没有配置白名单（必填）', fix: allowOk ? null : 'settings-allow' });
+  checks.push({ key: 'allow', ok: !!allowOk, label: allowOk ? `白名单：${(cfg.allow.groups || []).length} 个群 / ${(cfg.allow.private || []).length} 个好友` : '还没有配置白名单（必填）', fix: allowOk ? null : 'settings-allow' });
   // status 在启动早期为空：state.status 初值是 null，而设置页可能在首次 /api/status
   // 返回前就被渲染（loadSettings → renderSettings → 页头体检）。归一化后按
   // "状态未知"表述，既不因 `status.onebot.diagnosis` 抛错，也不误报"机器人没连上"。
   const ob = status?.onebot || {};
   const obOk = ob.connected;
   checks.push({
+    key: 'onebot',
     ok: !!obOk,
     label: obOk
       ? `机器人已上线${ob.self ? `（${ob.self.nickname}）` : ''}`
       : (status ? (ob.diagnosis || '机器人没连上 —— 请到「连接」页看看') : '正在读取机器人连接状态…'),
     fix: obOk ? null : 'connection-tab'
   });
-  return { ready: urlOk && modelOk && allowOk && obOk, checks };
+  return { ready: !!(urlOk && modelOk && allowOk && obOk), checks };
+}
+
+/** 按 key 取就绪结论：返回 { [key]: ok }，供侧栏小标等消费方复用同一份口径。 */
+function readinessByKey(cfg, status) {
+  const out = {};
+  for (const c of assessReadiness(cfg, status).checks) {
+    if (c.key) out[c.key] = !!c.ok;
+  }
+  return out;
 }
 
 // 横幅内容签名。refreshStatus 每轮都会调到这里，无条件 `banner.innerHTML = html`

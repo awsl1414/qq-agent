@@ -28,14 +28,17 @@ const ONBOARDING_VERSION = 1;
 function onboardingSteps() {
   const cfg = state.config || {};
   const st = state.status || {};
-  const api = cfg.api || {};
-  const urlOk = !!String(api.baseUrl || '').trim();
-  const modelOk = !!String(api.model || '').trim();
-  // 白名单口径与就绪圆点（01-boot.js updateReadinessDots）逐条一致：
-  // 有群 / 有好友 / 或显式开了"白名单为空时响应所有人"都算配过。
-  const allowOk = !!((cfg.allow?.groups?.length || cfg.allow?.private?.length || cfg.allowAllWhenEmpty));
-  const obOk = !!st.onebot?.connected;
-  // 人设步骤的"完成"口径：用现成模板（含内置默认的小鲸鱼）不算自定义。
+  // 接口地址 / 模型 / 白名单 / OneBot 四项的完成口径全部取 assessReadiness
+  // 经 readinessByKey 给出的结论，不在这里另算：自算一份就会和体检卡、顶栏圆点
+  // 分叉（曾出现引导判定"地址已填"而体检卡说"还没填"）。
+  const flags = readinessByKey(state.config, state.status);
+  const urlOk = !!flags.baseUrl;
+  const modelOk = !!flags.model;
+  const allowOk = !!flags.allow;
+  const obOk = !!flags.onebot;
+  // 人设不属于就绪度四项（assessReadiness 不覆盖"是否自定义了性格"），故单独判定。
+  // 人设是可选项，不与上面四项共享结论，也不会改变它们的取值。
+  // 口径：用现成模板（含内置默认的小鲸鱼）不算自定义。
   // 刚装完时 persona.roleText 就是内置文本，按"有文本就算"判会把它标成
   // 「已自定义」还打勾，既误导又让"四步全绿"失去意义。
   // 模板列表没加载时保守判"未自定义"，不误报。
@@ -44,12 +47,12 @@ function onboardingSteps() {
   const tplHit = tplList.find((p) => String(p.text ?? '').trim() === roleText);
   const personaOk = tplList.length > 0 ? (!!roleText && !tplHit) : false;
   const personaStatus = tplHit ? `使用「${tplHit.name}」` : (personaOk ? '已自定义' : '使用默认人设');
-  // 第 5 步（验证）的完成判据：机器人真的在群里发过话，state.sessions 里
-  // 有 sent（已发送到 QQ 的条目）。四步全绿只说明"配置齐了"，不说明"能说话"：
-  // 响应档位停在「仅艾特」/ 左栏「自动回复」被关时，配置再全群里也没动静。
-  // repliedCount 曾被一次合并连带删掉，第 5 步的 done / status 还在用它，
-  // 引导一渲染就 ReferenceError，别再去删。
-  const repliedCount = (state.sessions || []).filter((s) => Array.isArray(s.sent) && s.sent.length > 0).length;
+  // 第 5 步（验证）的完成判据：机器人真的在群里发过话。
+  // 四步全绿只说明"配置齐了"，不说明"能说话"：响应档位停在「仅艾特」/
+  // 左栏「自动回复」被关时，配置再全群里也没动静。
+  // ⚠️ 会话**列表**只回摘要、不带 sent 数组，旧实现读 `s.sent` 使判据恒为假。
+  //    唯一口径是后端 #summary() 输出的 sentCount（src/sessions.js#sentCountOf）。
+  const repliedCount = (state.sessions || []).filter((s) => Number(s.sentCount) > 0).length;
   const preOk = urlOk && modelOk && obOk && allowOk;
   return [
     {
@@ -57,7 +60,7 @@ function onboardingSteps() {
       title: '配一个 AI 模型',
       desc: '先添加一个服务商（接口地址 + API Key），再选一个模型。没有 Key 可以去 DeepSeek 官网申请 —— 按量计费，充多少用多少，不用不花钱。',
       done: urlOk && modelOk,
-      status: !urlOk ? '还没填接口地址' : (!modelOk ? '还没选模型' : `已选 ${api.model}`),
+      status: !urlOk ? '还没填接口地址' : (!modelOk ? '还没选模型' : `已选 ${cfg.api?.model}`),
       jump: { tab: 'settings', section: 'api' },
       // 点「去配置」直接把「模型管理」弹窗弹出来：只跳到设置页还不够，
       // 萌新会在页面上找不到「模型管理」这颗按钮。弹窗里「＋ 添加提供商」就是
