@@ -114,7 +114,19 @@ function checkedSourcePath(root, ...parts) {
   let cursor = root;
   for (const part of rel.split(path.sep).filter(Boolean)) {
     cursor = path.join(cursor, part);
-    if (fs.lstatSync(cursor, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    let stat;
+    try {
+      stat = fs.lstatSync(cursor, { throwIfNoEntry: false });
+    } catch (error) {
+      // 中间某段是普通文件（本次导入把 file-to-dir 换成了 file，或反过来）时，
+      // 更深层路径必然不存在，lstat 抛 ENOTDIR。throwIfNoEntry 只吞 ENOENT，
+      // 不吞 ENOTDIR。这种"路径不存在"与"清单不安全"是两回事，
+      // 不能让整次回滚被判为不安全——回滚执行阶段本来就按倒序先删新增路径、
+      // 再还原旧文件，父路径的类型冲突会在那时被解开。
+      if (error?.code === 'ENOTDIR') return file;
+      throw error;
+    }
+    if (stat?.isSymbolicLink()) {
       throw new Error('恢复源不能包含符号链接或目录联接');
     }
   }
