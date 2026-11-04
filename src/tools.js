@@ -928,7 +928,7 @@ function registerAllTools() {
   registerTool({
     id: 'send_image',
     name: '发送网图',
-    description: '把一张网上找到的图片发到当前聊天。默认需要先预览确认（send_image(url, preview=true) 看一眼，再 send_image(url) 发出）。只支持 png/jpg/gif/webp 直链；网页地址不是图片。',
+    description: '把一张网上找到的图片发到当前聊天。默认需要先预览确认（send_image(url, preview=true) 看一眼，再 send_image(url) 发出）。⚠️ preview=true 只把图给你自己看，群里什么都不会收到；看完必须再调用一次不带 preview 的 send_image(url) 才算真正发出。只支持 png/jpg/gif/webp 直链；网页地址不是图片。',
     category: 'media',
     icon: '🖼️',
     requiresVision: false,
@@ -1024,10 +1024,16 @@ function registerAllTools() {
             }
           } catch { /* 能力坏了不影响预览 */ }
 
+          // ⚠️ 预览必须显式带 sent:false。orchestrator 在工具调用后按
+          //   isDeliverTool(name) 补记「已发送到 QQ」；send_image 是 media 且
+          //   id 以 send 开头，会被判成发送类工具。预览分支提前 return，
+          //   session.sent 没增加，于是被补记成 [消息 · send_image] ——
+          //   界面上显示"已发送"，实际一张图都没发出去。带上 sent:false 后
+          //   reportsNothingSent() 才会命中，不再补记。
           if (!supported) {
-            return ok(`这张图是 ${mime}（约 ${Math.round(buffer.length / 1024)}KB）。当前视觉接口不支持 ${mime}，看不到画面内容，但字节已校验过是真图、QQ 里能正常显示。你觉得合适就直接调 send_image(url) 发出去（URL 照抄：${url}）。`);
+            return ok({ sent: false, preview: true, note: `这张图是 ${mime}（约 ${Math.round(buffer.length / 1024)}KB）。当前视觉接口不支持 ${mime}，看不到画面内容，但字节已校验过是真图、QQ 里能正常显示。你觉得合适就直接调 send_image(url) 发出去（URL 照抄：${url}）。` });
           }
-          return { content: imageParts(`这张图（${mime}，约 ${Math.round(buffer.length / 1024)}KB）——觉得合适就立刻调 send_image(url) 发出去：`, [`data:${mime};base64,${b64}`]) };
+          return { content: imageParts(`这张图（${mime}，约 ${Math.round(buffer.length / 1024)}KB）——觉得合适就立刻调 send_image(url) 发出去（当前只是预览，还没发送）：`, [`data:${mime};base64,${b64}`]), sent: false, preview: true };
         }
 
         // 传 url 而不是只传 base64：OneBot 的 image 段原生支持 http 直链，让**协议端

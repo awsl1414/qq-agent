@@ -104,11 +104,17 @@ function isDeliverTool(name, extraIds = null) {
 const STICKER_GRACE_MAX = 500;
 
 /**
- * 工具结果是否**明确**说了"没发出去"（全被去重 / 显式 sent:false）。
+ * 工具结果是否**明确**说了"没发出去"（全被去重 / 显式 sent:false / 只是预览）。
  * 只有这种情况才不该补记"已发送"，其余一律以"没报错就是发出去了"为准。
+ *
+ * content 可能是 parts 数组（媒体类工具返回 [{type:'text'},…]），
+ * 直接 String(array) 会得到 "[object Object]"，正则永远匹配不到 ——
+ * 那会让 send_image 的预览调用被补记成「已发送到 QQ」。
  */
 function reportsNothingSent(content) {
-  const s = String(content ?? '');
+  const s = Array.isArray(content)
+    ? content.map((p) => (p && typeof p.text === 'string' ? p.text : '')).join('\n')
+    : String(content ?? '');
   return /"(sent|delivered)"\s*:\s*(0|false)\b/i.test(s);
 }
 
