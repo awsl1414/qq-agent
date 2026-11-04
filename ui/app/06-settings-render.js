@@ -531,7 +531,10 @@ const SETTINGS_SEARCH_INDEX = [
   // 壁纸单列一条直达条目（target 指向那一节的 h3 锚点），而不是塞进
   // 「外观与数据」的 keys：后者只会带用户到分区顶部，还得自己往下滚一屏。
   { keys: ['壁纸', '背景', '背景图', '小红车', '壁纸引擎', '引擎壁纸', 'bizhi', 'beijing'], label: '界面背景（本地图片 / 壁纸）', desc: '两层背景二选一：本地导入图，或 Wallpaper Engine 壁纸', section: 'app', target: 'settings-bg', w: 10 },
-  { keys: ['主题', '皮肤', '外观', '数据', '重置', '备份', '更新', '小窗', '颜色', 'zhuti', 'waiguan'], label: '外观与数据', desc: '主题、数据目录、重置（危险区在底部）', section: 'app', w: 7 },
+  // 备份是独立分区，且用户搜的往往是"导出 / 恢复 / 网盘"这类动作词，
+  // 不是"备份"这个分区名，所以单列一条直达条目而不是塞进「外观与数据」。
+  { keys: ['备份', '恢复', '导出', '还原', '回滚', 'webdav', 's3', '对象存储', '网盘', 'nas', '群晖', '坚果云', 'minio', 'beifen', 'huifu', 'daochu'], label: '备份与恢复', desc: '备份到本地 / WebDAV / S3，导出离线副本，恢复与回滚', section: 'backup', target: 'backup-section-title', w: 9 },
+  { keys: ['主题', '皮肤', '外观', '数据', '重置', '更新', '小窗', '颜色', 'zhuti', 'waiguan'], label: '外观与数据', desc: '主题、数据目录、重置（危险区在底部）', section: 'app', w: 7 },
   { keys: ['屏蔽', '拉黑', '禁言', '成员', 'pingbi'], label: '屏蔽名单', desc: '谁的话当没看见', section: 'allow', target: 'blocklist-btn', w: 6 },
   { keys: ['备用模型', '备选', 'fallback', 'beiyong'], label: '备用模型', desc: '主模型失败时自动换', section: 'api', target: 'add-fallback-row-btn', w: 6 },
   { keys: ['代理', 'proxy', 'daili'], label: '网络代理', desc: '接入国外 API 时用', section: 'api', target: 'open-model-manage-btn', w: 6 },
@@ -1551,11 +1554,11 @@ function renderDesktopSection(c) {
         <input type="text" id="cfg-datadir" readonly value="${esc(state.dataDir || '（加载中…）')}" style="flex:1" />
         <button class="btn btn-small" id="open-datadir-btn">打开文件夹</button>
       </div>
-      <div class="hint">所有用户数据（配置、聊天记录、记忆、表情包）都存在这个目录里。建议定期复制一份到别处备份。</div>
+      <div class="hint">所有用户数据（配置、聊天记录、记忆、表情包）都存在这个目录里。备份请用「备份与恢复」分区：可以备份到本地目录、WebDAV 或 S3，也可以直接导出一份离线副本。</div>
     </div>
     <div class="danger-zone">
       <div class="dz-title">⚠️ 危险区</div>
-      <div class="dz-sub">下面的操作会删除数据且<b>不可恢复</b>。动手前建议先点上面的「打开文件夹」，把整个 data/ 目录复制一份。</div>
+      <div class="dz-sub">下面的操作会删除数据且<b>不可恢复</b>。动手前建议先在「备份与恢复」分区点「立即备份」或「导出到本地」留一份副本。</div>
       <div class="field">
         <button class="btn btn-danger" id="reset-data-btn">重置为初始形态</button>
         <span class="hint" id="reset-data-hint" style="margin-left:10px"></span>
