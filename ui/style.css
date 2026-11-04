@@ -6536,7 +6536,7 @@ code, .mono { font-family: var(--mono); }
    边框色 = 标题字色 = --btn-hl（高亮蓝），副标题 = --btn-hl-sub 中灰。
    不要换成通用灰线 --line-str + 白字，那样视觉上像禁用态。 */
 .launch {
-  width: 100%; height: 54px; border-radius: var(--radius-xs);
+  width: 100%; height: 54px; border-radius: var(--radius);
   border: 1px solid var(--btn-hl); background: transparent;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   cursor: pointer; text-align: center; font-family: inherit;
@@ -6550,10 +6550,11 @@ code, .mono { font-family: var(--mono); }
 .launch:hover { background: rgba(79, 146, 255, .12); }
 .launch:active { transform: scale(.985); }
 
-/* 小按钮（照原型 .mini-btn ＝ PCL MyButton 默认色型）：边框色 = 文字色 = --btn-normal */
+/* 主操作 .launch 用常规圆角，次级 .mini-btn 用小圆角；小标签保留 xs。
+   .mini-btn 沿用 PCL MyButton 默认色型：边框色 = 文字色 = --btn-normal。 */
 .mini-row { display: flex; gap: 10px; margin-top: 10px; }
 .mini-btn {
-  flex: 1; min-width: 0; height: 35px; border-radius: var(--radius-xs);
+  flex: 1; min-width: 0; height: 35px; border-radius: var(--radius-sm);
   border: 1px solid var(--btn-normal); background: transparent;
   color: var(--btn-normal); font-size: 13px; font-family: inherit;
   display: grid; place-items: center; cursor: pointer;
