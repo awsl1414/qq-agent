@@ -752,7 +752,7 @@ function renderUsageSkeleton() {
   // 说明行 + 摘要行占位：正式版式里每块都有这两条，
   // 不占位的话数据回来时整页会往下跳约 200px。
   const note = '<div class="sk-line" style="width:58%;height:11px;margin:0 0 10px"></div>';
-  const sum = '<div class="sk-line" style="width:86%;height:30px;margin:0 0 11px;border-radius:9px"></div>';
+  const sum = '<div class="sk-line" style="width:86%;height:30px;margin:0 0 11px;border-radius:var(--radius)"></div>';
   // 顺序与正式页面一致（控制条 → 三块图 → 统计卡），加载完成时布局不跳。
   // 提示文案：大数据下统计可能要几秒，让用户知道页面没死。
   return `
@@ -774,6 +774,8 @@ function renderUsagePage(stats, st, prices) {
   const box = $('#usage-page');
   if (!box) return;
 
+  // 指标切换/重绘时尊重手动收起，只在首次显示时默认展开。
+  const detailOpen = (block, sub = false) => box.querySelector(`[data-block="${block}"] ${sub ? '.usage-details-sub' : '.usage-details:not(.usage-details-sub)'}`)?.open === false ? '' : ' open';
   box.innerHTML = `
     <div class="usage-wrap">
       <div class="usage-head">
@@ -805,15 +807,15 @@ function renderUsagePage(stats, st, prices) {
         <p class="usage-sec-sum" data-sum="days"></p>
         <!-- 时间序列 → 折线图（看趋势） -->
         <div class="usage-chart" data-chart="days"></div>
-        <!-- 原始数值表：默认折叠，精确数字与点击下钻都还在 -->
-        <details class="usage-details">
+        <!-- 原始数值表：默认展开，精确数字与统计口径直接可见 -->
+        <details class="usage-details"${detailOpen('days')}>
           <summary>数值表</summary>
           <table class="usage-table clickable" data-table="days">
             <thead><tr><th>日期</th><th class="r">调用</th><th class="r">输入</th><th class="r">输出</th><th class="r">缓存命中</th><th class="r">命中率</th><th class="r">成本</th></tr></thead>
             <tbody></tbody>
           </table>
         </details>
-        <details class="usage-details usage-details-sub">
+        <details class="usage-details usage-details-sub"${detailOpen('days', true)}>
           <summary>这些数字是怎么算的？</summary>
           <div class="up-howto-body">
             <p><b>哪一天</b>：按每次模型调用的<b>发生时刻</b>归日（本地时区）。一个跨零点的会话会被拆到两天，不会整段记在结束那天。</p>
@@ -833,14 +835,14 @@ function renderUsagePage(stats, st, prices) {
         <p class="usage-sec-sum" data-sum="chats"></p>
         <!-- 分类排名 → 横向条形（折线会暗示"前后有趋势"，反而误导） -->
         <div class="usage-chart" data-chart="chats"></div>
-        <details class="usage-details">
+        <details class="usage-details"${detailOpen('chats')}>
           <summary>数值表</summary>
           <table class="usage-table clickable" data-table="chats">
             <thead><tr><th>会话</th><th class="r">调用</th><th class="r">输入</th><th class="r">输出</th><th class="r">命中率</th><th class="r">成本</th></tr></thead>
             <tbody></tbody>
           </table>
         </details>
-        <details class="usage-details usage-details-sub">
+        <details class="usage-details usage-details-sub"${detailOpen('chats', true)}>
           <summary>这些数字是怎么算的？</summary>
           <div class="up-howto-body">
             <p><b>一个「会话」</b>＝一次完整对话（群聊、私聊各算一个），名字取会话标题。它的 token 与成本是所有模型调用的累加。</p>
@@ -859,9 +861,9 @@ function renderUsagePage(stats, st, prices) {
         <p class="usage-sec-note" data-note="models">同一个模型走不同渠道算两个——官方、中转站、<code>:free</code> 版本的价格可能差好几倍。</p>
         <p class="usage-sec-sum" data-sum="models"></p>
         <div class="usage-chart" data-chart="models"></div>
-        <details class="usage-details">
+        <details class="usage-details"${detailOpen('models')}>
           <summary>数值表</summary>
-          <!-- ⚠️ 这个按钮从 h3 挪进来了（表格现在默认折叠，按钮留在标题上会点不着） -->
+          <!-- 表格行数的展开按钮与数值表放在同一分区 -->
           <div class="usage-details-tools">
             <button class="btn btn-small ub-expand" id="models-expand" style="display:none">展开全部</button>
           </div>
@@ -870,7 +872,7 @@ function renderUsagePage(stats, st, prices) {
             <tbody></tbody>
           </table>
         </details>
-        <details class="usage-details usage-details-sub">
+        <details class="usage-details usage-details-sub"${detailOpen('models', true)}>
           <summary>这些数字是怎么算的？</summary>
           <div class="up-howto-body">
             <p><b>为什么写成「渠道：模型 id」</b>：同一个 id 走官方直连和中转站是不同的商品，单价可能差几倍，混在一起会算错账，所以拆成两行。</p>
@@ -906,7 +908,7 @@ function renderUsagePage(stats, st, prices) {
         <p class="usage-sec-sum" data-sum="plugins"></p>
         <div class="usage-chart" data-chart="plugins"></div>
 
-        <details class="usage-details">
+        <details class="usage-details"${detailOpen('plugins')}>
           <summary>数值表</summary>
           <table class="usage-table clickable" data-table="plugins">
             <thead><tr>
@@ -923,7 +925,7 @@ function renderUsagePage(stats, st, prices) {
           </table>
         </details>
 
-        <details class="usage-details usage-details-sub">
+        <details class="usage-details usage-details-sub"${detailOpen('plugins', true)}>
           <summary>这些数字是怎么来的？</summary>
           <div class="up-howto-body">
             <p><b>对话内容</b>（排行最后一行）：不是插件，是「这次输入里除了插件和工具说明之外剩下的部分」——聊天记录、人设、当前状态。它的口径是「每次真实输入 − 插件与工具说明」，用减法倒推，所以它一定和总数对得上。</p>

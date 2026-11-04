@@ -284,7 +284,7 @@ html[data-text='purple'] { --fg:#c3a1ff; --fg-dim:rgba(195,161,255,.72);  --fg-m
 .wp-sw.on { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* 本页自己的网格 */
 .wp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
-.wp-cell { display: flex; flex-direction: column; gap: 6px; padding: 0; border: 2px solid var(--line); border-radius: var(--radius, 10px);
+.wp-cell { display: flex; flex-direction: column; gap: 6px; padding: 0; border: 2px solid var(--line); border-radius: var(--radius);
   background: var(--layer-1); cursor: pointer; overflow: hidden; text-align: left; transition: border-color .15s, transform .15s;
   /* min-width:0：grid 项默认 min-width:auto，缩略图的原始像素宽会把整列顶宽
      （表现就是"某张卡片的预览图按原始尺寸铺开、把网格撑歪"）。 */
@@ -296,7 +296,7 @@ html[data-text='purple'] { --fg:#c3a1ff; --fg-dim:rgba(195,161,255,.72);  --fg-m
 .wp-thumb { position: relative; aspect-ratio: 16/9; min-width: 0; overflow: hidden;
   background: linear-gradient(135deg, var(--layer-1), var(--layer-2)); }
 .wp-thumb img { width: 100%; height: 100%; max-width: 100%; object-fit: cover; display: block; }
-.wp-badge { position: absolute; top: 6px; right: 6px; padding: 2px 7px; border-radius: 999px; font-size: 11px; font-weight: 600;
+.wp-badge { position: absolute; top: 6px; right: 6px; padding: 2px 7px; border-radius: var(--radius-full); font-size: 11px; font-weight: 600;
   background: rgba(0,0,0,.55); color: #fff; }
 .wp-badge.mov { background: rgba(46,108,255,.85); }
 .wp-name { padding: 8px 10px 0; font-size: 13px; font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -306,12 +306,12 @@ html[data-text='purple'] { --fg:#c3a1ff; --fg-dim:rgba(195,161,255,.72);  --fg-m
 .wp-ctrl input[type='range'] { width: 140px; }
 .wp-ctrl select { font: inherit; }
 .wp-dynrow { padding: 0 10px 9px; display: flex; gap: 6px; align-items: center; }
-.wp-dyn, .wp-redo { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 6px;
+.wp-dyn, .wp-redo { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: var(--radius-sm);
   border: 1px solid var(--line-str); background: var(--layer-1); color: var(--fg-dim); font-size: 11px;
   cursor: pointer; user-select: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .wp-dyn:hover, .wp-redo:hover { color: var(--accent); border-color: var(--line-str); }
 .wp-dyn[aria-disabled='true'], .wp-redo[aria-disabled='true'] { opacity: .75; cursor: default; }
-.wp-hintbox { padding: 14px 16px; border: 1px dashed var(--line); border-radius: var(--radius, 10px); color: var(--fg-dim); font-size: 13px; line-height: 1.8; }
+.wp-hintbox { padding: 14px 16px; border: 1px dashed var(--line); border-radius: var(--radius); color: var(--fg-dim); font-size: 13px; line-height: 1.8; }
 
 /* 页头标题：容器现在是 .settings-pane，它给所有 h3 套了「设置分区标题」那套
    （accent 色 + 下边框 + 22px 上边距）。本页 h3 住在 .usage-head 的 flex 行里，
@@ -359,7 +359,7 @@ html[data-text='purple'] { --fg:#c3a1ff; --fg-dim:rgba(195,161,255,.72);  --fg-m
 
 /* 弹窗顶部的说明条 */
 .wp-lib-desc {
-  margin: 0; padding: 10px 12px; border-radius: 8px;
+  margin: 0; padding: 10px 12px; border-radius: var(--radius);
   background: var(--layer-1); border: 1px solid var(--line);
   font-size: 12.5px; line-height: 1.75; color: var(--fg-dim);
 }
@@ -370,10 +370,10 @@ html[data-text='purple'] { --fg:#c3a1ff; --fg-dim:rgba(195,161,255,.72);  --fg-m
    现在样式进页必注入（见 wpEnsurePageCss），空状态本身也升级成设置页那套卡片语言。 */
 .wp-empty { display: flex; gap: 16px; align-items: flex-start;
   padding: 22px 24px; background: var(--layer-1);
-  border: 1px solid var(--line); border-radius: var(--radius-lg, 12px); }
+  border: 1px solid var(--line); border-radius: var(--radius-lg); }
 .wp-empty-ico { flex: none; font-size: 30px; line-height: 1.1; opacity: .92;
   width: 52px; height: 52px; display: flex; align-items: center; justify-content: center;
-  background: var(--layer-2); border-radius: 12px; }
+  background: var(--layer-2); border-radius: var(--radius-lg); }
 .wp-empty-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 9px; }
 .wp-empty-body h4 { margin: 0; font-size: 14px; font-weight: 600; color: var(--fg); }
 .wp-empty-body p { margin: 0; font-size: 12.5px; line-height: 1.75; color: var(--fg-dim); }
@@ -396,7 +396,7 @@ html[data-text='purple'] { --fg:#c3a1ff; --fg-dim:rgba(195,161,255,.72);  --fg-m
 #wallpaper-page .wp-input {
   height: 34px; padding: 0 12px; width: 100%; min-width: 0;
   background: var(--inset-bg); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; font-size: 13px; outline: none; box-shadow: var(--inset-edge);
+  border-radius: var(--radius-sm); font-size: 13px; outline: none; box-shadow: var(--inset-edge);
   transition: box-shadow var(--dur-base) var(--ease-in-out), border-color var(--dur-base) var(--ease-in-out);
 }
 #wallpaper-page .wp-inputrow > .wp-input { flex: 1 1 220px; width: auto; }

@@ -1003,7 +1003,7 @@ function openModelConfigModal() {
           </div>
           <div class="hint" style="margin-top:4px">接口地址与密钥在「管理服务商」里修改。</div></div>
         <div class="field"><label>模型（点击选择）</label>
-          <div id="mc-model-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:8px">
+          <div id="mc-model-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius)">
             ${modelList}
           </div>
           <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
@@ -1764,7 +1764,7 @@ function openModelManageModal() {
           <button class="btn btn-small" id="mg-fetch-models">拉取模型列表</button>
           <button class="btn btn-small btn-danger" id="mg-del-model">删除模型</button>
         </div>
-        <div style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:8px">
+        <div style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius)">
           ${(p.models || []).map((m) => {
             const label = names[m] || m;
             return `
@@ -2141,7 +2141,7 @@ function openProviderAddModal(onDone) {
   function renderFetched() {
     if (!fetched.length) { fetchedBox.innerHTML = ''; return; }
     fetchedBox.innerHTML = `
-      <div style="border:1px solid var(--border);border-radius:8px;padding:6px 8px;margin-bottom:8px;max-height:180px;overflow:auto">
+      <div style="border:1px solid var(--border);border-radius:var(--radius);padding:6px 8px;margin-bottom:8px;max-height:180px;overflow:auto">
         <div class="muted" style="font-size:12px;margin-bottom:4px">拉取到 ${fetched.length} 个模型（勾选要添加的，也可与手填行并用）：</div>
         ${fetched.map((m, i) => `
           <label style="display:flex;gap:6px;align-items:center;padding:2px 0;font-size:12px;cursor:pointer">

@@ -2802,7 +2802,7 @@ function renderForgeDraftsList() {
   const f = doctorState.forge;
   if (!f.drafts.length) return '';
   return `
-    <details class="forge-drafts">
+    <details class="forge-drafts"${document.querySelector('.forge-drafts')?.open === false ? '' : ' open'}>
       <summary>🗂 暂存区里的草稿（${f.drafts.length}）</summary>
       <div class="forge-drafts-body">
         ${f.drafts.map((d) => `

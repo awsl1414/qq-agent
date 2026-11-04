@@ -23,11 +23,11 @@
 .dp-nav {
   position: sticky; top: 0; z-index: 5;
   display: flex; gap: 4px; padding: 4px;
-  border: 1px solid var(--line-str); border-radius: 10px;
+  border: 1px solid var(--line-str); border-radius: var(--radius);
   background: var(--layer-3);
 }
 .dp-nav button {
-  flex: 1; min-width: 0; border: 0; border-radius: 7px;
+  flex: 1; min-width: 0; border: 0; border-radius: var(--radius-sm);
   background: transparent; color: var(--fg-dim);
   font: inherit; font-size: 12.5px; line-height: 1.4; padding: 7px 10px;
   cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -48,7 +48,7 @@
 .dp-status {
   display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 0 18px;
   min-height: 44px; padding: 9px 14px;
-  border: 1px solid var(--line); border-radius: 10px;
+  border: 1px solid var(--line); border-radius: var(--radius);
   background: var(--layer-2);
 }
 .dp-seg { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
@@ -70,7 +70,7 @@
 
 /* 面板头里的小徽标（角色数 / 自动观察状态） */
 .dp-count-badge {
-  padding: 2px 9px; border-radius: 999px;
+  padding: 2px 9px; border-radius: var(--radius-full);
   border: 1px solid var(--line-str); background: var(--layer-3);
   color: var(--fg-dim); font-size: 11px; font-weight: 400; white-space: nowrap;
 }
@@ -92,7 +92,7 @@
 .dp-field select, .dp-field input:not([type=checkbox]):not([type=range]), .dp-field textarea {
   box-sizing: border-box; width: 100%; min-width: 0;
   background: var(--inset-bg); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 8px 12px; font: inherit; font-size: 12.5px;
+  border-radius: var(--radius-sm); padding: 8px 12px; font: inherit; font-size: 12.5px;
   box-shadow: var(--inset-edge);
 }
 .dp-field select { height: 34px; padding: 0 10px; }
@@ -108,7 +108,7 @@
   background: transparent; cursor: pointer; --dp-range-fill: 0%;
 }
 .dp-range-field input[type=range]::-webkit-slider-runnable-track {
-  height: 5px; border-radius: 99px;
+  height: 5px; border-radius: var(--radius-full);
   background: linear-gradient(to right, var(--accent) 0 var(--dp-range-fill), var(--line-str) var(--dp-range-fill) 100%);
 }
 .dp-range-field input[type=range]::-webkit-slider-thumb {
@@ -120,8 +120,8 @@
 }
 .dp-range-field input[type=range]:hover::-webkit-slider-thumb,
 .dp-range-field input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--accent-soft); }
-.dp-range-field input[type=range]::-moz-range-track { height: 5px; border-radius: 99px; background: var(--line-str); }
-.dp-range-field input[type=range]::-moz-range-progress { height: 5px; border-radius: 99px; background: var(--accent); }
+.dp-range-field input[type=range]::-moz-range-track { height: 5px; border-radius: var(--radius-full); background: var(--line-str); }
+.dp-range-field input[type=range]::-moz-range-progress { height: 5px; border-radius: var(--radius-full); background: var(--accent); }
 .dp-range-field input[type=range]::-moz-range-thumb { width: 11px; height: 11px; border: 2px solid var(--layer-2); border-radius: 50%; background: var(--accent); }
 
 /* 开关横行：页内所有"打勾才启用"的选项一律画成滑动开关（全站 input.sw，
@@ -138,7 +138,7 @@
 .dp-muted { color: var(--fg-mute); font-size: 12px; }
 .dp-inline-note {
   padding: 10px 12px; background: var(--field-bg);
-  border: 1px solid var(--line); border-radius: 8px;
+  border: 1px solid var(--line); border-radius: var(--radius);
   color: var(--fg-dim); font-size: 12px; line-height: 1.75;
   overflow-wrap: anywhere;
 }
@@ -148,7 +148,7 @@
   background: color-mix(in srgb, var(--orange) 10%, var(--field-bg));
 }
 .dp-alert {
-  padding: 10px 12px; border-radius: 8px;
+  padding: 10px 12px; border-radius: var(--radius);
   background: var(--accent-soft); color: var(--accent-hi);
   font-size: 12px; line-height: 1.7;
   overflow-wrap: anywhere;
@@ -160,7 +160,7 @@
 .dp-model-library { display: grid; grid-template-columns: repeat(auto-fill, minmax(218px, 1fr)); gap: 12px; }
 .dp-model-card {
   min-width: 0; overflow: hidden;
-  border: 1px solid var(--line); border-radius: 12px;
+  border: 1px solid var(--line); border-radius: var(--radius-lg);
   background: var(--field-bg);
   transition: border-color .18s;
 }
@@ -180,7 +180,7 @@
 }
 .dp-model-state {
   position: absolute; z-index: 2; top: 10px; left: 10px;
-  padding: 2px 9px; border-radius: 999px;
+  padding: 2px 9px; border-radius: var(--radius-full);
   background: var(--layer-3); border: 1px solid var(--line-str);
   color: var(--fg-dim); font-size: 10.5px; white-space: nowrap;
 }
@@ -209,24 +209,24 @@
 .dp-model-add {
   min-height: 268px;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
-  border: 1px dashed var(--line-str); border-radius: 12px;
+  border: 1px dashed var(--line-str); border-radius: var(--radius-lg);
   background: transparent; color: var(--fg-dim); font: inherit; cursor: pointer;
   transition: background .15s, border-color .15s, color .15s;
 }
-.dp-model-add > span { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--layer-2); color: var(--fg-dim); font-size: 22px; font-weight: 300; }
+.dp-model-add > span { display: grid; place-items: center; width: 40px; height: 40px; border-radius: var(--radius-lg); background: var(--layer-2); color: var(--fg-dim); font-size: 22px; font-weight: 300; }
 .dp-model-add strong { font-size: 12.5px; font-weight: 600; }
 .dp-model-add small { font-size: 11px; color: var(--fg-mute); }
 .dp-model-add:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-hi); }
 .dp-model-add:disabled { cursor: not-allowed; opacity: .45; }
 .dp-model-add:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.dp-library-empty { grid-column: 1 / -1; padding: 28px 14px; border: 1px dashed var(--line-str); border-radius: 12px; text-align: center; color: var(--fg-dim); font-size: 12px; line-height: 1.8; }
+.dp-library-empty { grid-column: 1 / -1; padding: 28px 14px; border: 1px dashed var(--line-str); border-radius: var(--radius-lg); text-align: center; color: var(--fg-dim); font-size: 12px; line-height: 1.8; }
 .dp-library-empty p { margin: 6px 0 14px; }
 
 /* 表情按钮一排（自动换行） */
 .dp-chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
 
 /* ── 动作表 ──────────────────────────────────────────────────────────── */
-.dp-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+.dp-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
 .dp-table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
 .dp-table th { color: var(--fg-mute); background: var(--field-bg); font-weight: 500; white-space: nowrap; }
 .dp-table th, .dp-table td { border-bottom: 1px solid var(--line); padding: 9px 12px; }
@@ -234,20 +234,20 @@
 .dp-table td:first-child { min-width: 140px; overflow-wrap: anywhere; }
 .dp-table input[type=number] {
   width: 72px; height: 28px; padding: 0 8px;
-  background: var(--inset-bg); border: 1px solid var(--border); border-radius: 6px;
+  background: var(--inset-bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
   color: var(--text); font: inherit; font-size: 12px;
 }
 .dp-empty { color: var(--fg-mute); text-align: center; padding: 20px 14px; font-size: 12px; line-height: 1.8; }
 
 /* ── 统计瓦片 / 回复 / 历史 / 场景 / 成就 ─────────────────────────────── */
 .dp-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.dp-stat { padding: 11px 13px; border-radius: 10px; background: var(--field-bg); border: 1px solid var(--line); min-width: 0; }
+.dp-stat { padding: 11px 13px; border-radius: var(--radius); background: var(--field-bg); border: 1px solid var(--line); min-width: 0; }
 .dp-stat span { font-size: 11px; color: var(--fg-mute); }
 .dp-stat strong { display: block; margin-top: 4px; font-size: 19px; font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
 
 .dp-reply {
   background: var(--field-bg); border: 1px solid var(--line); border-left: 3px solid var(--accent);
-  border-radius: 8px; padding: 12px 14px;
+  border-radius: var(--radius); padding: 12px 14px;
   font-size: 12.5px; line-height: 1.8; color: var(--fg);
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
@@ -260,16 +260,16 @@
 .dp-history-meta { color: var(--fg-mute); font-size: 11px; }
 .dp-history::-webkit-scrollbar { width: 5px; }
 .dp-history::-webkit-scrollbar-track { background: transparent; }
-.dp-history::-webkit-scrollbar-thumb { background: var(--line-str); border-radius: 99px; }
+.dp-history::-webkit-scrollbar-thumb { background: var(--line-str); border-radius: var(--radius-full); }
 
 .dp-scene { display: grid; gap: 10px; }
 .dp-scene-row { display: grid; grid-template-columns: 76px minmax(0, 1fr) 112px; align-items: center; gap: 12px; font-size: 12px; color: var(--fg); }
 .dp-scene-row > span:last-child { color: var(--fg-mute); font-size: 11.5px; text-align: right; white-space: nowrap; }
-.dp-progress { height: 6px; background: var(--line-str); border-radius: 99px; overflow: hidden; }
+.dp-progress { height: 6px; background: var(--line-str); border-radius: var(--radius-full); overflow: hidden; }
 .dp-progress > i { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
 
 .dp-achievements { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.dp-achievement { border: 1px solid var(--line); border-radius: 10px; padding: 13px 14px; background: var(--field-bg); min-width: 0; }
+.dp-achievement { border: 1px solid var(--line); border-radius: var(--radius); padding: 13px 14px; background: var(--field-bg); min-width: 0; }
 .dp-achievement.unlocked { border-color: color-mix(in srgb, var(--green) 40%, var(--line)); }
 .dp-achievement strong { font-size: 12.5px; color: var(--fg); }
 .dp-achievement p { min-height: 32px; margin: 6px 0 10px; color: var(--fg-dim); font-size: 11px; line-height: 1.6; }
@@ -279,7 +279,7 @@
 .dp-savebar {
   position: sticky; bottom: 0; z-index: 6;
   padding: 10px 14px;
-  border: 1px solid var(--line-str); border-radius: 10px;
+  border: 1px solid var(--line-str); border-radius: var(--radius);
   background: var(--layer-3);
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   box-shadow: var(--lift-lg);
