@@ -769,13 +769,25 @@ function renderUsageSkeleton() {
     </div>`;
 }
 
+// 页面内保留四个维度的数值表/口径说明选择，不随骨架屏或错误页销毁。
+const usageDetailsOpen = new Map();
+function usageDetailKey(detail) {
+  return `${detail.closest('[data-block]').dataset.block}:${detail.classList.contains('usage-details-sub') ? 'explanation' : 'table'}`;
+}
+function rememberUsageDetails(box) {
+  box.querySelectorAll('[data-block] .usage-details').forEach((detail) => {
+    usageDetailsOpen.set(usageDetailKey(detail), detail.open);
+  });
+}
+
 /** 建骨架（只建一次，轮询走 updateUsagePage 以免滚动位置丢失）。 */
 function renderUsagePage(stats, st, prices) {
   const box = $('#usage-page');
   if (!box) return;
 
-  // 指标切换/重绘时尊重手动收起，只在首次显示时默认展开。
-  const detailOpen = (block, sub = false) => box.querySelector(`[data-block="${block}"] ${sub ? '.usage-details-sub' : '.usage-details:not(.usage-details-sub)'}`)?.open === false ? '' : ' open';
+  // toggle 异步派发；重绘前再同步保存一次，覆盖收起后立即切换的情况。
+  rememberUsageDetails(box);
+  const detailOpen = (block, sub = false) => usageDetailsOpen.get(`${block}:${sub ? 'explanation' : 'table'}`) === false ? '' : ' open';
   box.innerHTML = `
     <div class="usage-wrap">
       <div class="usage-head">
@@ -972,6 +984,13 @@ function renderUsagePage(stats, st, prices) {
         </div>
       </div>
     </div>`;
+
+  box.querySelectorAll('[data-block] .usage-details').forEach((detail) => {
+    detail.addEventListener('toggle', () => {
+      // 旧节点的延迟事件不能覆盖新页面选择。
+      if (box.contains(detail)) usageDetailsOpen.set(usageDetailKey(detail), detail.open);
+    });
+  });
 
   // 「调用次数」卡片可点开明细（骨架重建后重新绑定，所以放在 renderUsagePage 里）
   const runsCard = $('#usage-page #runs-card');
@@ -1744,6 +1763,7 @@ async function loadUsageView({ force = false, hard = false } = {}) {
     state.usageStats = cached.stats;
     renderUsagePage(cached.stats, cached.st, cached.prices);
   } else {
+    rememberUsageDetails(box);
     box.innerHTML = renderUsageSkeleton();
   }
 
