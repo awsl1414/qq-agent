@@ -2073,7 +2073,7 @@ const MODULE_KINDS = {
     emptyHint: `还没加载到任何技能。<br />LLM 型技能放在项目的 <code>skills/&lt;id&gt;/</code> 目录，需要 <code>skill.json</code> + <code>index.js</code>。`,
     lead: `技能是 <b>LLM 型</b>扩展：它们注册工具进模型的 function 列表，<b>用不用、什么时候用由模型自己判断</b>。<br />
       所以技能不会"一定生效" —— 模型可能一直不调用它。需要"条件满足必跑"的功能，应该做成插件（见旁边的「插件」页签）。`,
-    // 折叠条上那一行摘要：完整说明收进 <details>，默认收起。
+    // 折叠条上那一行摘要：完整说明默认展开，便于对比技能与插件的用途。
     // 这一句必须把"这一页跟旁边那页的区别"讲完，那是两页唯一真正重要的分野。
     noteSummary: '技能是 LLM 型扩展 —— 用不用、什么时候用，由模型自己判断',
     setupTitle: '新增技能',
@@ -2757,12 +2757,8 @@ function renderModulePage(kind, target, opts) {
     <div class="module-split-left">
       <div class="usage-wrap">
         ${headHtml}
-        <!-- 说明折叠条（2026-10-09 r30）：原来这段是常显的 .hint 文字墙，
-             技能页 7 行 121px、插件页 5 行 87px（其中 3 行两页逐字相同），
-             顶部吃掉了 10~14% 的视口。现在收进原生 <details>，默认收起，
-             顶部只留一行摘要，信息一字不丢，两页骨架也因此长得一样。
-             用原生 details 而不是自绘折叠：无 JS 参与，键盘/读屏天然可用。 -->
-        <details class="module-note">
+        <!-- 用途与启停影响是配置所需信息，默认展开；重绘保留手动收起。 -->
+        <details class="module-note"${box?.querySelector('.module-note')?.open === false ? '' : ' open'}>
           <summary>
             <svg class="mn-chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.4 2.4 8 6l-3.6 3.6" /></svg>
             <span class="mn-t">${meta.noteSummary}</span>
@@ -3129,8 +3125,8 @@ function buildToolCategoryHTML(cat) {
   // 分类总开关：关 = 整类工具全部停用（后端本来就按 categories[cat] 拦，
   // 这里补的是视觉：子开关跟着显示成关、且不可拨，而不是"开着却没生效"）。
   const catEnabled = toolsCfg.categories?.[cat] !== false;
-  const expandedCategories = state.expandedToolCategories || new Set(['messaging']);
-  const isExpanded = expandedCategories.has(cat);
+  // 只记录手动收起的分类，新注册的工具分类也默认可见。
+  const isExpanded = !state.collapsedToolCategories?.has(cat);
 
   const toolCards = isExpanded ? catTools.map((t) => {
     const enabled = toolsCfg.overrides?.[t.id] ?? t.defaultEnabled ?? true;
@@ -3290,8 +3286,8 @@ function renderMediaSection(c) {
     <!-- 安装指引（按平台）：内容依赖 /api/ffmpeg/status，首帧只能是空占位。
          paint() 拿到 installGuide 后才填内容并取消 hidden；Windows 上
          installGuide 为 null，这块永远不出现（Windows 的安装路径就是下面的下载按钮）。
-         已装好时整体折叠成一行，状态条刚说完"能用"，紧接着教怎么装是自相矛盾的。 -->
-    <details id="ffmpeg-install-guide-wrap" class="fold-sub" hidden>
+         安装指引有内容时默认展开，便于用户了解安装与切换方式。 -->
+    <details id="ffmpeg-install-guide-wrap" class="fold-sub" open hidden>
       <summary id="ffmpeg-install-guide-summary" class="hint" style="cursor:pointer;margin-bottom:10px">安装方式</summary>
       <div id="ffmpeg-install-guide" style="margin-bottom:14px"></div>
     </details>
@@ -3325,8 +3321,8 @@ function renderMediaSection(c) {
       <div class="hint" id="cfg-ffmpeg-test-hint"></div>
     </div>
 
-    <button class="btn btn-small" type="button" id="ffmpeg-adv-toggle" aria-expanded="false" aria-controls="ffmpeg-adv">高级：下载与安装设置</button>
-    <div id="ffmpeg-adv" class="fold-sub folded"><div class="fold-sub-inner">
+    <button class="btn btn-small" type="button" id="ffmpeg-adv-toggle" aria-expanded="true" aria-controls="ffmpeg-adv">收起下载与安装设置</button>
+    <div id="ffmpeg-adv" class="fold-sub"><div class="fold-sub-inner">
       <h3 class="ffmpeg-dl-only">下载</h3>
       <div class="field">
         <button class="btn btn-small" type="button" id="ffmpeg-download-btn-adv" disabled>下载并安装</button>

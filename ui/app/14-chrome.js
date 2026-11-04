@@ -401,7 +401,7 @@
       // 当前二级页要能被读屏识别。视觉靠 .on / .sn-bar，
       // 但对屏幕阅读器来说「一排长得一样的按钮」等于没有导航状态。
       (active ? ' aria-current="page"' : '') +
-      ' role="button" tabindex="0"' + subTitle +
+      ' role="button" tabindex="0"' + subTitle + '>' +
       '<span class="sn-bar"></span>' +
       '<svg class="sn-logo" viewBox="0 0 24 24" aria-hidden="true"><path d="' + (SUB_ICON[sub] || '') +
       '" stroke-linejoin="round" stroke-linecap="round"/></svg>' +

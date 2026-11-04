@@ -468,7 +468,7 @@ function openQuoteConfirmModal() {
         来自「${esc(chatName)}」，公开展示在 kondius.cn/qq-agent/holyshits。</div>
       <div class="field"><label>昵称（收录人）</label>
         <input type="text" id="q-nickname" maxlength="32" placeholder="怎么称呼你" value="${esc(lastNickname)}" /></div>
-      <div style="max-height:320px;overflow-y:auto;border:none;border-radius:10px;padding:10px;font-size:12.5px;box-shadow:var(--press-sm)">
+      <div style="max-height:320px;overflow-y:auto;border:none;border-radius:var(--radius);padding:10px;font-size:12.5px;box-shadow:var(--press-sm)">
         ${picked.map((m) => `<div style="margin-bottom:8px">
           <span class="muted">${esc(m.self ? '🤖 ' : '')}${esc(m.senderName || '?')}：</span>${esc(String(m.text || '').slice(0, 200))}
         </div>`).join('')}

@@ -701,8 +701,8 @@ function bindSettingsEvents(c) {
           if (t.id === 'send_to') state.config.tools.crossChatSend = true;
           else state.config.tools.overrides[t.id] = true;
         });
-        state.expandedToolCategories = state.expandedToolCategories || new Set(['messaging']);
-        state.expandedToolCategories.add(cat);
+        state.collapsedToolCategories ??= new Set();
+        state.collapsedToolCategories.delete(cat);
       }
       // 只重绘这一个分类块（子开关全亮/全灰、展开态），其余 DOM 原地不动
       refreshToolCategory(cat);
@@ -713,9 +713,9 @@ function bindSettingsEvents(c) {
     const header = block.querySelector('.tool-category-header');
     if (header) header.addEventListener('click', (e) => {
       if (e.target.closest('.tool-category-toggle')) return;
-      state.expandedToolCategories = state.expandedToolCategories || new Set(['messaging']);
-      if (state.expandedToolCategories.has(cat)) state.expandedToolCategories.delete(cat);
-      else state.expandedToolCategories.add(cat);
+      state.collapsedToolCategories ??= new Set();
+      if (state.collapsedToolCategories.has(cat)) state.collapsedToolCategories.delete(cat);
+      else state.collapsedToolCategories.add(cat);
       refreshToolCategory(cat);
     });
   }
@@ -1838,7 +1838,7 @@ function bindSettingsEvents(c) {
       if (g.primary) parts.push(row(g.primary.label, g.primary.cmd));
       if (g.fallback) {
         parts.push(`
-          <details style="margin-top:8px">
+          <details open style="margin-top:var(--space-sm)">
             <summary class="hint" style="cursor:pointer">${esc(g.fallback.label || '备用命令')}</summary>
             ${row('', g.fallback.cmd)}
           </details>`);
@@ -1940,7 +1940,7 @@ function bindSettingsEvents(c) {
           const unhealthyNow = s.ok && s.health && s.health.ok === false;
           const installed = s.ok && !unhealthyNow;
           if (html && !guideWrap.dataset.userToggled) {
-            guideWrap.open = !installed;
+            guideWrap.open = true;
           }
           if (guideSummary) {
             guideSummary.textContent = installed ? '已安装，查看安装方式' : '安装方式';
@@ -2123,8 +2123,7 @@ function bindSettingsEvents(c) {
     ffmpegDownloadBtn.addEventListener('click', () => startDownload(ffmpegDownloadBtn));
     $('#ffmpeg-download-btn-adv')?.addEventListener('click', (e) => startDownload(e.currentTarget));
 
-    // 「高级：下载与安装设置」折叠。下载源 / Token / 删除这类一年动一次的东西
-    // 平时不该占满一屏；已装好的用户尤其如此。
+    // 下载源和安装设置默认展开，仍允许用户手动收起。
     const advToggle = $('#ffmpeg-adv-toggle');
     const advBox = $('#ffmpeg-adv');
     if (advToggle && advBox) {
@@ -2135,8 +2134,7 @@ function bindSettingsEvents(c) {
       });
     }
 
-    // 安装方式的折叠：用户手动开合过就记下来，paint() 不再按"已装/未装"
-    // 自动覆盖他的选择。不记的话每次状态轮询都会把他刚点开的区块折回去。
+    // 安装方式默认展开；用户手动开合后，状态轮询不再覆盖其选择。
     const guideWrapEl = $('#ffmpeg-install-guide-wrap');
     if (guideWrapEl) {
       guideWrapEl.addEventListener('toggle', () => {
@@ -2290,10 +2288,12 @@ async function bindBackupSettings() {
     let exportCategories = status.categories.filter((item) => item.defaultOn !== false).map((item) => item.key);
     const categoryOptions = (selected, attr) => '<div class="backup-categories">' + status.categories.map((item) => '<label class="checkbox-row"><input class="sw" type="checkbox" ' + attr + '="' + esc(item.key) + '" ' + (selected.includes(item.key) ? 'checked' : '') + '><span>' + esc(item.label) + ' · <span data-category-size="' + esc(item.key) + '">' + esc(categorySize(item)) + '</span><small class="muted">' + esc(item.desc) + '</small></span></label>').join('') + '</div>';
     const draw = () => {
+      // 添加/删除目标会重绘面板，保留用户手动收起的导出选项。
+      const exportOptionsOpen = panel.querySelector('#backup-export-options')?.open ?? true;
       panel.innerHTML = '<div class="backup-actions"><button type="button" class="btn btn-small" id="backup-restore-link">前往恢复 / 回滚</button></div><ul class="hint"><li>默认排除配置和扩展数据中的密钥；包含密钥时整包加密。</li><li>目标凭据加密存储；留空保留原值，修改后请保存。</li><li>恢复时先刷新备份列表，再选择「预览与恢复」；恢复后可回滚。</li></ul><div class="set-hint" id="backup-status" role="status"></div>' +
         '<fieldset id="backup-global"><legend>备份设置</legend><div class="backup-actions">' + toggle('enabled', '定时备份', config.enabled) + toggle('includeSecrets', '包含密钥', config.includeSecrets) + '</div><div class="field-row">' + field('intervalHours', '间隔（小时）', config.intervalHours, 'number') + field('retention', '保留份数', config.retention, 'number') + '</div></fieldset>' +
         '<div class="backup-actions"><button type="button" class="btn" id="backup-save">保存备份设置</button><button type="button" class="btn" id="backup-run">立即备份</button><button type="button" class="btn" id="backup-export">导出到本地</button><button type="button" class="btn" id="backup-list">刷新备份列表</button></div><p id="backup-feedback" role="status" aria-atomic="true"></p>' +
-        '<details class="collapsible" id="backup-export-options"><summary>本地导出内容</summary><p class="hint">无需配置目标，勾选什么就导出什么；导出不上传，也不计入备份历史。恢复时可以只选其中一部分。</p>' + categoryOptions(exportCategories, 'data-export-category') + '</details>' +
+        '<details class="collapsible" id="backup-export-options"' + (exportOptionsOpen ? ' open' : '') + '><summary>本地导出内容</summary><p class="hint">无需配置目标，勾选什么就导出什么；导出不上传，也不计入备份历史。恢复时可以只选其中一部分。</p>' + categoryOptions(exportCategories, 'data-export-category') + '</details>' +
         '<div id="backup-targets">' + (config.targets || []).map((target) => {
           const fields = field('name', '名称', target.name) + toggle('enabled', '启用目标', target.enabled);
           const specific = target.type === 'local' ? '<div class="backup-directory">' + field('dir', '目录路径', target.dir) + (typeof window.qqaDesktop?.pickDirectory === 'function' ? '<button type="button" class="btn btn-small" data-browse>浏览…</button>' : '') + '</div>' : target.type === 'webdav' ?

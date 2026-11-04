@@ -10,7 +10,7 @@
  * 这一页只剩三件事：
  *   ① 现在连上没有（状态）；
  *   ② 没连上该装什么、怎么配（协议端指引，两张卡）；
- *   ③ 端点地址 / 令牌在哪儿改（端点设置，默认折叠）。
+ *   ③ 端点地址 / 令牌在哪儿改（端点设置，默认展开）。
  *
  * 日志只留「应用日志」：协议端的日志归协议端自己（SnowLuma 控制台 / NapCat
  * 控制台），我们拿不到，也不该假装能拿到。
@@ -24,12 +24,10 @@
    ⚠️ 端点设置里可能有用户正在输入的地址，所以 quiet 刷新只改状态文字、
    绝不重绘整页（见 updateConnectionLive），否则输入框打到一半会被重置。 */
 let connLogsOpen = false;
-let connAdvOpen = false;
-/* connSetupOpen，「装一个协议端」折叠区的手动开合态。null = 用户还没动过，
-   按连接状态自动定（没连上默认展开，连上默认收起）；
-   connLogsCache，最近一次拿到的日志。手动「重新检测」只重读 /api/status、
-   不重新拉日志，但 updateConnectionLive 需要日志参数来维护日志面板。 */
-let connSetupOpen = null;
+let connAdvOpen = true;
+/* 配置和安装指引默认展开，用户手动开合后保留选择；日志仍默认收起。
+   connLogsCache 保存最近日志，重新检测只更新状态。 */
+let connSetupOpen = true;
 let connLogsCache = { logs: [], level: 'info' };
 
 /** 把 /api/status 压成一个视图对象，渲染与局部更新共用同一份判断。 */
@@ -103,9 +101,7 @@ function renderConnectionPage(v, appLogsData) {
     ? '<span style="color:var(--green)">端口在监听</span>'
     : '<span class="sl-adv-dim">端口未监听</span>';
   const diagText = connected ? '连接正常，能收发群消息' : (diag || '还没连上 —— 先确认协议端在运行、机器人 QQ 已登录');
-  // 安装说明：没连上时默认展开（用户多半正需要它），连上后默认收起；
-  // 用户手动开合过就按他的来（connSetupOpen）。
-  const setupOpen = connSetupOpen === null ? !connected : connSetupOpen;
+  // 连接状态变化不覆盖用户对安装指引的开合选择。
 
   return `
       <div class="snowluma-page-card">
@@ -149,7 +145,7 @@ function renderConnectionPage(v, appLogsData) {
           <div class="conn-check-note" id="conn-check-note"></div>
         </div>
 
-        <details class="conn-setup" id="conn-setup"${setupOpen ? ' open' : ''}>
+        <details class="conn-setup" id="conn-setup"${connSetupOpen ? ' open' : ''}>
           <summary><span>装一个协议端</span><span class="conn-setup-sub">二选一，装好就不用再管这一节</span></summary>
           <div class="conn-setup-body">
             <div class="sl-node-help">QQ Agent 不再自带、也不启动协议端 —— 这是 SnowLuma 许可协议的要求。你装哪个都行，两者默认端口一样，装完直接就能连上。</div>

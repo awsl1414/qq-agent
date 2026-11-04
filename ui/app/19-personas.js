@@ -282,8 +282,8 @@ function renderPersonasPage(opts) {
           : '当前还没有应用任何人设，用的是内置默认。'}
       </div>
       <!-- 说明折叠条：与技能 / 插件页同一个组件（原生 <details>，无 JS、键盘与读屏天然可用）。
-           收起来只占一行，展开才铺开解释，顶部不再吃视口。 -->
-      <details class="module-note">
+           默认展示人设作用与能力边界，重绘时保留手动收起。 -->
+      <details class="module-note"${box.querySelector('.module-note')?.open === false ? '' : ' open'}>
         <summary>
           <svg class="mn-chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.4 2.4 8 6l-3.6 3.6" /></svg>
           <span class="mn-t">人设是纯文本 —— 换的是它怎么说话，不改能力</span>
