@@ -18,6 +18,14 @@ directories:
   output: dist
   buildResources: assets
 
+# 只保留应用真正会用的两个语言包。Electron 默认带 55 个，占约 49MB；
+# 控制台界面全中文，Chromium 自带的本地化文案（右键菜单、拼写检查等）
+# 只有 zh-CN 与 en-US 会用到。删空整个 locales 目录会让应用启动即崩
+# （electron#52307），所以必须保留这两个。
+electronLanguages:
+  - zh-CN
+  - en-US
+
 # 见文件头：硬约束，不要改成 true
 asar: false
 

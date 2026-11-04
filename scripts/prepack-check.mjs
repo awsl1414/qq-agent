@@ -47,8 +47,62 @@ const PLATFORM_ICONS = {
 };
 
 /**
- * 存在时必须在 files 排除项里的目录。
- * 前三个是「本机才有、且体积大或含隐私」的目录；命中说明配置漏了。
+ * 允许「既不打包也不排除」的顶层目录，以及为什么可以不处理。
+ *
+ * 自动推导的逻辑：扫仓库根的每个顶层条目，凡是既不在 files 白名单里、
+ * 也没被 files 的 `!` 规则排除的，都必须在这里登记原因，否则构建失败。
+ * 这样新增目录时不用记得同时改两份清单 —— 漏了会被拦下并告诉你该做什么。
+ *
+ * 只登记「确实不需要进包、也不必写排除规则」的：
+ *   - 白名单是正向列举，没被列出的目录本来就不会进包；
+ *   - 排除规则是防御，防的是将来有人把白名单放宽成 `**\/*`。
+ * 体积大或含隐私的目录不走这里，它们必须真的写进 files 的排除项。
+ */
+const IGNORED_TOP_LEVEL = new Map([
+  ['.git', '版本库，electron-builder 不会打包'],
+  ['.github', 'CI 配置，不进包'],
+  ['.claude', '开发规则与设置，不进包'],
+  ['.vscode', '编辑器配置，不进包'],
+  ['.idea', '编辑器配置，不进包'],
+  ['.workbuddy', '上游开发工具目录，本机不存在时也无妨'],
+  ['node_modules', '依赖由收集器按 dependencies 自动收集，白名单不列它'],
+  ['tests', '测试脚本，不进包'],
+  ['scripts', '构建脚本，不进包'],
+  ['dev-sandbox', '开发沙箱，已被 files 排除'],
+  ['logs', '运行日志，已被 files 排除'],
+  ['dist', '构建产物，已被 files 排除'],
+  ['runtime', '旧版随包运行时（含便携 QQ），已被 files 排除'],
+  ['graphify-out', '知识图谱缓存，已被 files 排除'],
+  ['data', '用户数据，已被 files 排除'],
+  ['data-2', '多实例用户数据，已被 files 排除']
+]);
+
+/**
+ * 仓库根的散落文件：白名单不列、也不必写排除规则的那些。
+ *
+ * 与目录分开：文件没有「将来白名单放宽会误打包」的风险（`**\/*` 才需要
+ * 逐个排除），所以这里只做「确认它是有意不打包的」这一件事。
+ * 按名字登记而非扩展名：`VERSION` 要进包、`CLAUDE.md` 不进，两者都是
+ * 根目录的普通文件，靠扩展名区分不了。
+ */
+const IGNORED_ROOT_FILES = new Map([
+  ['.gitattributes', 'Git 换行规则，不进包'],
+  ['.gitignore', 'Git 忽略规则，不进包'],
+  ['.gituntracked', 'worktree 同步配置，不进包'],
+  ['.npmrc', 'pnpm 配置，不进包'],
+  ['.style-audit-report.md', '一次性审计报告，不进包'],
+  ['AGENTS.md', '开发规则，不进包'],
+  ['CLAUDE.md', '开发规则，不进包'],
+  ['electron-builder.yml', '构建配置，不进包'],
+  ['pnpm-lock.yaml', '依赖锁文件，不进包'],
+  ['pnpm-workspace.yaml', '工作区配置，不进包']
+]);
+
+/**
+ * 体积或隐私上「绝不能进包」的顶层目录。
+ *
+ * 与 IGNORED_TOP_LEVEL 分开：这些即使被列进白名单也必须同时出现在
+ * files 的 `!` 规则里，作为白名单被放宽时的最后一道防线。
  */
 const MUST_EXCLUDE_IF_PRESENT = [
   ['data', '用户数据（含 API Key、群聊记录）'],
@@ -176,7 +230,52 @@ function checkBuilderConfig() {
     }
   }
 
+  checkTopLevelCoverage(files, excludePatterns);
+
   return config;
+}
+
+/**
+ * 扫仓库根的每个顶层条目，确认它「要么会被打包、要么被排除、要么已登记不需要」。
+ *
+ * 这个检查替代了「记得同时改两份清单」的人工约定：新增目录时若两边都没提，
+ * 构建会失败并直接告诉你三种处理方式。
+ *
+ * 判断口径与 electron-builder 一致：白名单是正向列举，没列出的不会进包；
+ * 这里要抓的是「没被任何规则覆盖、也没登记」的情况 —— 那种目录要么被误
+ * 打包（如果将来白名单放宽），要么让人不确定它到底进不进包。
+ */
+function checkTopLevelCoverage(files, excludePatterns) {
+  const entries = fs.readdirSync(REPO_ROOT, { withFileTypes: true });
+  const uncovered = [];
+  for (const entry of entries) {
+    const name = entry.name;
+    // 白名单里出现过这个名字（含 glob 前缀）就算覆盖
+    const inWhitelist = files.some((pattern) => {
+      if (pattern.startsWith('!')) return false;
+      const first = pattern.split('/')[0];
+      return first === name || first === '**' || globToRegExp(first).test(name);
+    });
+    if (inWhitelist) continue;
+    if (isDirExcluded(name, excludePatterns)) continue;
+    const registry = entry.isDirectory() ? IGNORED_TOP_LEVEL : IGNORED_ROOT_FILES;
+    if (registry.has(name)) continue;
+    uncovered.push({ name, isDir: entry.isDirectory() });
+  }
+  if (!uncovered.length) {
+    pass(`仓库根 ${entries.length} 个顶层条目均已覆盖（打包 / 排除 / 已登记）`);
+    return;
+  }
+  for (const { name, isDir } of uncovered) {
+    const registry = isDir ? 'IGNORED_TOP_LEVEL' : 'IGNORED_ROOT_FILES';
+    const action = isDir
+      ? '① 要打包 → 加进 electron-builder.yml 的 files 白名单；② 不要打包但体积大或含隐私 → 加进 files 的 `!` 排除项；'
+      : '① 要打包 → 加进 files 白名单；';
+    fail(
+      `仓库根的 ${name} 既不在 files 白名单、也没被排除规则覆盖、也没登记在 ${registry}。` +
+        ` 处理方式：${action}③ 确实不需要进包 → 在 scripts/prepack-check.mjs 的 ${registry} 里登记原因。`
+    );
+  }
 }
 
 function checkRequiredFiles() {
@@ -223,13 +322,81 @@ function checkLockfiles() {
   }
 }
 
+/**
+ * 清掉 dist 里上一次构建留下的产物。
+ *
+ * 每次构建产出约 287MB（安装包 + 免安装包），不清理时几个版本就会堆到
+ * 1.5GB。只删本目录下的 *.exe / *.zip / *.blockmap 与 win-unpacked，
+ * 不碰 dist 里其它东西（比如手动放进去的测试包）。
+ *
+ * 默认只在真正构建时执行；`--check-only` 只校验不动文件。
+ */
+function cleanPreviousArtifacts({ checkOnly }) {
+  const distDir = path.join(REPO_ROOT, 'dist');
+  if (!fs.existsSync(distDir)) {
+    pass('dist/ 不存在，无需清理');
+    return;
+  }
+  const stale = [];
+  for (const entry of fs.readdirSync(distDir, { withFileTypes: true })) {
+    const name = entry.name;
+    if (entry.isDirectory()) {
+      if (name === 'win-unpacked' || name === 'mac' || name === 'linux-unpacked') stale.push(name);
+      continue;
+    }
+    if (/\.(exe|zip|blockmap|dmg|AppImage|deb)$/i.test(name)) stale.push(name);
+  }
+  if (!stale.length) {
+    pass('dist/ 没有上次构建的产物');
+    return;
+  }
+  if (checkOnly) {
+    pass(`dist/ 有 ${stale.length} 项上次构建的产物（构建时会清理）`);
+    return;
+  }
+  let freed = 0;
+  for (const name of stale) {
+    const target = path.join(distDir, name);
+    try {
+      freed += dirSize(target);
+      fs.rmSync(target, { recursive: true, force: true });
+    } catch (error) {
+      fail(`清理 dist/${name} 失败：${error?.message ?? error}`);
+      return;
+    }
+  }
+  pass(`已清理 dist/ 中 ${stale.length} 项上次构建的产物（约 ${(freed / 1048576).toFixed(0)}MB）`);
+}
+
+/** 递归统计大小，只用于给出「清理了多少」的提示。 */
+function dirSize(target) {
+  let total = 0;
+  const walk = (p) => {
+    let st;
+    try { st = fs.lstatSync(p); } catch { return; }
+    if (st.isDirectory()) {
+      let entries;
+      try { entries = fs.readdirSync(p); } catch { return; }
+      for (const name of entries) walk(path.join(p, name));
+    } else {
+      total += st.size;
+    }
+  };
+  walk(target);
+  return total;
+}
+
 function main() {
-  const platform = detectPlatform(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const platform = detectPlatform(argv);
+  // 只校验不动文件：用于 CI 或本地想先看一眼配置对不对。
+  const checkOnly = argv.includes('--check-only');
   console.log(`== 构建前校验（目标平台：${platform}）==`);
   checkBuilderConfig();
   checkRequiredFiles();
   checkPlatformIcons(platform);
   checkLockfiles();
+  cleanPreviousArtifacts({ checkOnly });
 
   for (const line of passes) console.log(`  [ok]   ${line}`);
   for (const line of failures) console.log(`  [fail] ${line}`);
