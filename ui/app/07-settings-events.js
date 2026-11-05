@@ -1197,8 +1197,10 @@ function bindSettingsEvents(c) {
     return '';
   }
   // 备选模型行：模型 ID + 可选提供商（留空 = 沿用主模型的提供商）
+  // ⚠️ 空配置就是 0 行，不补一个空行占位：补的话「没有备用模型」这个状态永远
+  //    显示不出来，而且用户删空后刷新页面又冒出一行、再删又冒出来，看起来像删不掉。
+  //    加行由下面的「＋ 添加备用模型」按钮负责。
   let fallbackRows = (Array.isArray(c.api?.fallbackModels) ? c.api.fallbackModels : []).map((f) => ({ model: f.model || '', provider: f.provider || '' }));
-  if (fallbackRows.length === 0) fallbackRows = [{ model: '', provider: '' }];
   // 备选模型点选：readonly 输入框 → 弹模型目录选择器，选完写回行数据并触发表单保存。
   // 不让手输，杜绝"打错模型 id 等运行时才报错"。
   function openFallbackModelPicker(rowIdx) {
@@ -1261,16 +1263,17 @@ function bindSettingsEvents(c) {
       const p = (state.providers || []).find((x) => x.id === pid);
       return p ? providerLabelOf(p) : '';
     };
-    box.innerHTML = `
+    // 空态不渲染表格：.model-rows-table td 没设字号，会继承页面正文的 14px，
+    // 比旁边的 .hint 大一截，看起来像标题而不是说明；空表只剩一个表头也没有意义。
+    box.innerHTML = fallbackRows.length ? `
       <table class="model-rows-table">
         <tr><th style="width:88%">备选模型（点击选择；提供商随模型自动确定）</th><th></th></tr>
-        ${fallbackRows.length ? fallbackRows.map((row, i) => `
+        ${fallbackRows.map((row, i) => `
           <tr>
             <td><input type="text" class="fb-model-pick" data-i="${i}" readonly placeholder="点击选择模型" data-model="${esc(row.model || '')}" data-provider="${esc(row.provider || '')}" value="${esc(row.model ? (provNameOf(row.provider) ? `${provNameOf(row.provider)} · ${row.model}` : row.model) : '')}" style="cursor:pointer" /></td>
             <td style="width:56px;text-align:right"><button class="btn btn-small btn-danger fb-del" data-i="${i}">删除</button></td>
-          </tr>`).join('') : `
-          <tr><td colspan="2" class="muted" style="padding:8px 0">还没有备用模型：主模型重试后仍失败时不会自动换。点下面「＋ 添加备用模型」加一个。</td></tr>`}
-      </table>`;
+          </tr>`).join('')}
+      </table>` : '<div class="hint" style="margin-bottom:6px">还没有备用模型：主模型重试后仍失败时不会自动换。点下面「＋ 添加备用模型」加一个。</div>';
     box.querySelectorAll('.fb-model-pick').forEach((el) => {
       el.addEventListener('click', () => { openFallbackModelPicker(Number(el.dataset.i)); });
     });
