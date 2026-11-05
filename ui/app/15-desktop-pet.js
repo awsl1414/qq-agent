@@ -301,10 +301,21 @@ function dpUpdateDirty() {
   }
 }
 
+/** 填 <select> 的选项与选中值，并让自绘下拉（.sel）的按钮文案跟上。
+ *
+ * ⚠️ 显示同步不能靠派发 change：重建 options 后原生 select 自己会选中第一项，
+ *    「要选的值恰好是第一项」时没有任何值变化，change 无从触发；而 .sel-head 的
+ *    文案只在增强那一刻和 change 上更新 —— 首屏增强时选项还是空的，于是按钮停在
+ *    空串，用户看到的是一个连占位文字都没有的空白框（同 20-logs.js logsSetSelect）。
+ *    所以填完显式走 enhanceOneSelect 暴露的同步点，渲染细节走渲染通道。
+ */
 function dpFillOptions(target, items, selected, fallback) {
   if (!target) return;
   target.innerHTML = (fallback ? `<option value="">${dpEsc(fallback)}</option>` : '') + items.map((item) => `<option value="${dpEsc(item.value)}"${String(item.value) === String(selected ?? '') ? ' selected' : ''}${item.disabled ? ' disabled' : ''}>${dpEsc(item.label)}</option>`).join('');
+  // 重建后必须重新落值：innerHTML 会把 selectedIndex 归零，即使 value 没变，
+  // 选中的也可能是别的项。
   if (selected != null) target.value = String(selected);
+  target._selSyncHead?.();
 }
 
 function dpFillAiModelOptions(providerId, selectedModel) {
