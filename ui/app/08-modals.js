@@ -2610,9 +2610,9 @@ async function saveConfig({ quiet = false } = {}) {
     };
   }
 
-  // 'app'（界面与应用）与 'desktop'/'onebot'（兼容别名）共享同一批字段读取；
+  // 'app'（界面与应用）与 'desktop'（兼容别名）共享同一批字段读取；
   // val()/chk() 均为 null 安全，当前页不存在的输入框回退到 c 里的原值，不会误写。
-  if (sec === 'desktop' || sec === 'onebot' || sec === 'app') {
+  if (sec === 'desktop' || sec === 'app') {
     patch.server = {
       ...c.server,
       autoStart: chk('#cfg-autostart', !!c.server?.autoStart),
@@ -2650,21 +2650,6 @@ async function saveConfig({ quiet = false } = {}) {
       transparent: chk('#cfg-widget-transparent', c.widget?.transparent !== false),
       size: ['s', 'm', 'l'].includes(widgetSize) ? widgetSize : 'm',
       refreshMs: num('#cfg-widget-refresh', c.widget?.refreshMs ?? 2500, { min: 1000, max: 60000 }) || 2500
-    };
-  }
-
-  if (sec === 'desktop' || sec === 'onebot' || sec === 'app') {
-    // ⚠️ 令牌是脱敏回传的（值是 ******，真实值只在后端）：
-    //    留空 / ****** = 保持原值；只有输入了新明文才更新。
-    //    直接把输入框的值写进 patch 的话，"保存一次别的设置，令牌就被清空"。
-    const enteredWsToken = val('#cfg-obtoken', '').trim();
-    const enteredHttpToken = val('#cfg-obhttptoken', '').trim();
-    // protocol 只剩端点与令牌：协议端由用户自己装、自己启动。
-    patch.protocol = {
-      wsUrl: val('#cfg-wsurl', c.protocol?.wsUrl || '').trim(),
-      httpUrl: val('#cfg-httpurl', c.protocol?.httpUrl || '').trim(),
-      ...(enteredWsToken && enteredWsToken !== '******' ? { accessToken: enteredWsToken } : {}),
-      ...(enteredHttpToken && enteredHttpToken !== '******' ? { httpAccessToken: enteredHttpToken } : {})
     };
   }
 
@@ -2728,24 +2713,8 @@ async function saveConfig({ quiet = false } = {}) {
     ...(useKeepalive ? { keepalive: true } : {})
   });
   state.config = data.config;
-  // 连接分区的地址 / 令牌改完要立刻生效：OneBotClient 构造时快照了端点，
-  // 只落配置不重连等于"改了没用"。这里补一次 apply（与「连接」页的「保存并重连」
-  // 同一条后端接口）；失败不影响保存本身，连接页的状态会如实反映。
-  if (sec === 'onebot' && patch.protocol) {
-    try {
-      const wsTok = val('#cfg-obtoken', '').trim();
-      const httpTok = val('#cfg-obhttptoken', '').trim();
-      await api('/api/protocol/apply', {
-        method: 'POST',
-        body: JSON.stringify({
-          wsUrl: patch.protocol.wsUrl,
-          httpUrl: patch.protocol.httpUrl,
-          accessToken: wsTok,
-          httpAccessToken: httpTok
-        })
-      });
-    } catch { /* 保存已成功；重连失败由连接页兜住 */ }
-  }
+  // 端点地址 / 令牌只在「工具 → 连接」页维护：那一页保存后直接调
+  // /api/protocol/apply 并立刻重连，设置页表单不再写这两个字段。
   if (!quiet) setHintText('#model-label', `模型：${state.config.api.model || '未设置'}`);
   return data;
 }
