@@ -11,7 +11,7 @@ import path from 'node:path';
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'qqa-content-rating-'));
 process.env.QQ_AGENT_DATA_DIR = temp;
-const { CONTENT_RATINGS, DECLARED_RATINGS, ratingRule, currentContentRating, exceedsPolicy } =
+const { CONTENT_RATINGS, DECLARED_RATINGS, ratingRule, currentContentRating, exceedsPolicy, ratingRejection } =
   await import('../src/content-rating.js');
 const { migrateContentRating, loadConfig, updateConfig, CONFIG_FILE } = await import('../src/config.js');
 const { applyContentPolicy, illustRating } = await import('../skills/random-image/filters.js');
@@ -59,6 +59,14 @@ test('exceedsPolicy：声明 × 策略矩阵', () => {
   assert.equal(exceedsPolicy('r18', 'r18'), true);
   assert.equal(exceedsPolicy('r18', 'strict'), true);
   assert.equal(exceedsPolicy('r18', 'r0'), true);
+});
+
+test('ratingRejection：未知声明 / 超策略返回文案，放行返回 null', () => {
+  assert.equal(ratingRejection('safe', 'r0'), null);
+  assert.equal(ratingRejection('r15', 'all'), null);
+  assert.equal(ratingRejection('r18', 'all'), null);   // 合法值先校验，再判超限
+  assert.match(ratingRejection('r15', 'strict'), /内容分级[\s\S]*设置 → 聊天与权限 → 内容分级/);
+  assert.match(ratingRejection('R-18', 'all'), /未知的内容分级声明/);
 });
 
 // ── 四档行为矩阵（候选过滤 + 漏斗数字）────────────────────────────────
@@ -140,6 +148,14 @@ test('迁移：旧键被删除，代码里不再有第二处读取点', () => {
   assert.equal(skill.booru.candidates, 20, '其它配置必须原样保留');
 });
 
+test('迁移：旧键删空后不留空 booru 壳', () => {
+  const out = migrateContentRating(withSkill({ booru: { onlyR0: true } }));
+  assert.equal('booru' in out.skills['random-image'], false, '空对象没有语义，留着只是配置噪音');
+  // 还有其它 booru 配置时必须保留
+  const kept = migrateContentRating(withSkill({ booru: { onlyR0: true, candidates: 20 } }));
+  assert.deepEqual(kept.skills['random-image'].booru, { candidates: 20 });
+});
+
 test('迁移：幂等（迁移结果再迁一次不变）', () => {
   const once = migrateContentRating(withSkill({ safeMode: false, booru: { onlyR0: true } }));
   const twice = migrateContentRating(once);
@@ -172,7 +188,10 @@ function loadConfigWith(parsed) {
 function makeSender(t, sentCalls) {
   // sendImage 内含真人化停顿，测试里让 setTimeout 立即回调
   t.mock.method(globalThis, 'setTimeout', (fn) => { fn(); return { unref() {} }; });
-  const onebot = { sendImage: async () => { sentCalls.push(1); return { message_id: sentCalls.length }; } };
+  const onebot = {
+    sendImage: async () => { sentCalls.push(1); return { message_id: sentCalls.length }; },
+    sendSegments: async () => { sentCalls.push(1); return { message_id: sentCalls.length }; }
+  };
   const store = { appendSelf() {} };
   return new SendQueue({ onebot, store });
 }
@@ -226,4 +245,55 @@ test('core 闸门：未知声明值 → 拒发（拼错的分级不能被静默�
     /未知的内容分级声明/
   );
   assert.equal(sentCalls.length, 0);
+});
+
+// ── core 闸门：sendMedia 的图片段（第三方出图主要路径）──────────────────
+//
+// 抖音图文 / 视频等媒体走 sendMedia → onebot.sendSegments。闸门必须同样生效，
+// 否则「全局策略」对这条路径只是一句空话。
+
+test('core 闸门：sendMedia 段级 rating 超策略 → 整批拒发', async (t) => {
+  const sentCalls = [];
+  const sender = makeSender(t, sentCalls);
+  updateConfig({ allowAllWhenEmpty: false, allow: { groups: ['123'], private: [] }, security: { contentRating: 'strict' } });
+  await assert.rejects(
+    sender.sendMedia('group:123', [{ type: 'image', data: { file: 'a.jpg' }, rating: 'r18' }]),
+    /内容分级[\s\S]*设置 → 聊天与权限 → 内容分级/
+  );
+  assert.equal(sentCalls.length, 0, '被拦截时不能真的发出去');
+});
+
+test('core 闸门：sendMedia 的 options.rating 同样受策略约束', async (t) => {
+  const sentCalls = [];
+  const sender = makeSender(t, sentCalls);
+  updateConfig({ allowAllWhenEmpty: false, allow: { groups: ['123'], private: [] }, security: { contentRating: 'strict' } });
+  await assert.rejects(
+    sender.sendMedia('group:123', [{ type: 'image', data: { file: 'b.jpg' } }], { rating: 'r15' }),
+    /内容分级/
+  );
+  assert.equal(sentCalls.length, 0);
+  // safe 在任何档位都放行
+  await sender.sendMedia('group:123', [{ type: 'image', data: { file: 'c.jpg' } }], { rating: 'safe' });
+  assert.equal(sentCalls.length, 1);
+});
+
+test('core 闸门：sendMedia 未声明 rating → 放行，且 rating 字段不透传给 OneBot', async (t) => {
+  let received = null;
+  t.mock.method(globalThis, 'setTimeout', (fn) => { fn(); return { unref() {} }; });
+  const onebot = {
+    sendSegments: async (kind, id, segs) => {
+      received = segs;
+      return { message_id: 1 };
+    }
+  };
+  const sender = new SendQueue({ onebot, store: { appendSelf() {} } });
+  updateConfig({ allowAllWhenEmpty: false, allow: { groups: ['123'], private: [] }, security: { contentRating: 'r0' } });
+  await sender.sendMedia('group:123', [
+    { type: 'image', data: { file: 'x.jpg' } },
+    { type: 'image', data: { file: 'y.jpg' }, rating: 'safe' }
+  ]);
+  assert.deepEqual(received, [
+    { type: 'image', data: { file: 'x.jpg' } },
+    { type: 'image', data: { file: 'y.jpg' } }
+  ]);
 });

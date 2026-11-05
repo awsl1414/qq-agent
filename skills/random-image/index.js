@@ -67,9 +67,10 @@ export function normalizeConfig(raw = {}, rating = currentContentRating()) {
     contentRating: rating,
     booru: { ...booru, enabled: source !== 'local' && booru.enabled !== false },
     send: { ...(raw.send || {}), count: maxCount, maxImageBytes, nsfwAllowed, sfwAllowed: true },
-    // 分会话色图白名单是「哪些会话能收色图」这条独立轴，只在用户显式开启时生效。
-    // 旧版由 safeMode 推导，那个推导从未真正生效（safeMode=true 时 nsfw 请求本就被全局关掉）。
-    nsfwFilter: { ...(raw.nsfwFilter || {}), enabled: raw.nsfwFilter?.enabled === true },
+    // 分会话色图白名单是「哪些会话能收色图」这条独立轴：rating !== 'all' 时开启，
+    // 群聊点名要色图会被 resolveNsfw 降级成无色图（fallbackToSfw 默认生效）；
+    // rating === 'all' 时不做分会话限制，与旧 safeMode=false 的语义一致。
+    nsfwFilter: { ...(raw.nsfwFilter || {}), enabled: rating !== 'all' },
     chatFilter: raw.chatFilter
   };
 }

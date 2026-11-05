@@ -200,8 +200,9 @@ export const DEFAULT_CONFIG = {
       skipPreviewForLockedHosts: true
     },
     // ── 出站图片的内容分级 ──
-    // 全局唯一，所有技能共享（含第三方扩展）。档位与派生规则见 src/content-rating.js
-    // （ratingRule 是全项目唯一的定义处，这里只存档位名）。
+    // 全局唯一：所有技能（含第三方扩展）共享同一个档位；实际拦截只对在发送时
+    // 声明了 rating 的路径生效（sendImage / sendMedia 的图片段），派生规则见
+    // src/content-rating.js（ratingRule 是全项目唯一的定义处，这里只存档位名）。
     //   all    全部放行
     //   r18    只拦 R-18 / R-18G
     //   strict 拦 R-18 + R-15（默认）
@@ -845,7 +846,10 @@ export function migrateContentRating(parsed) {
     const nextBooru = { ...booru };
     delete nextBooru.strictSfw;
     delete nextBooru.onlyR0;
-    nextSkill.booru = nextBooru;
+    // 旧分级键是 booru 里仅有的键时，删完只剩空壳：空对象没有任何语义，
+    // 留在配置里只是噪音（运行期读的是 raw.booru || {}，两者等价）。
+    if (Object.keys(nextBooru).length === 0) delete nextSkill.booru;
+    else nextSkill.booru = nextBooru;
   }
   out.skills = { ...skills, [CONTENT_RATING_SKILL]: nextSkill };
   return out;
