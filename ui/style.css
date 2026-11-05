@@ -1776,9 +1776,20 @@ tr.chat-del-selected td { background: color-mix(in srgb, var(--red) 10%, transpa
 .ps-badge-none { color: var(--muted); background: color-mix(in srgb, var(--muted) 14%, transparent); border-color: color-mix(in srgb, var(--muted) 32%, transparent); }
 .persona-role-text { min-height: 360px; font-size: 12.5px; line-height: 1.7; font-family: var(--mono); }
 .model-rows-table { width: 100%; border-collapse: collapse; margin-bottom: 6px; }
+/* ⚠️ 不要给这张表加 border / border-radius / background：
+   · 它用的是 border-collapse: collapse，圆角在这上面根本不生效（单元格边框会盖住
+     圆角），加了只会得到「看着像卡片但四角是硬的」这种半吊子外观；
+   · 它两处使用（设置页备用模型、管理服务商的自定义模型列表）都在已有卡片/弹窗里，
+     再套一层边框等于盒子里套盒子，而且没有内边距时表头文字会贴到边框上。
+   需要框就让外层容器负责，表格只做布局。 */
 .model-rows-table th { text-align: left; font-size: 11px; color: var(--muted); font-weight: 400; padding: 4px 6px; }
 .model-rows-table td { padding: 4px 6px; }
-.model-rows-table input {
+/* ⚠️ 选择器必须带 [type='text']：第 374 行的全局重置
+   `input:not([type='checkbox']):not([type='radio']) { border: none }` 特异性是 (0,2,1)，
+   只写 `.model-rows-table input` 是 (0,1,1)，会被它压掉——边框设了等于没设，
+   输入框看起来就是一块没有描边的暗色板。加属性选择器后同为 (0,2,1)，
+   本条在文件里更靠后，胜出。 */
+.model-rows-table input[type='text'] {
   width: 100%; background: var(--inset-bg); border: 1px solid var(--border); color: var(--text);
   border-radius: var(--radius-sm); padding: 6px 9px; font-size: 12.5px; outline: none;
   box-shadow: var(--inset-edge);
@@ -5875,8 +5886,7 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: var(--r
 .prompt-preview-card,
 .sl-panel,
 .settings-runstate,
-.mem-id,
-.model-rows-table {
+.mem-id {
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius);
