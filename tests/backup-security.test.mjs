@@ -46,7 +46,7 @@ test('category walk excludes credentials, salts, locks, caches and nested juncti
   assert.equal(built.ok, true, built.error);
   assert.deepEqual(parseBackup(built.buffer).entries.map(e => e.name), ['data/messages/group_123.json']);
   assert.equal(built.buffer.includes(Buffer.from('FAKE_SENSITIVE_MARKER')), false);
-  assert.ok(logger.recent().some(entry => entry.level === 'warn' && /按安全边界排除/.test(entry.text)));
+  assert.ok(logger.query({ limit: 500 }).logs.some(entry => entry.level === 'warn' && /按安全边界排除/.test(entry.text)));
 });
 
 test('includeSecrets encrypts the config after removing backup credentials without changing the source', () => {
@@ -65,7 +65,7 @@ test('includeSecrets encrypts the config after removing backup credentials witho
   assert.equal(Object.hasOwn(config, 'backup'), false);
   assert.equal(entries.some(e => e.data.includes(Buffer.from(cipher))), false);
   assert.equal(JSON.stringify(built.manifest).includes(cipher), false);
-  assert.equal(logger.recent().some(entry => entry.text.includes(cipher)), false);
+  assert.equal(logger.query({ limit: 500 }).logs.some(entry => entry.text.includes(cipher)), false);
   assert.equal(fs.readFileSync(path.join(data, 'config.json'), 'utf8'), original);
 });
 

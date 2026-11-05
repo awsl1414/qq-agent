@@ -1135,7 +1135,8 @@
   // 「开始对话」：机器人未运行时，这个按钮是 PCL 隐喻里的「启动游戏」：
   // 拉起机器人用的 QQ（协议端由用户自己装、自己启动），进度写在副标题上，
   // 而不是直接跳会话界面。已连接时才保持旧行为（进全屏会话页并选中第一个）。
-  // 启动节奏与连接页 quick-start-btn 保持一致。
+  // 启动链本体是 00-core.js 的 launchBotQq（与连接页 quick-start-btn 共用一份），
+  // 这里只做本按钮自己的前置判断与终态呈现。
   $('#launch-btn') && $('#launch-btn').addEventListener('click', async function () {
     var btn = this;
     if (btn.dataset.starting === '1') return;   // 启动中防重复点击
@@ -1159,9 +1160,7 @@
     if (st && st.onebot && st.onebot.connected) { enterChat(); return; }
 
     var qqReady = !!(st && st.qqPortable && st.qqPortable.ready);
-    var qqRunning = !!(st && st.qqPortable && st.qqPortable.running);
     var qqSupported = !(st && st.qqPortable && st.qqPortable.supported === false);
-    var protoUp = !!(st && st.protocol && st.protocol.portOpen);
     // 非 Windows：QQNT 没有另外两版，一键启动这条路走不通，别让人去装 QQNT。
     if (!qqSupported) {
       setSub('这台机器上「一键启动 QQ」不可用（便携 QQ 仅 Windows）—— 请自行登录 QQ 并启动协议端（SnowLuma 或 NapCat）');
@@ -1174,53 +1173,33 @@
     btn.dataset.starting = '1';
     btn.classList.add('is-starting');
     try {
-      if (!qqRunning) {
-        setSub('启动 QQ 中…（不会自动弹窗，稍候需登录）');
-        var r1 = await api('/api/qq-portable/launch', { method: 'POST', body: '{}' });
-        if (!r1 || (!r1.ok && !r1.alreadyRunning)) {
-          throw new Error('QQ 启动失败' + (r1 && r1.error ? '：' + r1.error : ''));
-        }
-        await new Promise(function (r) { setTimeout(r, 3000); });
-      }
-      // 协议端不归我们启动：没在跑就直接说清楚，别让用户对着"等待"干等 5 分钟。
-      if (!protoUp) {
-        var st2 = null;
-        try { st2 = await api('/api/status'); } catch (e) { /* 探不到按未运行处理 */ }
-        protoUp = !!(st2 && st2.protocol && st2.protocol.portOpen);
-      }
-      if (!protoUp) {
-        btn.dataset.launchMsg = 'QQ 已启动，但协议端没在运行 —— 到 工具 → 连接 页按指引启动 SnowLuma 或 NapCat';
-        setSub(btn.dataset.launchMsg);
-        return;
-      }
-      setSub('等待机器人上线…（首次登录要扫码，可能要一两分钟）');
-      // 旧实现只等 30 秒就报「连接超时」，而这段时间用户很可能还没扫码登录
-      // （首次登录本来就要一两分钟），小白看到"超时"就以为失败，回去再点一次。
-      // 现在最多等 5 分钟，每 ~16 秒把"在等什么、现在该做什么"写清楚。
-      // 与连接页 quick-start-btn 的等待节奏保持一致（两处是同一套启动链）。
-      var WAIT_STEP = 2000;
-      var WAIT_MAX = 5 * 60 * 1000;
-      var connected = false;
-      for (var waited = 0; waited < WAIT_MAX; waited += WAIT_STEP) {
-        await new Promise(function (r) { setTimeout(r, WAIT_STEP); });
-        var s2 = await api('/api/status').catch(function () { return null; });
-        if (s2 && s2.onebot && s2.onebot.connected) { connected = true; break; }
-        if (waited % 16000 < WAIT_STEP) {
-          setSub(waited < 20000
-            ? '等待机器人上线…（QQ 还没登录的话，把 QQ 窗口调出来扫码）'
-            : '还在等机器人上线（已 ' + Math.round(waited / 1000) + ' 秒）—— 登录完成会自动连上，不用再点');
-        }
-      }
-      if (connected) {
+      var res = await launchBotQq({
+        // 按钮脱离 DOM（切走页签）就不再轮询，与连接页同一约束
+        isAborted: function () { return !btn.isConnected; },
+        onProgress: function (e) { setSub(e.message); }
+      });
+      if (res.phase === 'aborted') return;   // 页面已经换掉，写提示没人看
+      if (res.phase === 'connected') {
         // 粘性提示：身份区由 3 秒定时器按 launchMsg 重建副标题，
         // 先写 dataset 再立刻刷一次，避免「✓ 已连接」一闪就被会话名盖掉
         btn.dataset.launchMsg = '✓ 已连接，机器人运行中 —— 再点一次进入会话';
         setSub(btn.dataset.launchMsg);
         try { if (typeof refreshStatus === 'function') refreshStatus(); } catch (e) { /* ignore */ }
-      } else {
+        return;
+      }
+      // 其余终态的文案要指向本按钮能走的下一步，所以留在调用方；失败原因不设成粘性
+      // 提示，下次点击还能看到新的原因。
+      if (res.phase === 'proto-down') {
+        btn.dataset.launchMsg = 'QQ 已启动，但协议端没在运行 —— 到 工具 → 连接 页按指引启动 SnowLuma 或 NapCat';
+        setSub(btn.dataset.launchMsg);
+        return;
+      }
+      if (res.phase === 'timeout') {
         btn.dataset.launchMsg = '还没连上：多半是机器人 QQ 没登录 —— 登录后会自动连上；状态见 工具 → 连接';
         setSub(btn.dataset.launchMsg);
+        return;
       }
+      setSub(res.message || '启动失败：QQ 没能启动');
     } catch (e) {
       setSub('启动失败：' + (e && e.message ? e.message : e));
     } finally {

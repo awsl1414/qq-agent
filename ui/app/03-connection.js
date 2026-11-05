@@ -674,7 +674,7 @@ function bindConnectionPage(box, v) {
   wireTokenToggle('#conn-httptoken-toggle', '#conn-httptoken', 'http', 'HTTP ');
 
   // ── 启动 QQ + 便携副本（原「设置 → 连接 QQ」，随分区一起搬到这里）──
-  // 三步链的节奏别改：14-chrome.js 的「开始对话」按钮按同一套节奏走。
+  // 步骤 0（重新检测）只在本页；步骤 1–3 是 00-core.js 的 launchBotQq，左栏「开始对话」共用。
   const quickStartBtn = $('#quick-start-btn');
   if (quickStartBtn) {
     quickStartBtn.addEventListener('click', async () => {
@@ -698,60 +698,45 @@ function bindConnectionPage(box, v) {
           }
           return;
         }
-        // 步骤 1：启动 QQ（local / portable 都走同一接口，后端按 source 分流）
-        if (!connQb.qqRunning) {
-          btn.textContent = '启动 QQ 中…';
-          if (hint) hint.textContent = 'QQ 启动中 —— 它不会自动弹窗，稍候到任务栏/托盘把窗口调出来登录/扫码';
-          const r = await api('/api/qq-portable/launch', { method: 'POST', body: '{}' });
-          if (!r.ok && !r.alreadyRunning) {
-            if (hint) hint.textContent = `QQ 启动失败：${r.error}`;
-            connQbPaint();
-            return;
+        // 步骤 1–3：启动 QQ → 确认协议端端口 → 等 OneBot 上线。
+        // 流程本体在 00-core.js 的 launchBotQq（左栏「开始对话」共用同一份），这里只负责
+        // 把进度写进本页的提示行与按钮，并用 connQb 落终态。
+        const res = await launchBotQq({
+          // 页面切走后按钮脱离 DOM：别让轮询继续每 2 秒打一次 /api/status
+          isAborted: () => !btn.isConnected,
+          onProgress: (e) => {
+            btn.textContent = e.phase === 'launching' ? '启动 QQ 中…' : '等待机器人上线…';
+            if (hint) hint.textContent = e.message;
           }
-          connQb.qqRunning = true;
-          // 等 3 秒让 QQ 完全启动
-          await new Promise((r2) => setTimeout(r2, 3000));
+        });
+        // 页面已切走：写什么都没人看，也不再重画
+        if (res.phase === 'aborted') return;
+        if (res.phase === 'launch-failed') {
+          if (hint) hint.textContent = res.message;
+          connQbPaint();
+          return;
         }
-        // 步骤 2：协议端不由本软件启动。没在跑就明确告诉用户去哪儿装 / 怎么启动，
-        // 在这里干等 5 分钟只会让人以为程序坏了。
-        const st2 = await api('/api/status').catch(() => null);
-        if (!st2?.protocol?.portOpen) {
+        // 走到这里 QQ 已经起来了（协议端是否在跑见下一步）
+        connQb.qqRunning = true;
+        if (res.phase === 'proto-down') {
+          // 协议端不由本软件启动：明说去哪儿装 / 怎么启动，在这里干等 5 分钟只会让人
+          // 以为程序坏了。
           connQb.protoUp = false;
           if (hint) hint.textContent = 'QQ 已启动，但协议端没在运行 —— 按本页「协议端需要自行下载安装」里的步骤启动 SnowLuma 或 NapCat';
           connQbPaint();
           return;
         }
         connQb.protoUp = true;
-        // 步骤 3：等待 OneBot 连接
-        // ⚠️ 最多等 5 分钟。只等 30 秒就报"连接超时"的话，用户很可能还没扫码登录
-        //    （首次登录本来就要一两分钟），看到超时以为失败又点一次，越点越乱。
-        //    等待期间每隔十几秒把"正在等什么、你现在该做什么"写清楚。
-        btn.textContent = '等待机器人上线…';
-        const WAIT_STEP_MS = 2000;
-        const WAIT_MAX_MS = 5 * 60 * 1000;
-        for (let waited = 0; waited < WAIT_MAX_MS; waited += WAIT_STEP_MS) {
-          // 用户切走页签后按钮已不在 DOM，循环仍在每 2 秒打一次 /api/status
-          // （最多 5 分钟）。这里直接收尾，不再空转。
-          if (!btn.isConnected) return;
-          await new Promise((r2) => setTimeout(r2, WAIT_STEP_MS));
-          const s = await api('/api/status').catch(() => null);
-          if (s?.onebot?.connected) {
-            if (hint) hint.textContent = '✅ 已连接！机器人开始工作';
-            // ⚠️ 走 connQbPaint() 落终态，别手写 btn.textContent：紧随其后的
-            //    connQbRefresh() 会重画一次，手写的字样会被覆盖。
-            connQb.connected = true;
-            connQbPaint();
-            connQbRefresh();
-            return;
-          }
-          // 每 ~16 秒刷新一次提示（别每秒改字，看着像在闪）
-          if (hint && waited % 16000 < WAIT_STEP_MS) {
-            const secs = Math.round(waited / 1000);
-            hint.textContent = secs < 20
-              ? '正在等机器人上线 —— 如果 QQ 还没登录，到 QQ 窗口里扫码登录'
-              : `还在等（已 ${secs} 秒）—— 登录完 QQ 后会自动连上，不用再点这个按钮；状态见本页上方`;
-          }
+        if (res.phase === 'connected') {
+          if (hint) hint.textContent = '✅ 已连接！机器人开始工作';
+          // ⚠️ 走 connQbPaint() 落终态，别手写 btn.textContent：紧随其后的
+          //    connQbRefresh() 会重画一次，手写的字样会被覆盖。
+          connQb.connected = true;
+          connQbPaint();
+          connQbRefresh();
+          return;
         }
+        // 剩 'timeout'：最多等 5 分钟仍没上线，把"现在该查什么"写清楚
         if (hint) {
           hint.textContent = '等了 5 分钟还没连上 —— 看本页上方的状态：'
             + '最常见是机器人 QQ 还没登录，或协议端的端口/令牌与这里不一致。';
