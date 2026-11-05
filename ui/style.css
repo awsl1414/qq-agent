@@ -2914,7 +2914,7 @@ input.sw[data-pending] { cursor: progress; }
 .sl-hint { font-size: 12px; color: var(--muted); }
 .snowluma-state-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 
-/* 日志面板：标题栏 + 内嵌等宽日志体（原来是裸 <pre> 顶着一个 .hint，空的时候就是一大片黑框） */
+/* 日志面板：标题栏（桌面宠物页的角色库 / 观察设置等多张面板共用） */
 .sl-panel { border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--layer-2); }
 .sl-panel-head {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -2923,23 +2923,6 @@ input.sw[data-pending] { cursor: progress; }
 .sl-panel-title { font-size: 12px; font-weight: 600; }
 .sl-panel-meta { font-size: 11.5px; color: var(--muted); }
 .sl-panel-tools { margin-left: auto; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
-.sl-level { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
-
-.snowluma-logs-view {
-  max-height: 240px; min-height: 92px;
-  overflow-y: auto; margin: 0;
-  font-family: var(--mono); font-size: 11.5px; line-height: 1.7;
-  color: var(--muted); white-space: pre-wrap; word-break: break-all;
-  background: var(--inset-bg); padding: 10px 12px;
-}
-/* QQ 内核日志通常很短，别占满整块高度 */
-.snowluma-logs-view.sl-log-short { max-height: 140px; min-height: 64px; }
-/* 空态：单行提示居中 + 更淡。⚠️ 只在空态用 flex 居中：
-   有内容时若还居中，超出高度的部分会被裁到上面且滚不到。 */
-.snowluma-logs-view.is-empty {
-  display: flex; align-items: center; justify-content: center;
-  color: var(--faint); white-space: normal; word-break: normal;
-}
 
 /* ── 连接页：协议端二选一卡片 ────────────────────────────
    协议端不随包分发、也不由本软件启动，用户要自己装，这一节是
@@ -6322,9 +6305,6 @@ input[type='range'] { accent-color: var(--accent); }
 .stats-band { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card-hi); box-shadow: none; }
 
 /* 日志 / 代码块：统一深底等宽面 */
-#app-logs-view,
-.snowluma-logs-view,
-.sl-log-short,
 .fix-code,
 .fix-raw,
 .doctor-code,
@@ -7964,9 +7944,6 @@ code, .mono { font-family: var(--mono); }
 .sl-adv-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .sl-adv-label { flex-shrink: 0; font-size: 12px; opacity: .85; }
 .sl-adv-dim { font-size: 12px; color: var(--muted); }
-/* 日志折叠区里的 .sl-section 自带 gap，外层别再叠一层上下留白 */
-.sl-logs-adv .sl-adv-body { padding-top: 10px; }
-.sl-logs-adv .sl-section { gap: 8px; }
 
 /* ══════════════════════════════════════════════════════════════════════════
    改造层 · 23. 设置左栏底部「快捷开关」
@@ -9544,6 +9521,19 @@ input.mig-input:focus-visible,
   font-size: 12px; color: var(--muted); cursor: pointer; white-space: nowrap;
 }
 
+/* 「记录级别」（写进文件的详细程度）：挨着左边那排筛选勾选框放会被当成
+   「第五个筛选」，所以甩到工具栏右端，用一条竖分隔线隔开。
+   margin-left:auto 在搜索框抢走剩余空间后通常为 0，留着是为了窄屏换行时
+   它仍靠右；下方媒体查询里换行后把竖线改成横线。 */
+.logs-store-lv {
+  display: flex; align-items: center; gap: var(--space-xs);
+  margin-left: auto; padding-left: var(--space-md);
+  border-left: 1px solid var(--line);
+}
+.logs-store-lv .sel { min-width: 92px; }
+.logs-store-hint { font-size: 11px; color: var(--faint); }
+.logs-store-saved { font-size: 11px; color: var(--green); }
+
 /* ── 计数条 ── */
 .logs-meta {
   display: flex; align-items: center; gap: var(--space-sm);
@@ -9638,6 +9628,14 @@ input.mig-input:focus-visible,
   .logs-search { flex-basis: 100%; order: 5; }
   .logs-follow { order: 6; }
   .logs-ctl .sel { min-width: 0; }
+  /* 「记录级别」换到单独一行：竖线在行首会看成装饰，改成上方横线分隔 */
+  .logs-store-lv {
+    order: 8; flex-basis: 100%;
+    margin-left: 0; padding-left: 0;
+    border-left: 0; border-top: 1px solid var(--line);
+    padding-top: var(--space-xs);
+    flex-wrap: wrap;
+  }
   .logs-row {
     grid-template-columns: 60px 44px minmax(0, 1fr);
     font-size: 11.5px;
@@ -9662,17 +9660,3 @@ input.mig-input:focus-visible,
   .logs-row .logs-text { grid-column: 1 / -1; grid-row: 2; }
 }
 
-/* 连接页「完整日志见 工具 → 日志」那一行 */
-.sl-panel-foot {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
-  padding: 8px 12px;
-  border-top: 1px solid var(--border);
-  background: var(--layer-1);
-  font-size: 11.5px; color: var(--muted);
-}
-.sl-link {
-  padding: 0; border: 0; background: none;
-  color: var(--accent-hi); font-size: inherit; font-family: inherit;
-  cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
-}
-.sl-link:hover { color: var(--accent); }

@@ -778,7 +778,7 @@ function httpStatusText(status) {
   if (s === 404) return '接口不存在 —— 软件文件可能不完整，更新或重新安装一次';
   if (s === 413) return '内容太大，后端拒绝接收';
   if (s === 429) return '请求太频繁，等几秒再试';
-  if (s >= 500) return `后端内部错误（${s}）—— 详细原因见「工具 → 连接 → 应用日志」`;
+  if (s >= 500) return `后端内部错误（${s}）—— 详细原因见「工具 → 日志」`;
   if (s >= 400) return `请求被拒绝（${s}）—— 参数可能不合法`;
   return `请求失败（HTTP ${s}）`;
 }

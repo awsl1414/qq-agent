@@ -15,23 +15,20 @@
  * 「改配置 → 验证」的闭环必须落在同一页：设置页不再有「连接 QQ」分区，
  * 否则用户改完令牌还得跳到别的页才知道成没成。
  *
- * 日志只留「应用日志」：协议端的日志归协议端自己（SnowLuma 控制台 / NapCat
- * 控制台），我们拿不到，也不该假装能拿到。
+ * 日志已独立成「工具 → 日志」页，本页不再承载日志：协议端的日志归协议端自己
+ * （SnowLuma 控制台 / NapCat 控制台），我们拿不到，也不该假装能拿到。
  *
  * 样式沿用 .snowluma-* / .sl-* 类名（style.css 里那一大段仍然有效）：
  * 换的只是内容与 id，没必要为了改名再动一遍 CSS。
  */
 
 /* 折叠区展开态：页面每 15 秒被 startListPoller 重建一次（quiet），
-   不记住的话用户刚展开日志、一转眼就自己合上了。
+   不记住的话用户刚展开某一节、一转眼就自己合上了。
    ⚠️ 端点设置里可能有用户正在输入的地址，所以 quiet 刷新只改状态文字、
    绝不重绘整页（见 updateConnectionLive），否则输入框打到一半会被重置。 */
-let connLogsOpen = false;
 let connAdvOpen = true;
-/* 配置和安装指引默认展开，用户手动开合后保留选择；日志仍默认收起。
-   connLogsCache 保存最近日志，重新检测只更新状态。 */
+/* 配置和安装指引默认展开，用户手动开合后保留选择。 */
 let connSetupOpen = true;
-let connLogsCache = { logs: [], level: 'info' };
 
 /** 把 /api/status 压成一个视图对象，渲染与局部更新共用同一份判断。 */
 function connView(s) {
@@ -46,17 +43,6 @@ function connView(s) {
   const overall = connected ? 'ok' : (portOpen ? 'warn' : 'off');
   const overallText = connected ? '机器人工作中' : (portOpen ? '等待连接' : '协议端未运行');
   return { proto, ob, connected, portOpen, selfId, nick, diag, overall, overallText };
-}
-
-/** 应用日志 → 面板文本。空态文案与旧版一致（'暂无日志' 触发 .is-empty 居中样式）。 */
-function connLogText(appLogsData) {
-  const arr = (appLogsData && appLogsData.logs) || [];
-  const text = arr.map((e) => {
-    const t = new Date(e.ts).toLocaleTimeString('zh-CN', { hour12: false });
-    const lv = String(e.level || 'info').toUpperCase().padEnd(5);
-    return `[${t}] [${lv}] [${e.module || '-'}] ${e.text}`;
-  }).join('\n') || '暂无日志';
-  return { arr, text };
 }
 
 /** 三种状态的"人话结论"：连上 / 端口通了但没连上 / 端口没开。
@@ -118,7 +104,7 @@ function connQbPaint() {
   btn.disabled = !!connQb.connected;
   // 已连接是终态：保留一个可见的锚点，但必须禁用，别让人以为还要再点什么。
   if (connQb.connected) {
-    if (text) text.textContent = '机器人已连接，正常工作中 —— 状态见上方，应用日志在页面底部';
+    if (text) text.textContent = '机器人已连接，正常工作中 —— 状态见上方，出问题看「工具 → 日志」';
     btn.textContent = '已连接 ✓';
     btn.disabled = true;
   } else if (!connQb.portableSupported) {
@@ -193,12 +179,10 @@ async function connQbRefresh() {
   } catch { /* 拉不到就保持占位文案，不打断连接页 */ }
 }
 
-function renderConnectionPage(v, appLogsData) {
+function renderConnectionPage(v) {
   const { proto, connected, portOpen, selfId, nick, diag, overall, overallText } = v;
   const wsUrl = String(proto.wsUrl || '');
   const httpUrl = String(proto.httpUrl || '');
-  const appLog = connLogText(appLogsData);
-  const level = (appLogsData && appLogsData.level) || 'info';
   const verdict = connVerdict(v);
 
   const selfHtml = connected
@@ -253,7 +237,7 @@ function renderConnectionPage(v, appLogsData) {
         </div>
 
         <div class="sl-section" id="conn-qq">
-          <div class="sl-section-title">启动机器人用的 QQ<span class="sl-section-sub">协议端另装另起，本软件不分发</span></div>
+          <div class="sl-section-title">启动机器人用的 QQ<span class="sl-section-sub">协议端另装另起</span></div>
 
           <div class="sl-quickbar">
             <span class="sl-quickbar-text" id="quick-start-text">正在读取 QQ 状态…</span>
@@ -273,7 +257,7 @@ function renderConnectionPage(v, appLogsData) {
         <details class="conn-setup" id="conn-setup"${connSetupOpen ? ' open' : ''}>
           <summary><span>协议端需要自行下载安装</span><span class="conn-setup-sub">SnowLuma 或 NapCat，二选一，装好就不用再管这一节</span></summary>
           <div class="conn-setup-body">
-            <div class="sl-node-help">本项目<b>不分发、不下载、不启动</b>协议端 —— 这是 SnowLuma 许可协议的要求，也是这一页把安装步骤写全的原因。你需要自己去官方仓库下载安装、自己启动；两者默认端口一样，装完直接就能连上。</div>
+            <div class="sl-node-help">协议端要你自己装、自己启动。SnowLuma 和 NapCat 的默认端口一样，装完就能连上，所以这页把两边的安装步骤都写全了。</div>
             <div class="sl-proto-grid">
               <div class="sl-proto-card">
                 <div class="sl-proto-head"><b>SnowLuma</b><span class="sl-proto-tag">第三方 · 自带 EULA</span></div>
@@ -310,7 +294,7 @@ function renderConnectionPage(v, appLogsData) {
             </div>
             <div class="sl-adv-row">
               <button class="btn btn-small" id="conn-setup-recheck">装好并登录了，重新检测</button>
-              <span class="sl-hint">还连不上就看上面的「诊断详情」和下面的应用日志。</span>
+              <span class="sl-hint">还连不上就看上面的「诊断详情」，完整日志在「工具 → 日志」页。</span>
             </div>
           </div>
         </details>
@@ -349,41 +333,11 @@ function renderConnectionPage(v, appLogsData) {
             <div class="hint" style="margin-top:6px">两个实例（双开）会各自使用偏移后的端口；这里改的是当前这个实例的连接目标。</div>
           </div>
         </details>
-
-        <details class="sl-adv sl-logs-adv" id="conn-logs"${connLogsOpen ? ' open' : ''}>
-          <summary>应用日志：出问题才需要看</summary>
-          <div class="sl-adv-body">
-            <div class="sl-panel">
-              <div class="sl-panel-head">
-                <span class="sl-panel-title">应用日志</span>
-                <span class="sl-panel-meta">最近 ${appLog.arr.length} 条 · 同时落盘 data/logs/</span>
-                <span class="sl-panel-tools">
-                  <label class="sl-level" for="app-log-level">
-                    <span>写进文件的详细程度</span>
-                    <select id="app-log-level" title="只有达到这个详细程度的日志才会写进文件；选得越详细，文件越大">
-                      ${LOG_LEVELS.map((x) =>
-                        `<option value="${x}" ${level === x ? 'selected' : ''}>${x}</option>`).join('')}
-                    </select>
-                  </label>
-                  <button class="btn btn-small" id="app-logs-refresh-btn" title="重新拉取最近日志">刷新</button>
-                </span>
-              </div>
-              <!-- 这一块只显示最近 200 条（且不带筛选）。完整日志、磁盘历史与
-                   实时流都在独立页里，此处只留一行入口，不再复制一套筛选控件。 -->
-              <div class="sl-panel-foot">
-                <span>这里只显示最近 200 条；按级别 / 模块 / 关键字筛选，或翻更早的历史，见
-                  <button class="sl-link" type="button" id="conn-goto-logs" title="打开完整日志页">工具 → 日志</button>。
-                </span>
-              </div>
-              <pre class="snowluma-logs-view${appLog.arr.length ? '' : ' is-empty'}" id="conn-logs-view">${esc(appLog.text)}</pre>
-            </div>
-          </div>
-        </details>
       </div>`;
 }
 
-/** quiet 刷新：只改状态文字与日志，不碰输入框、不重建整页。 */
-function updateConnectionLive(v, appLogsData) {
+/** quiet 刷新：只改状态文字，不碰输入框、不重建整页。 */
+function updateConnectionLive(v) {
   const chip = $('#conn-chip');
   if (chip) chip.className = `sl-chip is-${v.overall}`;
   const chipText = $('#conn-chip-text');
@@ -427,18 +381,6 @@ function updateConnectionLive(v, appLogsData) {
       : (v.diag || '还没连上 —— 先确认协议端在运行、机器人 QQ 已登录');
   }
 
-  // 日志：内容没变就不动 DOM（避免滚动位置与文本选择被无谓重置）
-  const pre = $('#conn-logs-view');
-  if (pre) {
-    const { text, arr } = connLogText(appLogsData);
-    if (pre.textContent !== text) {
-      const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 40;
-      pre.textContent = text;
-      pre.classList.toggle('is-empty', !arr.length);
-      if (atBottom) pre.scrollTop = pre.scrollHeight;
-    }
-  }
-
   // 启动区跟着状态走：quiet 刷新不重绑事件，只把连接 / 端口两位同步过来再重画。
   connQb.connected = !!v.connected;
   connQb.protoUp = !!v.portOpen;
@@ -479,7 +421,7 @@ async function connRecheck(btn) {
       }
     }
 
-    updateConnectionLive(nv, connLogsCache);
+    updateConnectionLive(nv);
     if (note) {
       note.textContent = nv.connected
         ? `${fillNote ? `${fillNote}，` : ''}✓ 已连上（${nv.nick || '机器人'}）`
@@ -510,10 +452,8 @@ async function loadConnectionPage({ quiet = false } = {}) {
       </div>`;
   }
 
-  const [status, appLogsData] = await Promise.all([
-    api('/api/status').catch(() => null),
-    api('/api/logs?limit=200').catch(() => ({ logs: [], level: 'info' }))
-  ]);
+  // 状态是这一页唯一的取数：日志已独立成「工具 → 日志」页，本页不再拉日志。
+  const status = await api('/api/status').catch(() => null);
 
   const box = $('#connection-page');
   if (!box) return;   // 页面已被切走
@@ -534,18 +474,17 @@ async function loadConnectionPage({ quiet = false } = {}) {
   }
 
   const v = connView(status);
-  connLogsCache = appLogsData || connLogsCache;   // 手检时复用，免得为刷新状态再拉一次日志
 
   if (quiet && box.querySelector('.snowluma-page-card')) {
-    updateConnectionLive(v, appLogsData);
+    updateConnectionLive(v);
     return;
   }
 
-  box.innerHTML = renderConnectionPage(v, appLogsData);
-  bindConnectionPage(box, v, appLogsData);
+  box.innerHTML = renderConnectionPage(v);
+  bindConnectionPage(box, v);
 }
 
-function bindConnectionPage(box, v, appLogsData) {
+function bindConnectionPage(box, v) {
   // ── 手动重新检测（页头一枚 + 安装说明底部一枚，同一套逻辑）──
   $('#conn-recheck-btn')?.addEventListener('click', (e) => connRecheck(e.currentTarget));
   $('#conn-setup-recheck')?.addEventListener('click', (e) => connRecheck(e.currentTarget));
@@ -596,19 +535,6 @@ function bindConnectionPage(box, v, appLogsData) {
   // ── 折叠区展开态 ──
   const adv = $('#conn-adv');
   if (adv) adv.addEventListener('toggle', () => { connAdvOpen = adv.open; });
-  const logs = $('#conn-logs');
-  if (logs) {
-    logs.addEventListener('toggle', () => { connLogsOpen = logs.open; });
-    // 用户手点 summary 展开时贴底：他想看的是"最后发生了什么"。
-    // ⚠️ 监听 summary 的 click 而不是 details 的 toggle，因为 toggle 在程序化
-    //    open 时也会触发，会把阅读位置又拽回末尾。
-    logs.querySelector('summary')?.addEventListener('click', () => {
-      requestAnimationFrame(() => {
-        const pre = $('#conn-logs-view');
-        if (pre && logs.open) pre.scrollTop = pre.scrollHeight;
-      });
-    });
-  }
 
   // ── 自动读取协议端配置 ──
   // 直接读 SnowLuma 的 config/onebot_<QQ号>.json，拿到端口和两枚令牌后落盘 + 重连。
@@ -692,7 +618,7 @@ function bindConnectionPage(box, v, appLogsData) {
         if (hint) hint.textContent = '读不到状态：后端没有应答';
       } else {
         const nv = connView(s);
-        updateConnectionLive(nv, appLogsData);
+        updateConnectionLive(nv);
         if (hint) {
           hint.textContent = nv.connected
             ? `✓ 已连上（${nv.nick || '机器人'}）`
@@ -791,7 +717,7 @@ function bindConnectionPage(box, v, appLogsData) {
         const st2 = await api('/api/status').catch(() => null);
         if (!st2?.protocol?.portOpen) {
           connQb.protoUp = false;
-          if (hint) hint.textContent = 'QQ 已启动，但协议端没在运行 —— 按本页「协议端需要自行下载安装」里的步骤启动 SnowLuma 或 NapCat（本项目不分发协议端）';
+          if (hint) hint.textContent = 'QQ 已启动，但协议端没在运行 —— 按本页「协议端需要自行下载安装」里的步骤启动 SnowLuma 或 NapCat';
           connQbPaint();
           return;
         }
@@ -899,48 +825,38 @@ function bindConnectionPage(box, v, appLogsData) {
     connQbRefresh();
   }
 
-  // ── 应用日志：级别切换 + 手动刷新 ──
-  const levelSel = $('#app-log-level');
-  if (levelSel) levelSel.addEventListener('change', async () => {
-    try {
-      const r = await api('/api/logs/level', { method: 'POST', body: JSON.stringify({ level: levelSel.value }) });
-      if (r && r.level) levelSel.value = r.level;
-      loadConnectionPage({ quiet: true });
-    } catch (e) {
-      qaAlert(`设置日志级别失败：${e.message}`);
-    }
-  });
-  $('#app-logs-refresh-btn')?.addEventListener('click', () => loadConnectionPage());
-  // 「工具 → 日志」入口。已有别的入口直达日志页（顶栏导航），这里只是把这句
-  // 提示变成可点的，省得用户读完还得自己去顶栏找。
-  $('#conn-goto-logs')?.addEventListener('click', () => switchTab('logs'));
-
-  // ── 复制诊断信息（反馈用）：全部来自本页已取到的状态与日志，不新增请求 ──
+  // ── 复制诊断信息（反馈用）：连接状态来自本页已取到的 v，日志现场拉一次 ──
   const copyBtn = $('#conn-copy-diag');
   if (copyBtn) copyBtn.addEventListener('click', async () => {
     const hint = $('#conn-copy-hint');
-    const { arr } = connLogText(appLogsData);
-    const CLUE_RE = /error|fail|失败|EADDR|ECONN|EACCES|refuse|denied|timeout|超时|断开|异常|invalid|token|令牌/i;
-    const clues = arr
-      .filter((e) => CLUE_RE.test(String(e.text || '')))
-      .slice(-5)
-      .map((e) => `  [${new Date(e.ts).toLocaleTimeString('zh-CN', { hour12: false })}] ${String(e.text).slice(0, 140)}`);
-    const lines = [
-      '[QQ Agent 连接诊断] ' + new Date().toLocaleString('zh-CN', { hour12: false }),
-      '结论: ' + (v.connected ? '已连接' : (v.portOpen ? '端口在监听但未连上' : '协议端未运行 / 端口未监听')),
-      'WS 地址: ' + (v.proto.wsUrl || '（未设置）'),
-      'HTTP 地址: ' + (v.proto.httpUrl || '（未设置）'),
-      '端口监听: ' + (v.portOpen ? '是' : '否'),
-      'OneBot: ' + (v.connected ? `已连接 ${v.nick || ''} ${v.selfId || ''}`.trim() : '未连接'),
-      '后端诊断: ' + (v.diag || '（无）'),
-      '最近可疑日志:',
-      ...(clues.length ? clues : ['  （无）'])
-    ].join('\n');
+    copyBtn.disabled = true;
     try {
+      // 日志面板已从本页移除，进页时不再预取；只在用户真要反馈时才拉一次，
+      // 失败就当没有可疑日志（诊断结论本身仍然可用）。
+      const appLogs = await api('/api/logs?limit=200').catch(() => ({ logs: [] }));
+      const arr = Array.isArray(appLogs.logs) ? appLogs.logs : [];
+      const CLUE_RE = /error|fail|失败|EADDR|ECONN|EACCES|refuse|denied|timeout|超时|断开|异常|invalid|token|令牌/i;
+      const clues = arr
+        .filter((e) => CLUE_RE.test(String(e.text || '')))
+        .slice(-5)
+        .map((e) => `  [${new Date(e.ts).toLocaleTimeString('zh-CN', { hour12: false })}] ${String(e.text).slice(0, 140)}`);
+      const lines = [
+        '[QQ Agent 连接诊断] ' + new Date().toLocaleString('zh-CN', { hour12: false }),
+        '结论: ' + (v.connected ? '已连接' : (v.portOpen ? '端口在监听但未连上' : '协议端未运行 / 端口未监听')),
+        'WS 地址: ' + (v.proto.wsUrl || '（未设置）'),
+        'HTTP 地址: ' + (v.proto.httpUrl || '（未设置）'),
+        '端口监听: ' + (v.portOpen ? '是' : '否'),
+        'OneBot: ' + (v.connected ? `已连接 ${v.nick || ''} ${v.selfId || ''}`.trim() : '未连接'),
+        '后端诊断: ' + (v.diag || '（无）'),
+        '最近可疑日志:',
+        ...(clues.length ? clues : ['  （无）'])
+      ].join('\n');
       await navigator.clipboard.writeText(lines);
       if (hint) hint.textContent = '已复制，可直接粘贴反馈 ✓';
     } catch (e) {
       if (hint) hint.textContent = `复制失败：${(e && e.message) || e}`;
+    } finally {
+      copyBtn.disabled = false;
     }
   });
 }

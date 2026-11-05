@@ -1,10 +1,12 @@
 // 〔日志页〕工具 → 日志：当天内存首屏 + 磁盘历史翻页 + SSE 实时流
 'use strict';
 /* ══════════════════════════════════════════════════════════════
- 为什么单独一页（而不是继续用「连接 → 应用日志」那个 <pre>）：
+ 为什么单独一页（连接页原来那个「应用日志」<pre> 已移除，别再去找它）：
    · 内存只留最近 500 条，而一天落盘 1000+ 行，那个面板看不到更早的；
    · 面板里 WARN 与 INFO 长得一模一样，排错时只能肉眼翻；
    · app 模块占全部日志的 45%，不按模块筛等于没筛。
+ 随面板一起搬过来的还有工具栏右端的「记录级别」（config.logs.level）：它决定
+ 哪些日志会写进文件，和左侧「筛选显示」的勾选框是两件事，别混成一套控件。
 
  数据来源两段 + 一路实时流，与 H1a 的后端契约一一对应：
    ① GET /api/logs          内存窗口，level/module/q/since 全部在**服务端**过滤；
@@ -53,7 +55,7 @@ const LOG_SCROLL_EDGE_PX = 80;    // 距列表底部多少像素开始预取下�
  * 到顶后仍有滚动条可继续手动翻。 */
 const LOG_PAGE_BUDGET = 40;
 /* 级别取值来自 00-core.js 的 LOG_LEVELS（全前端唯一一份，按低 → 高排列）。
-   日志页默认勾选「info 及以上」，debug 单独记忆：用户在连接页把落盘级别开到
+   日志页默认勾选「info 及以上」，debug 单独记忆：用户把「记录级别」开到
    debug 后，这里能多出一个勾选框把 debug 行筛出来，而不是永远看不到。 */
 const LOG_DEFAULT_LEVELS = LOG_LEVELS.filter((lv) => lv !== 'debug');
 const LOG_DEBUG_PREF_KEY = 'qqa-logs-debug';
@@ -72,6 +74,10 @@ const logsState = {
   paging: false,           // 正在向下翻页
   error: '',
   level: new Set(logsLoadDebugPref() ? LOG_LEVELS : LOG_DEFAULT_LEVELS),
+  /* 「记录级别」= config.logs.level，决定哪些日志**写进文件**（以及历史翻页能
+     翻到什么）。它与上面的 `level`（筛选显示）是两个独立概念：筛选只影响当前
+     列表显示什么，记录级别影响落盘。值来自后端，打开页面时回填（见 logsLoadStoreLevel）。 */
+  storeLevel: 'info',
   module: '',              // '' = 全部；否则服务端按前缀匹配（skill 命中 skill:xxx）
   q: '',
   date: '',                // '' = 今天；否则 YYYY-MM-DD
@@ -166,6 +172,35 @@ function logsMatches(e) {
   const q = logsState.q.trim().toLowerCase();
   if (q && !String(e.text || '').toLowerCase().includes(q) && !mod.includes(q)) return false;
   return true;
+}
+
+/* ══════════ 记录级别（写进文件的详细程度） ══════════ */
+/** 下拉选项：直接取 LOG_LEVELS，标签用大写，与左侧筛选胶囊的写法一致。 */
+function logsStoreLevelItems() {
+  return LOG_LEVELS.map((lv) => ({ value: lv, label: lv.toUpperCase() }));
+}
+
+/**
+ * 把落盘级别显示到下拉上；`note` 写进右侧的小提示（保存成功/失败）。
+ * 只在值是 LOG_LEVELS 之一时才覆盖 logsState.storeLevel，避免后端给出
+ * 意料外的字符串后下拉落值失败、退成空白按钮。
+ */
+function logsSetStoreLevel(level, { note } = {}) {
+  const lv = String(level || '').toLowerCase();
+  if (LOG_LEVELS.includes(lv)) logsState.storeLevel = lv;
+  logsSetSelect($('#logs-store-level'), logsState.storeLevel, logsStoreLevelItems());
+  const saved = $('#logs-store-saved');
+  if (saved && note !== undefined) saved.textContent = note;
+}
+
+/** 打开日志页时回填：GET /api/logs 顺带返回配置里的 level（顺手清掉上次的「已保存」）。 */
+async function logsLoadStoreLevel() {
+  try {
+    const data = await api('/api/logs?limit=1');
+    logsSetStoreLevel(data && data.level, { note: '' });
+  } catch {
+    // 读不到就保留界面上的旧值：列表本身还能用，不为这一个控件整页报错。
+  }
 }
 
 /* ══════════ 请求参数 ══════════ */
@@ -300,8 +335,8 @@ function logsDateItems() {
 /* ══════════ 渲染 ══════════ */
 function logsShellHtml() {
   return `
-    <div class="logs-toolbar" role="toolbar" aria-label="日志筛选">
-      <div class="logs-lv-group" role="group" aria-label="日志级别">
+    <div class="logs-toolbar" role="toolbar" aria-label="日志工具栏">
+      <div class="logs-lv-group" role="group" aria-label="筛选显示的日志级别">
         ${LOG_LEVELS.map((lv) => `<label class="logs-lvchk" data-lv="${lv}">`
           + `<input type="checkbox" data-log-level="${lv}"${logsState.level.has(lv) ? ' checked' : ''}>`
           + `<span>${lv.toUpperCase()}</span></label>`).join('')}
@@ -324,6 +359,15 @@ function logsShellHtml() {
       </label>
       <button class="btn btn-small" type="button" id="logs-refresh" title="重新拉取当前筛选下的日志">刷新</button>
       <button class="btn btn-small" type="button" id="logs-download" title="下载所选日期的完整日志文件">下载</button>
+      <!-- 「记录级别」与左边那排筛选勾选框是两件事：勾选框只筛当前列表显示什么，
+           这个决定哪些日志会写进 data/logs/（以及历史翻页能翻到什么）。
+           单独放在工具栏右端，用竖线隔开，避免被当成第五个筛选勾选框。 -->
+      <span class="logs-store-lv">
+        <label class="logs-ctl-t" for="logs-store-level">记录级别</label>
+        <select id="logs-store-level" title="只有达到这一级的日志才会写进 data/logs/；选得越详细，文件越大"></select>
+        <span class="logs-store-hint">低于这一级的日志不会落盘，也不会进历史翻页</span>
+        <span class="logs-store-saved" id="logs-store-saved" role="status" aria-live="polite"></span>
+      </span>
     </div>
     <div class="logs-meta">
       <span id="logs-meta" class="logs-meta-text">正在读取日志…</span>
@@ -560,6 +604,7 @@ function logsSyncToolbar() {
   const modSel = $('#logs-module');
   if (modSel) modSel.title = logsState.moduleStatsNote;
   logsSetSelect($('#logs-date'), logsState.date, logsDateItems());
+  logsSetSelect($('#logs-store-level'), logsState.storeLevel, logsStoreLevelItems());
   const follow = $('#logs-follow');
   if (follow) follow.checked = logsState.follow;
   logsRenderMeta();
@@ -882,6 +927,25 @@ function logsBindToolbar(box) {
 
   $('#logs-refresh', box)?.addEventListener('click', () => logsReload({ refreshStats: true }));
   $('#logs-download', box)?.addEventListener('click', () => logsDownload());
+
+  // 记录级别：改完立刻写回后端（POST /api/logs/level），并回显保存结果。
+  const storeSel = $('#logs-store-level', box);
+  if (storeSel) {
+    storeSel.addEventListener('change', async () => {
+      storeSel.disabled = true;   // 自绘下拉在 click 时会检查 sel.disabled，挡得住重复提交
+      const value = storeSel.value;
+      try {
+        const r = await api('/api/logs/level', { method: 'POST', body: JSON.stringify({ level: value }) });
+        logsSetStoreLevel((r && r.level) || value, { note: '已保存，立即生效 ✓' });
+      } catch (e) {
+        // 保存失败：退回后端仍在用的值，别让界面显示一个没生效的级别
+        logsSetStoreLevel(logsState.storeLevel, { note: `保存失败：${e.message}` });
+      } finally {
+        storeSel.disabled = false;
+      }
+    });
+  }
+
   $('#logs-newbtn', box)?.addEventListener('click', () => {
     logsState.follow = true;
     if (follow) follow.checked = true;
@@ -935,6 +999,7 @@ async function loadLogsPage() {
     logsBindToolbar(box);
     logsState.mounted = true;
   }
-  // 每次进页都重新拉：离开期间实时事件不订阅，屏幕上那份必然是旧的
-  await logsReload();
+  // 每次进页都重新拉：离开期间实时事件不订阅，屏幕上那份必然是旧的。
+  // 记录级别也一起回填（它可能被配置导入等方式改过），与列表首屏并行取。
+  await Promise.all([logsReload(), logsLoadStoreLevel()]);
 }
