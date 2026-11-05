@@ -15,27 +15,22 @@ import { safeFetch } from '../../src/safe-fetch.js';
 
 // 常量与标签 Set 在 config.js，这里只导入本文件直接使用的
 import {
-  MAX_COUNT, NSFW_TRIGGER_RE, MULTI_PERSON_TAGS, MALE_CHARACTER_TAGS, HORROR_TAGS,
+  MAX_COUNT, NSFW_TRIGGER_RE,
   DEFAULT_SETU_BASE_URL, SETU_IMAGE_SIZE, SETU_NSFW_SORT, SETU_SFW_SORT, SETU_REQUEST_TIMEOUT_MS,
   FETCH_ROUNDS
 } from './config.js';
+// 内容分级只从全局派生表读（全项目唯一的档位定义处）
+import { ratingRule } from '../../src/content-rating.js';
 
 // 响应解析是纯函数（可独立单测），见 response.js
 import { extractImageUrls } from './response.js';
 // 日志出口（setup 时由 index.js 注入核心 logger）
 import { log, warn, error } from './log.js';
 
-// 过滤函数在 filters.js（纯函数，可独立单元测试）
-import {
-  isMultiPersonIllust, isMultiCharacterIllust, isPairingKeyword,
-  buildSearchWord, hasQualityTag, isMaleCharacterIllust, isHorrorIllust,
-  isR18Illust, isR15Illust, isR0Only, illustScore
-} from './filters.js';
-export {
-  isMultiPersonIllust, isMultiCharacterIllust, isPairingKeyword,
-  buildSearchWord, hasQualityTag, isMaleCharacterIllust, isHorrorIllust,
-  isR18Illust, isR15Illust, isR0Only, illustScore
-};
+// 过滤函数在 filters.js（纯函数，可独立单元测试）。
+// 本文件只用到 isPairingKeyword；其余过滤函数由 pixiv.js / filters.js 自己消费，
+// 不再从这里转手导出（旧的一组 re-export 全仓零调用方，已删除）。
+import { isPairingKeyword } from './filters.js';
 
 // 下载基础设施在 downloader.js
 import {
@@ -100,6 +95,18 @@ export function normalizeCategory(value) {
 
 export function categoryLabel(category) {
   return category === 'nsfw' ? '色图' : '无色图';
+}
+
+/**
+ * 分类不可发时的说明。色图被拒的根因是全局内容分级不放行 R-18，
+ * 所以文案必须指向真实存在的设置项，而不是含糊的「功能已关闭」。
+ */
+function categoryBlockedMessage(category, cfg) {
+  if (category === 'nsfw') {
+    return `当前内容分级（${cfg.contentRating ?? 'strict'}）不放行 R-18 内容，色图请求已跳过。`
+      + '可在 设置 → 聊天与权限 → 内容分级（先点「📨 发送与限速」）里调整。';
+  }
+  return `${categoryLabel(category)}功能已关闭`;
 }
 
 /** sort 参数只对 cnmiw（MirlKoi）这类接口有意义，lolicon v2 会忽略它。 */
@@ -277,7 +284,7 @@ async function runSetuRequestGuarded({ cfg, chatKey, requested, keyword, source 
   if (category === null) return { outcome: 'blocked', message: resolved.reject || '' };
 
   const allow = category === 'nsfw' ? cfg.send?.nsfwAllowed : cfg.send?.sfwAllowed;
-  if (allow === false) return { outcome: 'disabled', message: `${categoryLabel(category)}功能已关闭` };
+  if (allow === false) return { outcome: 'disabled', message: categoryBlockedMessage(category, cfg) };
 
   const limit = clampCount(cfg.send?.count);
   const label = categoryLabel(category);
@@ -320,13 +327,15 @@ async function runSetuRequestGuarded({ cfg, chatKey, requested, keyword, source 
  * 关键词搜索 0 条时的诊断：复用 lookup_setu_tag 的查询逻辑，区分不同的原因。
  *
  * 0 条本身有多种原因，处理方式完全不一样，模型拿不到区分就会判断错。
- * 关键词搜图不做 R-18 过滤，所以内容层面只剩「没被收录 / 请求失败」两种；
- * soloOnly 开启时多一档「标签有内容但都是双人/多人图」，
- * femaleOnly 开启时多一档「都含男性角色」，noHorror 同理。
+ * ③ 起的原因由搜索路径返回的 funnel 直接给出：每一级过滤实际留下多少条都是
+ * 实测数字，比按「配置开关是否开启」猜准确得多（旧实现用 OR 判断，
+ * 会对「实际没过滤」的情况误报）。funnel 为 null（缓存命中 / 请求失败）时
+ * 只能给出通用说明。
+ *
  * 不要笼统提示「可检查 setu.booru.tagMap」：tagMap 命中恰恰说明映射没错，
  * 照那个提示去改只会越改越乱。
  */
-export async function diagnoseEmptyResult(cfg, tags, category, lookup = lookupBooruTag, soloOnly = false, femaleOnly = false) {
+export async function diagnoseEmptyResult(cfg, tags, category, lookup = lookupBooruTag, soloOnly = false, femaleOnly = false, funnel = null) {
   const probe = await lookup(cfg, tags, category);
 
   // ① 请求本身失败（代理没开、图库不可用）：不是内容问题，重试可能有救
@@ -345,73 +354,64 @@ export async function diagnoseEmptyResult(cfg, tags, category, lookup = lookupBo
     };
   }
 
-  // ③ soloOnly 开启：有内容但都是双人/多人图。先看样本里是否真有双人/多人标签，不盲猜。
-  if (soloOnly) {
-    // 用 config.js 的 MULTI_PERSON_TAGS：局部副本会遮蔽它，且容易漏条目
-    const multiInSample = (probe.tags || []).filter((t) => MULTI_PERSON_TAGS.has(String(t).trim().toLowerCase()));
-    if (multiInSample.length > 0) {
+  // ③ 漏斗：按过滤顺序找第一个把候选滤空的那一级
+  if (funnel && funnel.raw > 0) {
+    const chain = `原始 ${funnel.raw} 条 → solo 后 ${funnel.afterSolo} → 女角色后 ${funnel.afterFemale} → 恐怖内容后 ${funnel.afterHorror} → R-18 后 ${funnel.afterR18} → R-15 后 ${funnel.afterR15}`;
+    if (soloOnly && funnel.afterSolo === 0) {
       return {
         message: `「${tags}」只搜到双人/多人图，没有单人图，换个关键词或关掉「只发单人图」试试～`,
-        tip: `这个标签在图库里有内容，样本里确实有双人/多人标签（${multiInSample.join('、')}），被单人图过滤（soloOnly）滤掉了。可以让用户换个只画单人角色的关键词，或者明确要双人/CP 图（用 ×、&、and 等配对写法会自动豁免单人过滤）。不要改 tagMap。`
+        tip: `这个标签在图库里有内容，但被单人图过滤（soloOnly）全部滤掉了（${chain}）。可以让用户换个只画单人角色的关键词，或者明确要双人/CP 图（用 ×、&、and 等配对写法会自动豁免单人过滤）。不要改 tagMap。`
       };
     }
-    // ③ 不成立：样本里没有双人/多人标签，过滤不是原因，落到④
-    log(`诊断：「${tags}」有内容但样本无双人标签，soloOnly 不是过滤原因`);
-  }
-
-  // ④ femaleOnly 开启：有内容但都含男性角色
-  // 实际验证：样本里是否真的有男性角色标签（不盲猜）
-  if (femaleOnly) {
-    const maleInSample = (probe.tags || []).filter((t) => MALE_CHARACTER_TAGS.has(String(t).trim().toLowerCase()));
-    if (maleInSample.length > 0) {
+    if (femaleOnly && funnel.afterFemale === 0) {
       return {
         message: `「${tags}」只搜到含男性角色的图，被「只搜女角色」过滤掉了，换个关键词或关掉该选项试试～`,
-        tip: `这个标签在图库里有内容，样本里确实有男性角色标签（${maleInSample.join('、')}），被女角色过滤（femaleOnly）滤掉了。两种可能：一是这个角色本身就是男性角色（那就只能关掉「只搜女角色」才能发出来），二是这个标签下的图大多是双人/CP 图。不要改 tagMap。`
+        tip: `这个标签在图库里有内容，但被女角色过滤（femaleOnly）全部滤掉了（${chain}）。两种可能：一是这个角色本身就是男性角色（那就只能关掉「只搜女角色」才能发出来），二是这个标签下的图大多是双人/CP 图。不要改 tagMap。`
       };
     }
-    // ④ 不成立：样本里没有男性角色标签，过滤不是原因，落到④.5
-    log(`诊断：「${tags}」有内容但样本无男性标签，femaleOnly 不是过滤原因`);
-  }
-
-  // ④.5 noHorror 开启：有内容但都含恐怖/血腥标签
-  // 实际验证：样本里是否真的有恐怖/血腥标签（不盲猜）
-  const noHorror = cfg.booru?.noHorror !== false;
-  if (noHorror) {
-    const horrorInSample = (probe.tags || []).filter((t) => HORROR_TAGS.has(String(t).trim().toLowerCase()));
-    if (horrorInSample.length > 0) {
+    const noHorror = cfg.booru?.noHorror !== false;
+    if (noHorror && funnel.afterHorror === 0) {
       return {
         message: `「${tags}」搜到的图都是恐怖/血腥内容，被过滤掉了，换个关键词或关掉「过滤恐怖内容」试试～`,
-        tip: `这个标签在图库里有内容，样本里确实有恐怖/血腥标签（${horrorInSample.join('、')}），被恐怖内容过滤（noHorror）滤掉了。这个标签下的图大多是恐怖/血腥内容，不适合群聊发送。不要改 tagMap。`
+        tip: `这个标签在图库里有内容，但被恐怖内容过滤（noHorror）全部滤掉了（${chain}）。这个标签下的图大多是恐怖/血腥内容，不适合群聊发送。不要改 tagMap。`
       };
     }
-    log(`诊断：「${tags}」有内容但样本无恐怖标签，noHorror 不是过滤原因`);
+    // 内容分级：只有当前档位真的会拦这一级、且这一级把候选滤空时才是原因
+    const policy = cfg.contentRating ?? 'strict';
+    const rule = ratingRule(policy);
+    const ratingHint = '这是全局设置，对所有技能生效；当前档位越严，能发的内容越少。'
+      + '可在 设置 → 聊天与权限 → 内容分级（先点「📨 发送与限速」）里调整。';
+    if (rule.blockR18 && funnel.afterR18 === 0) {
+      return {
+        message: `「${tags}」搜到的图全被 R-18 过滤拦下了（当前内容分级：${policy}），暂时发不了。换个关键词，或在 设置 → 聊天与权限 → 内容分级 里放宽试试～`,
+        tip: `这个标签在图库里有内容，但被 R-18 过滤全部滤掉了（${chain}）。${ratingHint}`
+      };
+    }
+    if (rule.blockR15 && funnel.afterR15 === 0) {
+      return {
+        message: `「${tags}」搜到的图全被 R-15 过滤拦下了（当前内容分级：${policy}），暂时发不了。换个关键词，或在 设置 → 聊天与权限 → 内容分级 里放宽试试～`,
+        tip: `这个标签在图库里有内容，但被 R-15 过滤全部滤掉了（${chain}）。Pixiv 的 sanity_level≥2 即属 R-15，绝大多数图都在这一档，所以 strict 档会滤掉几乎全部内容。${ratingHint}`
+      };
+    }
+    if (rule.onlyR0 && funnel.afterR0 === 0) {
+      return {
+        message: `「${tags}」搜到的图全被「仅 R-0」过滤拦下了（当前内容分级：${policy}），暂时发不了。换个关键词，或在 设置 → 聊天与权限 → 内容分级 里放宽试试～`,
+        tip: `这个标签在图库里有内容，但被「仅 R-0」白名单全部滤掉了（${chain} → R-0 后 ${funnel.afterR0}）。${ratingHint}`
+      };
+    }
   }
 
-  // ⑤ R-18/R-15 过滤：nsfwAllowed=false 时过滤 R-18，strictSfw=true 时额外过滤 R-15
-  // probe 不含 sanity_level 数据，无法精确验证，但配置开启时这是最可能的原因
-  const nsfwOff = cfg.send?.nsfwAllowed === false;
-  const strictSfw = cfg.booru?.strictSfw !== false;
-  if (nsfwOff || strictSfw) {
-    const r18Tip = nsfwOff
-      ? (strictSfw ? 'R-18 + R-15 过滤（strictSfw）' : 'R-18 过滤（nsfwAllowed=false）')
-      : 'R-15 过滤（strictSfw=true）';
-    return {
-      message: `「${tags}」搜到的图被「${r18Tip}」过滤了，暂时发不了。换个关键词，或者在配置里关掉 strictSfw/nsfwAllowed 限制试试～`,
-      tip: `这个标签在图库里有内容，但所有候选图的分级都是 R-15 或更高（sanity_level≥2），被 R-18/R-15 过滤滤掉了。大多数 Pixiv 图片的 sanity_level≥2（R-15），strictSfw=true 会过滤掉几乎所有内容。建议把 strictSfw 设为 false（只过滤 R-18 不过滤 R-15），或者把 nsfwAllowed 设为 true。`
-    };
-  }
-
-  // ⑥ 有内容但没发出来，原因不明（去重池 / 下载失败 / 其他过滤）
+  // ④ 有内容但没发出来，原因不明（去重池 / 下载失败 / 其它过滤）
   return {
     message: `「${tags}」搜到的图暂时发不了（可能刚发过、下载失败、或没通过过滤），换个关键词试试～`,
-    tip: '图库里有内容，但候选图没能成功发送。可能原因：去重池（刚发过）、下载失败（原图超时/防盗链）、R-18 过滤（nsfwAllowed=false 时跳过成人内容）、或没通过质量/尺寸过滤。换个关键词试试，或者等一会儿再试。不要反复重试同一个关键词。'
+    tip: '图库里有内容，但候选图没能成功发送。可能原因：去重池（刚发过）、下载失败（原图超时/防盗链）、或没通过质量/尺寸过滤。换个关键词试试，或者等一会儿再试。不要反复重试同一个关键词。'
   };
 }
 
 /**
  * 关键词搜图（Pixiv 标签搜索，经 PXVE 社区代理）。
  * 与随机池路径共用 nsfwFilter / chatFilter / 冷却 / 去重。
- * nsfwAllowed=false 时过滤 R-18 / R-18G 内容。
+ * 内容分级按全局策略（security.contentRating）在取候选时过滤，见 pixiv.js。
  *
  * 中文关键词原样搜索（图库支持中文标签），不做自动翻译。
  * 原样搜索 0 条时可选翻译兜底重试（translateOnEmpty=true，默认开）：
@@ -441,7 +441,7 @@ async function runKeywordSearch({ cfg, source, chatKey, keyword, wanted }) {
   const category = resolved.category;
   if (category === null) return { outcome: 'blocked', message: resolved.reject || '' };
   const allow = category === 'nsfw' ? cfg.send?.nsfwAllowed : cfg.send?.sfwAllowed;
-  if (allow === false) return { outcome: 'disabled', message: `${categoryLabel(category)}功能已关闭` };
+  if (allow === false) return { outcome: 'disabled', message: categoryBlockedMessage(category, cfg) };
 
   const limit = clampCount(cfg.send?.count);
   const minBytes = Number(booru.minImageBytes) > 0 ? Math.trunc(Number(booru.minImageBytes)) : 81920;
@@ -463,24 +463,27 @@ async function runKeywordSearch({ cfg, source, chatKey, keyword, wanted }) {
   // 单角色过滤：图片含 2 个以上角色名标签时过滤。配对/CP 关键词自动豁免。
   const singleCharacterOnly = booru.singleCharacterOnly !== false && !isPairingKeyword(keyword);
 
-  // 不过滤 R-18，直接全量取候选 URL（soloOnly 时带 solo 过滤）
+  // 取候选 URL：内容分级过滤在 fetchBooruCandidates → fetchBooruPage 内部完成，
+  // 这里拿到的是「已按全局分级筛过」的 URL、每张图的分级声明与本次过滤漏斗。
   let searchTag = tags;   // 实际用于搜索的标签（翻译兜底后会更新）
-  let urls = await fetchBooruCandidates(cfg, source, searchTag, limit, soloOnly, femaleOnly, noHorror, singleCharacterOnly);
+  let result = await fetchBooruCandidates(cfg, source, searchTag, limit, soloOnly, femaleOnly, noHorror, singleCharacterOnly);
 
   // 原样搜索 0 条 → 如果是中文且开启翻译兜底，试一次日文标签。
   // 条件 tags === keyword 排除了 tagMap 已映射的情况（用户显式配了映射就不该被覆盖）。
-  if (!urls.length && booru.translateOnEmpty !== false && hasCJK(keyword) && tags === keyword) {
+  if (!result.urls.length && booru.translateOnEmpty !== false && hasCJK(keyword) && tags === keyword) {
     const translated = await translateTag(cfg, keyword);
     if (translated && translated !== tags) {
       log(`「${keyword}」原样搜索 0 条，翻译为「${translated}」重试`);
       searchTag = translated;
-      urls = await fetchBooruCandidates(cfg, source, searchTag, limit, soloOnly, femaleOnly, noHorror, singleCharacterOnly);
+      result = await fetchBooruCandidates(cfg, source, searchTag, limit, soloOnly, femaleOnly, noHorror, singleCharacterOnly);
     }
   }
+  const urls = result.urls;
 
   if (!urls.length) {
-    // 诊断用实际搜索的标签（翻译兜底后是日文标签），不用原始中文标签
-    const diag = await diagnoseEmptyResult(cfg, searchTag, category, lookupBooruTag, soloOnly, femaleOnly);
+    // 诊断用实际搜索的标签（翻译兜底后是日文标签），不用原始中文标签。
+    // funnel 是真实过滤计数，诊断据此定位是哪一级滤空的。
+    const diag = await diagnoseEmptyResult(cfg, searchTag, category, lookupBooruTag, soloOnly, femaleOnly, result.funnel);
     log(`「${keyword}」搜索 0 条（搜索标签=「${searchTag}」），诊断=${diag.message}`);
     return { outcome: 'no-image', keyword, message: diag.message, tip: diag.tip };
   }
@@ -494,7 +497,8 @@ async function runKeywordSearch({ cfg, source, chatKey, keyword, wanted }) {
     (got) => got.bytes >= minBytes,
     (url) => source.remember(url, cfg.send?.dedupMaxSize)
   );
-  const images = picked.map((p) => p.got);
+  // 分级声明跟着图走：下载器不知道图片分级，只有搜索阶段见过 Pixiv 元数据
+  const images = picked.map((p) => ({ ...p.got, rating: result.ratings.get(p.url) }));
   log(`「${keyword}」下载完成：候选=${urls.length} 成功=${images.length} 目标=${limit}`);
   // 记录已发送图片的 Pixiv 作品 ID，方便用户排查标签
   const sentIds = picked.map((p) => pixivArtworkId(p.url)).filter(Boolean);
@@ -505,11 +509,10 @@ async function runKeywordSearch({ cfg, source, chatKey, keyword, wanted }) {
 
   source.markSent();
   const downgraded = category !== wanted;
-  const nsfwOff = cfg.send?.nsfwAllowed === false;
-  const strictSfw = cfg.booru?.strictSfw !== false;
-  const r18Tip = nsfwOff
-    ? (strictSfw ? '，已过滤 R-18/R-18G/R-15 内容' : '，已过滤 R-18/R-18G 内容')
-    : '，未过滤 R-18 内容';
+  const rule = ratingRule(cfg.contentRating);
+  const r18Tip = !rule.blockR18
+    ? '，未过滤 R-18 内容'
+    : (rule.blockR15 ? '，已过滤 R-18/R-18G/R-15 内容' : '，已过滤 R-18/R-18G 内容');
   const tip = downgraded
     ? '（用户要的是色图但本会话不允许，可以顺口提一句本会话限制）'
     : `（关键词搜图来自 Pixiv 标签库${r18Tip}）`

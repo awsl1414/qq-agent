@@ -1,6 +1,7 @@
 // setu 过滤函数（从 setu.js 提取，纯函数、零副作用、可独立单元测试）。
-// 只依赖 config.js 的标签 Set 数据，不依赖任何 I/O 或模块状态。
+// 只依赖 config.js 的标签 Set 数据与全局分级派生表，不依赖任何 I/O 或模块状态。
 import { MULTI_PERSON_TAGS, GENERIC_TAGS, MALE_CHARACTER_TAGS, HORROR_TAGS, QUALITY_TAGS } from './config.js';
+import { ratingRule } from '../../src/content-rating.js';
 
 /** 帖子是否双人/多人图（按作品标签判定，soloOnly 时跳过这些）。 */
 export function isMultiPersonIllust(illust) {
@@ -118,4 +119,38 @@ export function illustScore(illust) {
   const names = new Set((illust?.tags || []).map((t) => String(t?.name || '').trim().toLowerCase()));
   for (const t of QUALITY_TAGS) if (names.has(t)) score += 3;
   return score;
+}
+
+/**
+ * 单张作品的内容分级声明（发送时交给 core 闸门）。
+ * 判定顺序必须从严到宽：R-18 命中即 r18，其次 R-15，其余按 R-0/safe。
+ */
+export function illustRating(illust) {
+  if (isR18Illust(illust)) return 'r18';
+  if (isR15Illust(illust)) return 'r15';
+  return 'safe';
+}
+
+/**
+ * 按全局内容分级过滤候选，并返回每一步的漏斗计数。
+ *
+ * 这是全项目唯一的候选分级过滤实现：搜索路径用它筛 URL，诊断也用它的 funnel
+ * 判断「到底是哪一步把候选滤空了」，不再靠标签样本猜。
+ * 未启用的档位不执行过滤，对应计数沿用上一步（漏斗因此始终可读成
+ * 「这一档实际滤掉了多少」）。
+ *
+ * @param {Array} illusts 候选作品
+ * @param {string} rating 策略档位（all / r18 / strict / r0）
+ * @returns {{ illusts: Array, funnel: { afterR18: number, afterR15: number, afterR0: number } }}
+ */
+export function applyContentPolicy(illusts, rating) {
+  const rule = ratingRule(rating);
+  let list = Array.isArray(illusts) ? illusts : [];
+  if (rule.blockR18) list = list.filter((il) => !isR18Illust(il));
+  const afterR18 = list.length;
+  if (rule.blockR15) list = list.filter((il) => !isR15Illust(il));
+  const afterR15 = list.length;
+  if (rule.onlyR0) list = list.filter((il) => isR0Only(il));
+  const afterR0 = list.length;
+  return { illusts: list, funnel: { afterR18, afterR15, afterR0 } };
 }

@@ -199,6 +199,17 @@ export const DEFAULT_CONFIG = {
       // 浏览锁定站点内的图可以跳过预览（站内图源可信，省一轮）
       skipPreviewForLockedHosts: true
     },
+    // ── 出站图片的内容分级 ──
+    // 全局唯一，所有技能共享（含第三方扩展）。档位与派生规则见 src/content-rating.js
+    // （ratingRule 是全项目唯一的定义处，这里只存档位名）。
+    //   all    全部放行
+    //   r18    只拦 R-18 / R-18G
+    //   strict 拦 R-18 + R-15（默认）
+    //   r0     仅 R-0
+    // 为什么与 imageSend 分开：imageSend 管「能不能发 / 怎么发（预览、限量、体积）」，
+    // contentRating 管「发什么级别的内容」—— 两条不同的轴，将来表情包、视频要分级时
+    // 可以复用它，不必再开一个键。
+    contentRating: 'strict',
     // ── 浏览锁定 ──
     // 把"机器人能访问哪些域名"收成白名单。开启后 fetch 与发图**逐跳**校验
     // （含重定向目标），不在清单内一律拒绝。
@@ -666,7 +677,7 @@ export function loadConfig() {
     let text = fs.readFileSync(CONFIG_FILE, 'utf8');
     if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
     const parsed = JSON.parse(text);
-    const cfg = deepMerge(DEFAULT_CONFIG, migrateLegacySkills(migrateSnowlumaToProtocol(parsed)));
+    const cfg = deepMerge(DEFAULT_CONFIG, migrateContentRating(migrateLegacySkills(migrateSnowlumaToProtocol(parsed))));
     // 内置人设改版迁移：群友反馈旧版默认人设"怼人太厉害"，PERSONAS.xiaojingyu
     // 已整体重写（攻击性大降、长度减半），老配置里存的旧版全文在这里静默换成新版。
     // 必须精确匹配旧文本才替换：用户基于旧卡自己改过/微调过的不动，个性化修改
@@ -782,8 +793,65 @@ export function migrateSnowlumaToProtocol(parsed) {
   return out;
 }
 
-let currentConfig = null;
+/** 迁移读取旧分级键的扩展 id（与 skills/ 下的目录名一致）。 */
+const CONTENT_RATING_SKILL = 'random-image';
 
+/**
+ * 旧配置迁移：把 random-image 私有的分级键折算成全局 `security.contentRating`。
+ *
+ * 旧版把同一件事拆成三个键散落在技能配置里，其中两个用户根本看不见：
+ *   skills['random-image'].booru.onlyR0 === true → 'r0'
+ *   skills['random-image'].safeMode === false    → 'all'
+ *   skills['random-image'].booru.strictSfw === false → 'r18'
+ *   其余（safeMode 为 true 或未设）              → 保持默认 'strict'
+ *
+ * 幂等：只在用户没显式设过 security.contentRating 时推断档位（显式值优先，
+ * 不覆盖用户的选择）。三个旧键无论是否参与推断都会被清除 —— 迁移完成后
+ * 任何代码再读旧键都会形成第二套契约。用户数据迁移属于保留兼容代码的正当场景，
+ * 但兼容只存在于这一处。
+ */
+export function migrateContentRating(parsed) {
+  if (!parsed || typeof parsed !== 'object') return parsed;
+  const skills = parsed.skills && typeof parsed.skills === 'object' && !Array.isArray(parsed.skills)
+    ? parsed.skills
+    : null;
+  const skillCfg = skills?.[CONTENT_RATING_SKILL];
+  if (!skillCfg || typeof skillCfg !== 'object' || Array.isArray(skillCfg)) return parsed;
+
+  const booru = skillCfg.booru && typeof skillCfg.booru === 'object' && !Array.isArray(skillCfg.booru)
+    ? skillCfg.booru
+    : null;
+  const hasLegacy = 'safeMode' in skillCfg || (booru !== null && ('strictSfw' in booru || 'onlyR0' in booru));
+  if (!hasLegacy) return parsed;
+
+  const out = { ...parsed };
+  const security = out.security && typeof out.security === 'object' && !Array.isArray(out.security)
+    ? out.security
+    : null;
+
+  if (!security || !('contentRating' in security)) {
+    let rating = null;
+    if (booru?.onlyR0 === true) rating = 'r0';
+    else if (skillCfg.safeMode === false) rating = 'all';
+    else if (booru?.strictSfw === false) rating = 'r18';
+    // rating 为 null 时保持默认 strict，不写盘（deepMerge 会补上默认值）
+    if (rating) out.security = { ...(security || {}), contentRating: rating };
+  }
+
+  // 清除旧键：迁移完成后不得再有第二处读取点
+  const nextSkill = { ...skillCfg };
+  delete nextSkill.safeMode;
+  if (booru !== null) {
+    const nextBooru = { ...booru };
+    delete nextBooru.strictSfw;
+    delete nextBooru.onlyR0;
+    nextSkill.booru = nextBooru;
+  }
+  out.skills = { ...skills, [CONTENT_RATING_SKILL]: nextSkill };
+  return out;
+}
+
+let currentConfig = null;
 /** 取当前生效配置（未初始化时从磁盘读）。 */
 export function getConfig() {
   if (!currentConfig) currentConfig = loadConfig();

@@ -123,12 +123,21 @@ test('嵌套 api.baseUrl 不再作为配置来源，扁平键是唯一入口', (
     DEFAULT_SETU_BASE_URL);
 });
 
-test('normalizeConfig：sort 默认值与安全模式映射', () => {
-  const cfg = normalizeConfig({ safeMode: true });
-  assert.equal(cfg.api.nsfwSort, 'CDNsetu');
-  assert.equal(cfg.api.sfwSort, 'CDNcat');
-  assert.equal(cfg.send.nsfwAllowed, false);
-  assert.equal(cfg.nsfwFilter.enabled, true);
+test('normalizeConfig：sort 默认值与内容分级派生', () => {
+  // 分级不再是技能私有配置：色图请求是否放行由全局档位决定（只有 all 档放行 R-18）
+  const strict = normalizeConfig({}, 'strict');
+  assert.equal(strict.api.nsfwSort, 'CDNsetu');
+  assert.equal(strict.api.sfwSort, 'CDNcat');
+  assert.equal(strict.contentRating, 'strict');
+  assert.equal(strict.send.nsfwAllowed, false);
+
+  assert.equal(normalizeConfig({}, 'all').send.nsfwAllowed, true);
+  assert.equal(normalizeConfig({}, 'r18').send.nsfwAllowed, false);
+  assert.equal(normalizeConfig({}, 'r0').send.nsfwAllowed, false);
+
+  // 分会话色图白名单只认显式开启（旧版由 safeMode 推导，那个推导从未真正生效）
+  assert.equal(normalizeConfig({}, 'strict').nsfwFilter.enabled, false);
+  assert.equal(normalizeConfig({ nsfwFilter: { enabled: true } }, 'all').nsfwFilter.enabled, true);
 });
 
 // ── provider → 发送层的字段契约 ─────────────────────────────────────────
@@ -182,18 +191,19 @@ test('buildProviderResult：输出 {file, payload}，不是 {url}', async (t) =>
   const file = path.join(dir, 'b.png');
   fs.writeFileSync(file, Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]));
 
-  // downloader 的完整返回值（含 url 之外的字段），映射后只保留发送层认的两个键
+  // downloader 的完整返回值（含 url 之外的字段），映射后只保留发送层认的键；
+  // rating 原样透出，发图时要作为分级声明交给核心闸门。
   const out = buildProviderResult({
     outcome: 'ok',
     images: [
-      { payload: file, file, bytes: 8, mime: 'image/png' },
+      { payload: file, file, bytes: 8, mime: 'image/png', rating: 'r15' },
       { payload: 'base64://QUJD', file: null }
     ]
   });
   assert.equal(out.ok, true);
   assert.deepEqual(out.images, [
-    { file, payload: file },
-    { file: null, payload: 'base64://QUJD' }
+    { file, payload: file, rating: 'r15' },
+    { file: null, payload: 'base64://QUJD', rating: undefined }
   ]);
   assert.equal('url' in out.images[0], false, 'provider 不能输出 url 键（toSendable 不读它）');
 

@@ -6,7 +6,7 @@ import { fetchWithProxyFallback, sleep } from './downloader.js';
 import { log, warn } from './log.js';
 import {
   buildSearchWord, isMultiPersonIllust, isMaleCharacterIllust, isHorrorIllust,
-  isR18Illust, isR15Illust, isR0Only, hasQualityTag, illustScore, isMultiCharacterIllust
+  hasQualityTag, illustScore, isMultiCharacterIllust, applyContentPolicy, illustRating
 } from './filters.js';
 import {
   PIXIV_HEADERS, PIXIV_SEARCH_MAX_BYTES, SEARCH_CACHE_TTL_MS, SEARCH_CACHE_MAX,
@@ -237,9 +237,13 @@ export async function lookupBooruTag(cfg, query, category) {
 // ── Booru 页面抓取 ──────────────────────────────────────────────────────────
 
 /**
- * 抓一页 Pixiv 搜索结果，返回按质量排序的原图 URL 列表。失败返回 []。
+ * 抓一页 Pixiv 搜索结果，返回按质量排序的原图 URL 列表 + 每张图的分级声明 +
+ * 过滤漏斗计数。请求失败返回空页（funnel 为 null，表示「没走到过滤这一步」）。
+ *
+ * @returns {{ urls: string[], ratings: Map<string, 'safe'|'r15'|'r18'>, funnel: object|null }}
  */
 export async function fetchBooruPage(cfg, tags, limit, offset, soloOnly, femaleOnly, noHorror, singleCharacterOnly) {
+  const emptyPage = () => ({ urls: [], ratings: new Map(), funnel: null });
   const { base } = pixivCfg(cfg.booru);
   const page = Math.floor(Math.max(0, offset) / PIXIV_PAGE_SIZE) + 1;
   const sortOrder = cfg.booru?.sortOrder || 'popular';
@@ -262,11 +266,11 @@ export async function fetchBooruPage(cfg, tags, limit, offset, soloOnly, femaleO
         log(`「${searchWord}」page=${page}：order=${sortOrder} 失败，去掉 order 重试成功`);
       } catch (error2) {
         warn(`Pixiv 搜索失败「${searchWord}」page=${page}: ${error?.message ?? error}`);
-        return [];
+        return emptyPage();
       }
     } else {
       warn(`Pixiv 搜索失败「${searchWord}」page=${page}: ${error?.message ?? error}`);
-      return [];
+      return emptyPage();
     }
   }
   if (!Array.isArray(d.illusts) || !d.illusts.length) {
@@ -301,35 +305,21 @@ export async function fetchBooruPage(cfg, tags, limit, offset, soloOnly, femaleO
     }
   }
   let illusts = Array.isArray(d.illusts) ? d.illusts : [];
-  const rawCount = illusts.length;
+  const funnel = { raw: illusts.length };
   if (soloOnly) illusts = illusts.filter((il) => !isMultiPersonIllust(il));
-  const afterSolo = illusts.length;
+  funnel.afterSolo = illusts.length;
   if (femaleOnly) illusts = illusts.filter((il) => !isMaleCharacterIllust(il));
-  const afterFemale = illusts.length;
+  funnel.afterFemale = illusts.length;
   if (noHorror) illusts = illusts.filter((il) => !isHorrorIllust(il));
-  const afterHorror = illusts.length;
-  const nsfwOff = cfg.send?.nsfwAllowed === false;
-  if (nsfwOff) {
-    illusts = illusts.filter((il) => !isR18Illust(il));
-    const afterR18 = illusts.length;
-    if (cfg.booru?.strictSfw !== false) {
-      illusts = illusts.filter((il) => !isR15Illust(il));
-      const afterR15 = illusts.length;
-      if (rawCount > 0) {
-        log(`搜索「${searchWord}」page=${page}: 原始=${rawCount} → solo后=${afterSolo} → female后=${afterFemale} → horror后=${afterHorror} → r18后=${afterR18} → r15后=${afterR15}`);
-      }
-    } else if (rawCount > 0) {
-      log(`搜索「${searchWord}」page=${page}: 原始=${rawCount} → solo后=${afterSolo} → female后=${afterFemale} → horror后=${afterHorror} → r18后=${afterR18}`);
-    }
-  } else if (rawCount > 0) {
-    log(`搜索「${searchWord}」page=${page}: 原始=${rawCount} → solo后=${afterSolo} → female后=${afterFemale} → horror后=${afterHorror}`);
-  }
-  if (cfg.booru?.onlyR0) {
-    illusts = illusts.filter((il) => isR0Only(il));
-    const afterR0 = illusts.length;
-    if (rawCount > 0) {
-      log(`搜索「${searchWord}」page=${page}: R-0白名单后=${afterR0}`);
-    }
+  funnel.afterHorror = illusts.length;
+  // 内容分级过滤只走 applyContentPolicy（全项目唯一的派生与过滤实现），
+  // 本文件不再自己判断 R-18 / R-15 / R-0。
+  const policy = applyContentPolicy(illusts, cfg.contentRating);
+  illusts = policy.illusts;
+  Object.assign(funnel, policy.funnel);
+  if (funnel.raw > 0) {
+    const r0 = policy.funnel.afterR0 !== policy.funnel.afterR15 ? ` → r0后=${policy.funnel.afterR0}` : '';
+    log(`搜索「${searchWord}」page=${page}: 原始=${funnel.raw} → solo后=${funnel.afterSolo} → female后=${funnel.afterFemale} → horror后=${funnel.afterHorror} → r18后=${funnel.afterR18} → r15后=${funnel.afterR15}${r0}（分级=${cfg.contentRating ?? 'strict'}）`);
   }
   const blockedTags = Array.isArray(cfg.booru?.blockedTags) ? cfg.booru.blockedTags : [];
   if (blockedTags.length > 0) {
@@ -340,7 +330,7 @@ export async function fetchBooruPage(cfg, tags, limit, offset, soloOnly, femaleO
       return true;
     });
     const afterBlocked = illusts.length;
-    if (rawCount > 0) {
+    if (funnel.raw > 0) {
       log(`搜索「${searchWord}」page=${page}: 自定义屏蔽标签后=${afterBlocked}`);
     }
   }
@@ -348,14 +338,14 @@ export async function fetchBooruPage(cfg, tags, limit, offset, soloOnly, femaleO
   if (qualityTags) {
     illusts = illusts.filter((il) => hasQualityTag(il, qualityTags));
     const afterQuality = illusts.length;
-    if (rawCount > 0) {
+    if (funnel.raw > 0) {
       log(`搜索「${searchWord}」page=${page}: 质量标签后=${afterQuality}`);
     }
   }
   if (singleCharacterOnly) {
     illusts = illusts.filter((il) => !isMultiCharacterIllust(il));
     const afterSingleChar = illusts.length;
-    if (rawCount > 0) {
+    if (funnel.raw > 0) {
       log(`搜索「${searchWord}」page=${page}: 单角色过滤后=${afterSingleChar}`);
     }
   }
@@ -363,13 +353,16 @@ export async function fetchBooruPage(cfg, tags, limit, offset, soloOnly, femaleO
     illusts.sort((a, b) => illustScore(b) - illustScore(a));
   }
   const urls = [];
+  const ratings = new Map();
   for (const il of illusts) {
     const u = pixivImageUrl(il);
     if (!/^https?:\/\//.test(u)) continue;
     urls.push(u);
+    // 分级声明随 URL 一起带下去：发图时交给 core 闸门（ctx.sender.sendImage 的 rating）
+    ratings.set(u, illustRating(il));
     if (urls.length >= limit) break;
   }
-  return urls;
+  return { urls, ratings, funnel };
 }
 
 // ── 候选取图 ──────────────────────────────────────────────────────────
@@ -397,32 +390,56 @@ function randomSearchWord(tags, usedSet) {
 
 /**
  * 候选取图：多抓几页凑够 candidates×want 个 URL，去重后返回。
+ *
+ * 返回 `{ urls, ratings, funnel }`：urls 是 URL 字符串数组，ratings 是
+ * url → 分级声明，funnel 是本次搜索的过滤漏斗（缓存命中时为 null）。
+ * 缓存按分级档位分开存：同一关键词在不同策略下命中的候选本来就不同，
+ * 混用会让放宽档位后仍然拿不到之前被滤掉的图。
  */
 export async function fetchBooruCandidates(cfg, source, tags, want, soloOnly, femaleOnly, noHorror, singleCharacterOnly) {
   const per = Math.max(1, Math.trunc(Number(cfg.booru?.candidates) || 12));
   const need = Math.min(90, per * want);
   const sortOrder = cfg.booru?.sortOrder || 'popular';
+  const rating = cfg.contentRating ?? 'strict';
   const usedTags = new Set();
+  const ratings = new Map();
+  let funnel = null;
 
-  const cacheKey0 = `${tags}|${soloOnly}|${femaleOnly}|${noHorror}|${singleCharacterOnly}|${sortOrder}`;
-  const cached0 = searchCache.get(cacheKey0);
-  if (cached0 && Date.now() - cached0.ts < BOORU_SEARCH_CACHE_TTL) {
-    const fresh0 = cached0.urls.filter((u) => !source.isRecent(u));
-    if (fresh0.length >= need) return fresh0;
-    if (fresh0.length > 0) {
-      log(`「${tags}」原始缓存仅 ${fresh0.length} 条新鲜 URL（需 ${need}），补充搜索...`);
+  const addFunnel = (f) => {
+    if (!f) return;
+    if (!funnel) { funnel = { ...f }; return; }
+    for (const key of Object.keys(f)) funnel[key] = (funnel[key] || 0) + (f[key] || 0);
+  };
+  const cacheKeyFor = (word) => `${rating}|${word}|${soloOnly}|${femaleOnly}|${noHorror}|${singleCharacterOnly}|${sortOrder}`;
+  const toResult = (items) => {
+    const urls = [];
+    for (const it of items) {
+      urls.push(it.url);
+      if (it.rating) ratings.set(it.url, it.rating);
     }
+    return { urls, ratings, funnel };
+  };
+
+  const cacheKey0 = cacheKeyFor(tags);
+  const cached0 = searchCache.get(cacheKey0);
+  const cachedFresh = (cached0 && Date.now() - cached0.ts < BOORU_SEARCH_CACHE_TTL)
+    ? cached0.items.filter((it) => !source.isRecent(it.url))
+    : null;
+  if (cachedFresh && cachedFresh.length > 0 && cachedFresh.length < need) {
+    log(`「${tags}」原始缓存仅 ${cachedFresh.length} 条新鲜 URL（需 ${need}），补充搜索...`);
   }
 
   async function searchWithWord(word) {
     const collected = [];
     const MAX_PAGES = 12;
     for (let page = 1; page <= MAX_PAGES && collected.length < need; page++) {
-      const batch = await fetchBooruPage(cfg, word, PIXIV_PAGE_SIZE, (page - 1) * PIXIV_PAGE_SIZE, soloOnly, femaleOnly, noHorror, singleCharacterOnly);
+      const pageResult = await fetchBooruPage(cfg, word, PIXIV_PAGE_SIZE, (page - 1) * PIXIV_PAGE_SIZE, soloOnly, femaleOnly, noHorror, singleCharacterOnly);
+      addFunnel(pageResult.funnel);
+      const batch = pageResult.urls;
       if (!batch.length) break;
       for (const u of batch) {
-        if (collected.includes(u) || source.isRecent(u)) continue;
-        collected.push(u);
+        if (collected.some((it) => it.url === u) || source.isRecent(u)) continue;
+        collected.push({ url: u, rating: pageResult.ratings.get(u) });
         if (collected.length >= need) break;
       }
       if (batch.length < PIXIV_PAGE_SIZE) break;
@@ -435,34 +452,34 @@ export async function fetchBooruCandidates(cfg, source, tags, want, soloOnly, fe
     collected = await searchWithWord(tags);
     if (collected.length > 0) {
       booruSearchCacheCleanup();
-      searchCache.set(cacheKey0, { urls: collected, ts: Date.now() });
+      searchCache.set(cacheKey0, { items: collected, ts: Date.now() });
     }
   } else {
-    collected = cached0.urls.filter((u) => !source.isRecent(u));
+    collected = cachedFresh ?? [];
   }
-  if (collected.length >= need) return collected;
+  if (collected.length >= need) return toResult(collected);
 
   for (let attempt = 0; attempt < 3 && collected.length < need; attempt++) {
     const word = randomSearchWord(tags, usedTags);
-    const cacheKey = `${word}|${soloOnly}|${femaleOnly}|${noHorror}|${singleCharacterOnly}|${sortOrder}`;
+    const cacheKey = cacheKeyFor(word);
     const cached = searchCache.get(cacheKey);
     if (cached && Date.now() - cached.ts < BOORU_SEARCH_CACHE_TTL) {
-      const fresh = cached.urls.filter((u) => !source.isRecent(u));
+      const fresh = cached.items.filter((it) => !source.isRecent(it.url));
       if (fresh.length > 0) {
         log(`「${tags}」去重耗尽（已有${collected.length}条），附加标签「${word}」缓存命中 ${fresh.length} 条新鲜 URL`);
         // 缓存分支也要与已收集去重：不同搜索词的图高度重叠，重复 URL 会被下载两次，
         // 极端情况同一张图连发（searchWithWord 分支内部有去重，这条分支此前漏了）。
-        for (const u of fresh) if (!collected.includes(u)) collected.push(u);
+        for (const it of fresh) if (!collected.some((c) => c.url === it.url)) collected.push(it);
         continue;
       }
     }
     const more = await searchWithWord(word);
     if (more.length > 0) {
       booruSearchCacheCleanup();
-      searchCache.set(cacheKey, { urls: more, ts: Date.now() });
+      searchCache.set(cacheKey, { items: more, ts: Date.now() });
       log(`「${tags}」去重耗尽（已有${collected.length}条），附加标签「${word}」搜到 ${more.length} 条新鲜 URL`);
-      for (const u of more) if (!collected.includes(u)) collected.push(u);
+      for (const it of more) if (!collected.some((c) => c.url === it.url)) collected.push(it);
     }
   }
-  return collected;
+  return toResult(collected);
 }
