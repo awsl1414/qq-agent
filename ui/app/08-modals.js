@@ -2422,10 +2422,10 @@ async function saveConfig({ quiet = false } = {}) {
 
   const patch = {};
 
-  // ⚠️ 分区已合并：收集条件必须同时认「宿主 id」和「被并掉的旧 id」，
-  //    否则合并页里另一半表单不会被保存（静默丢配置）。
-  //    val()/chk() 都是 null 安全的，多跑一个分支不会误写。
-  if (sec === 'persona' || sec === 'memory') {
+  // 合并页（api+搜索 / persona+记忆 / allow+聊天）按「宿主分区 id」收集字段：被并掉的
+  //    search / memory / chat 已不在菜单里，不会再成为 sec，所以分支只认宿主 id。
+  //    val()/chk() 都是 null 安全的，当前页不存在的输入框回退到 c 里的原值。
+  if (sec === 'persona') {
     patch.memory = {
       ...(c.memory || {}),
       consolidateEnabled: chk('#cfg-mem-consolidate', c.memory?.consolidateEnabled !== false),
@@ -2437,7 +2437,7 @@ async function saveConfig({ quiet = false } = {}) {
     };
   }
 
-  if (sec === 'api' || sec === 'search') {
+  if (sec === 'api') {
     patch.api = {
       ...(c.api || {}),
       // 思考强度/温度/最大工具轮数在「信息发送配置」模态框（openSendConfigModal，
@@ -2505,7 +2505,7 @@ async function saveConfig({ quiet = false } = {}) {
     // 设置页表单没有 #cfg-apikey，也没有任何隐藏 Key 字段需要带出。
   }
 
-  if (sec === 'api' || sec === 'search') {
+  if (sec === 'api') {
     // 搜索 API Key：****** = 保持原 Key 不变；明文或新输入才更新
     const enteredDsKey = val('#cfg-ds-searchkey', '').trim();
     const enteredZhipuKey = val('#cfg-zhipu-key', '').trim();
@@ -2553,7 +2553,7 @@ async function saveConfig({ quiet = false } = {}) {
     };
   }
 
-  if (sec === 'persona' || sec === 'memory') {
+  if (sec === 'persona') {
     // ⚠️ 人设编辑器在弹窗里（#gp-* / #pcp-*），页面上的 #cfg-botname /
     //    #cfg-roletext 等输入框已全部移除。元素不在场时用 state.config 的旧值
     //    整段回传，会在 state.config 尚未跟上弹窗保存结果的那段时间里把刚切换的
@@ -2581,7 +2581,7 @@ async function saveConfig({ quiet = false } = {}) {
     //    开关只控制 UI 形态。
   }
 
-  if (sec === 'allow' || sec === 'chat') {
+  if (sec === 'allow') {
     patch.allow = {
       groups: parseList(val('#cfg-allowgroups', (c.allow?.groups || []).join(','))),
       private: parseList(val('#cfg-allowprivate', (c.allow?.private || []).join(',')))
@@ -2595,7 +2595,7 @@ async function saveConfig({ quiet = false } = {}) {
     patch.allowAllWhenEmpty = allowAllBox ? !!allowAllBox.checked : (c.allowAllWhenEmpty === true);
   }
 
-  if (sec === 'allow' || sec === 'chat') {
+  if (sec === 'allow') {
     // 运行节奏/发送保护/档位/峰谷/禁言/温度/思考强度在「信息发送配置」与「活跃设置」
     // 两个模态框里（openSendConfigModal / openActiveConfigModal），各自保存时直接 POST。
     // 本区块剩下的表单控件只有主动话题（表情包设置在 plugins/sticker 插件卡的设置弹窗）。
@@ -2610,9 +2610,9 @@ async function saveConfig({ quiet = false } = {}) {
     };
   }
 
-  // 'app'（界面与应用）与 'desktop'（兼容别名）共享同一批字段读取；
-  // val()/chk() 均为 null 安全，当前页不存在的输入框回退到 c 里的原值，不会误写。
-  if (sec === 'desktop' || sec === 'app') {
+  // 'app'（外观与数据）：val()/chk() 均为 null 安全，当前页不存在的输入框回退到
+  // c 里的原值，不会误写。
+  if (sec === 'app') {
     patch.server = {
       ...c.server,
       autoStart: chk('#cfg-autostart', !!c.server?.autoStart),

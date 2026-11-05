@@ -828,6 +828,92 @@ async function api(path, options = {}) {
   }
 }
 
+/**
+ * 启动机器人用的 QQ，并等 OneBot 上线。
+ *
+ * 连接页的「启动机器人用的 QQ」（#quick-start-btn 的步骤 1–3）与左栏「开始对话」
+ * （机器人未运行时扮演「启动游戏」）是同一条链：读运行态 → 调 launch → 等 QQ 起来
+ * → 确认协议端端口 → 轮询上线。两处曾经各写一份逐句相同的实现，任何节奏调整都要
+ * 改两遍、靠注释维持一致；现在只留这一份。
+ *
+ * 只做流程，不碰 DOM、不认识任何页面元素：进度通过 onProgress 交出去，终态由调用方
+ * 按各自的载体呈现（连接页写 connQb 再重画，左栏写副标题）。
+ *
+ * @param {object} [opts]
+ * @param {(e: { phase: 'launching'|'waiting'|'waiting-slow', seconds: number, message: string }) => void} [opts.onProgress]
+ *   进度事件。'launching' 正在调 launch 接口；'waiting' 轮询中（进入轮询时一次，之后每
+ *   ~16 秒一次）；'waiting-slow' 与 'waiting' 同一节奏，等得久了带已等秒数。
+ * @param {() => boolean} [opts.isAborted]
+ *   返回 true 表示调用方已不需要这次启动（页面切走、按钮脱离 DOM）。命中后立刻停止
+ *   轮询并返回 'aborted'，不再每 2 秒打一次 /api/status。
+ * @returns {Promise<{ ok: boolean, phase: 'connected'|'launch-failed'|'proto-down'|'aborted'|'timeout', message?: string }>}
+ *   'connected' 上线成功；'launch-failed' launch 接口返回失败；'proto-down' QQ 起来了但
+ *   协议端端口没开；'aborted' 调用方要求中止；'timeout' 5 分钟内没等到上线。
+ */
+async function launchBotQq({ onProgress = null, isAborted = null } = {}) {
+  // 节奏是实测出来的，别按「快一点」的直觉改：3 秒是 QQ 进程起住、端口开出来的时间；
+  // 2 秒轮询对后端无明显负担；5 分钟上限给首次扫码登录留够余量（只等 30 秒就报超时，
+  // 用户会以为失败又点一次，越点越乱）；提示每 16 秒换一次，每 2 秒改字看着像在闪。
+  const QQ_SETTLE_MS = 3000;
+  const WAIT_STEP_MS = 2000;
+  const WAIT_MAX_MS = 5 * 60 * 1000;
+  const HINT_REFRESH_MS = 16000;
+
+  const emit = (phase, seconds, message) => {
+    if (!onProgress) return;
+    // 调用方的绘制失败不该中断启动链
+    try { onProgress({ phase, seconds, message }); } catch { /* ignore */ }
+  };
+  const aborted = () => {
+    // isAborted 是调用方提供的判据，抛错按「没中止」处理，不能把异常当成中止
+    try { return !!(isAborted && isAborted()); } catch { return false; }
+  };
+
+  // 已经跑着就跳过启动和那 3 秒等待（local / portable 都由后端按 source 分流）
+  const st = await api('/api/status').catch(() => null);
+  if (!st?.qqPortable?.running) {
+    emit('launching', 0, 'QQ 启动中 —— 它不会自动弹窗，稍候到任务栏/托盘把窗口调出来登录/扫码');
+    const r = await api('/api/qq-portable/launch', { method: 'POST', body: '{}' });
+    // alreadyRunning 也算成功：两次探测之间可能已被别的入口拉起过
+    if (!r?.ok && !r?.alreadyRunning) {
+      return { ok: false, phase: 'launch-failed', message: `QQ 启动失败：${r?.error || '未知原因'}` };
+    }
+    // 等 QQ 完全启动再读端口：紧接着读必然读到「没开」，会误报协议端没运行
+    await new Promise((res) => setTimeout(res, QQ_SETTLE_MS));
+  }
+
+  // 协议端不由本软件启动。没在跑就直接说清楚，别让用户对着「等待」干等 5 分钟。
+  const st2 = await api('/api/status').catch(() => null);
+  if (!st2?.protocol?.portOpen) {
+    return { ok: false, phase: 'proto-down', message: 'QQ 已启动，但协议端没在运行 —— 需要你自行启动 SnowLuma 或 NapCat' };
+  }
+
+  const waitingMsg = (seconds) => seconds < 20
+    ? '正在等机器人上线 —— 如果 QQ 还没登录，到 QQ 窗口里扫码登录'
+    : `还在等（已 ${seconds} 秒）—— 登录完 QQ 后会自动连上，不用再点这个按钮`;
+  emit('waiting', 0, waitingMsg(0));
+
+  for (let waited = 0; waited < WAIT_MAX_MS; waited += WAIT_STEP_MS) {
+    // 用户切走页签后按钮已脱离 DOM，循环仍在每 2 秒打一次 /api/status（最多 5 分钟），
+    // 这里直接收尾，不再空转。
+    if (aborted()) return { ok: false, phase: 'aborted' };
+    await new Promise((res) => setTimeout(res, WAIT_STEP_MS));
+    const s = await api('/api/status').catch(() => null);
+    if (aborted()) return { ok: false, phase: 'aborted' };
+    if (s?.onebot?.connected) return { ok: true, phase: 'connected' };
+    // 每 ~16 秒换一次提示（别每秒改字，看着像在闪）
+    if (waited !== 0 && waited % HINT_REFRESH_MS < WAIT_STEP_MS) {
+      const seconds = Math.round(waited / 1000);
+      emit(seconds < 20 ? 'waiting' : 'waiting-slow', seconds, waitingMsg(seconds));
+    }
+  }
+  return {
+    ok: false,
+    phase: 'timeout',
+    message: '等了 5 分钟还没连上 —— 多半是机器人 QQ 还没登录，或协议端的端口/令牌与控制台不一致'
+  };
+}
+
 function fmtTime(ts) {
   if (!ts) return '-';
   const d = new Date(ts);

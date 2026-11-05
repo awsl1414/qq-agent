@@ -71,9 +71,6 @@ function renderSettingsSidebar() {
   // 设置页只保留侧栏那枚「QQ」就绪小标（点击跳连接页，见下方 data-rs-goto="connection"）。
   // 合并页 = 两个渲染函数直接字符串拼接，敢拼的前提是两两表单的元素 id 无交集，
   // 不会出现 getElementById 取错元素。
-  // ⚠️ 被并掉的 id（search / memory / chat）不再出现在菜单里，但 saveConfig
-  //    仍按这些 id 收集字段，条件已放宽到合并后的宿主 id（见 08-modals.js saveConfig），
-  //    否则合并页里另一半表单不会被保存（静默丢配置）。
   // 第三列是图标 path。⚠️ id 一个都不能改：settingsSection 的取值、
   //    hc-fix-btn 的 data-target、各分区 h3 的锚点（settings-api 等）全靠它。
   const menu = [
@@ -536,7 +533,6 @@ function renderSettingsSection(c) {
     api: () => renderApiSection(c) + renderSearchSection(c) + renderModelCostSection(c),
     persona: () => renderPersonaSection(c) + renderMemorySettingsSection(c),
     allow: () => renderAllowSection(c) + renderChatSection(c),
-    desktop: () => renderDesktopSection(c),   // 兼容别名 → 旧 state 恢复
     app: () => renderDesktopSection(c),
     tools: () => renderToolsSection(c),
     backup: () => renderBackupSection(),
