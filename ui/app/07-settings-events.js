@@ -1264,20 +1264,27 @@ function bindSettingsEvents(c) {
     box.innerHTML = `
       <table class="model-rows-table">
         <tr><th style="width:88%">备选模型（点击选择；提供商随模型自动确定）</th><th></th></tr>
-        ${fallbackRows.map((row, i) => `
+        ${fallbackRows.length ? fallbackRows.map((row, i) => `
           <tr>
             <td><input type="text" class="fb-model-pick" data-i="${i}" readonly placeholder="点击选择模型" data-model="${esc(row.model || '')}" data-provider="${esc(row.provider || '')}" value="${esc(row.model ? (provNameOf(row.provider) ? `${provNameOf(row.provider)} · ${row.model}` : row.model) : '')}" style="cursor:pointer" /></td>
-            <td style="width:56px;text-align:right"><button class="btn btn-small btn-danger fb-del" data-i="${i}" ${fallbackRows.length <= 1 ? 'disabled' : ''}>删除</button></td>
-          </tr>`).join('')}
+            <td style="width:56px;text-align:right"><button class="btn btn-small btn-danger fb-del" data-i="${i}">删除</button></td>
+          </tr>`).join('') : `
+          <tr><td colspan="2" class="muted" style="padding:8px 0">还没有备用模型：主模型重试后仍失败时不会自动换。点下面「＋ 添加备用模型」加一个。</td></tr>`}
       </table>`;
     box.querySelectorAll('.fb-model-pick').forEach((el) => {
       el.addEventListener('click', () => { openFallbackModelPicker(Number(el.dataset.i)); });
     });
     box.querySelectorAll('.fb-del').forEach((el) => {
       el.addEventListener('click', () => {
-        if (fallbackRows.length <= 1) return;
         fallbackRows.splice(Number(el.dataset.i), 1);
         renderFallbackRows();
+        /* ⚠️ 必须主动派发 input。删除是 <button>，点击不产生 input/change，而设置页的
+           自动保存挂在 #settings-form 的 input/change 委托上（见文件前部色板那处注释）。
+           不派发的话这条删除不会写进配置，切个页签回来备用模型又冒出来，表现为
+           "删了没反应"。bubbles 让它走到 #settings-form 的委托上。
+           允许删到 0 行 = 清空备用模型；保存端把空列表当 [] 提交，deepMerge 对数组
+           是整体替换，配置里就是真的空。 */
+        box.dispatchEvent(new Event('input', { bubbles: true }));
       });
     });
   }
