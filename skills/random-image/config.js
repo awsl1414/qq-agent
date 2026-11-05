@@ -27,6 +27,10 @@ export const SETU_NSFW_SORT = 'CDNsetu';
 export const SETU_SFW_SORT = 'CDNcat';
 export const SETU_REQUEST_TIMEOUT_MS = 20000;
 export const SETU_DOWNLOAD_TIMEOUT_MS = 30000;
+// 取图轮数：第 1 轮按需取，若有图下载失败再补取，最多补到第 2 轮。
+// 补取覆盖的是「这张图本身没了」（作者删除 / 搜索缓存里的旧 URL）；
+// 网络整体故障时多轮也救不回来，单张内部的 CDN 镜像重试才是那层防护。
+export const FETCH_ROUNDS = 2;
 
 // ── 下载常量 ──────────────────────────────────────────────────
 export const MAX_COUNT = 10;

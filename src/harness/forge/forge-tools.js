@@ -186,7 +186,39 @@ export function writeFileTool(ctx, args) {
   };
 }
 
-/** 读回一个文件（带行号，便于模型自查）。 */
+/**
+ * 分页读取的默认行数与单页硬上限。
+ *
+ * 为什么必须分页而不是把上限调大：市场里的真实技能有 918 行的 index.js，
+ * 下一个可能 2000 行。只要"一次把整个文件塞回模型"这个前提还在，
+ * 任何固定上限都会在更大的文件上重演"反复读 8 次也拿不到中间段"。
+ * 分页把"读不完"变成可续读的确定性行为：每次明确告诉模型还剩多少行、
+ * 下次该用哪个 offset。
+ */
+export const READ_PAGE_DEFAULT_LINES = 400;
+export const READ_PAGE_MAX_LINES = 800;
+
+/** 把模型给的数字参数归一成 >=1 的整数；缺失/非法时取默认值。 */
+function positiveInt(value, fallback) {
+  const n = Math.floor(Number(value));
+  return Number.isFinite(n) && n >= 1 ? n : fallback;
+}
+
+/** 按行切分；结尾换行不额外算一行（918 行 + 结尾 \n 的 split 结果是 919 项）。 */
+function splitLines(text) {
+  if (!text) return [];
+  const lines = text.split('\n');
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+  return lines;
+}
+
+/**
+ * 读回一个文件（带行号 + 分页信息，便于模型自查）。
+ *
+ * 返回头部固定写清「共 N 行 / 本次显示 a–b」，末尾写清还剩多少行、
+ * 下一次该用哪个 offset：模型据此知道"不是我读不到，而是该续读了"，
+ * 否则它只会用同样的参数反复重读（实战里连读 8 次都是前 400 行）。
+ */
 export function readFileTool(ctx, args) {
   const draftId = ctx.draftId || args.draft_id;
   const r = resolveDraftPath(ctx, draftId, args.path);
@@ -194,11 +226,33 @@ export function readFileTool(ctx, args) {
   let text;
   try { text = fs.readFileSync(r.abs, 'utf8'); }
   catch { return { content: `文件不存在：${r.rel}`, isError: true }; }
-  const lines = text.split('\n');
-  // 单文件最多回 400 行：草稿都不长，超了说明模型该拆文件了
-  const shown = lines.slice(0, 400);
-  const body = shown.map((l, i) => `${String(i + 1).padStart(4)}| ${l}`).join('\n');
-  return { content: `${r.rel}（共 ${lines.length} 行）\n${body}${lines.length > 400 ? '\n…（已截断，只看前 400 行）' : ''}` };
+
+  const lines = splitLines(text);
+  const total = lines.length;
+  if (!total) return { content: `${r.rel}（空文件）` };
+
+  const offset = positiveInt(args.offset, 1);
+  const limit = Math.min(positiveInt(args.limit, READ_PAGE_DEFAULT_LINES), READ_PAGE_MAX_LINES);
+  if (offset > total) {
+    return {
+      content: `${r.rel}（共 ${total} 行）\n起始行 ${offset} 已超出文件末尾 —— 用 offset=1 从头读，或 offset=${total} 读最后一行。`
+    };
+  }
+
+  const start = offset;
+  const end = Math.min(total, start + limit - 1);
+  const body = lines.slice(start - 1, end)
+    .map((l, i) => `${String(start + i).padStart(4)}| ${l}`)
+    .join('\n');
+
+  const head = end - start + 1 < total || start > 1
+    ? `${r.rel}（共 ${total} 行，本次显示 ${start}–${end}）`
+    : `${r.rel}（共 ${total} 行）`;
+  const rest = total - end;
+  const foot = rest > 0
+    ? `\n（还有 ${rest} 行未显示，用 offset=${end + 1} 继续读）`
+    : '';
+  return { content: `${head}\n${body}${foot}` };
 }
 
 /** 列出草稿里的文件。 */
@@ -253,12 +307,41 @@ export function clearDraft(ctx, draftId) {
 //     · 每个条目再走一次 resolveDraftPath（四道闸）：纵深防御，不依赖上游
 
 /**
+ * zip 解包时条目被丢弃的原因。
+ *
+ * 必须**结构化**而不是一段中文：前端要据此决定怎么提示（体积超限是"这个包可能
+ * 装不全，多半用不了"，其余是打包杂质，基本无害），而拼在字符串里的原因只能整段
+ * 原样展示。实测事故：1.5MB 的 lib/dict.json 被静默丢掉，响应仍是 ok:true，
+ * 用户装完才发现"少了文件"，却没有任何地方能查到少了什么、为什么少。
+ *
+ * FILE_TOO_LARGE / TOTAL_TOO_LARGE 意味着**包不完整、多半跑不起来**，界面必须醒目提示；
+ * 其余是打包杂质或本来就该丢的条目。前端是普通脚本（不能 import 本模块），
+ * ui/app/13-doctor.js 的 FORGE_SKIP_REASON / FORGE_SKIP_SIZE_REASONS 是它的镜像 ——
+ * 增删原因时两处一起改。
+ *
+ * 总量上限触发后，剩余条目**逐个按同一判据**重新分类（见 extractZipToDraft 的
+ * classifyEntry）：只有本可解出、被总量挡下的才记 TOTAL_TOO_LARGE，打包垃圾与
+ * 越界路径仍按各自原因记账 —— 否则"体积超限未解出"的红框会被垃圾文件撑大。
+ */
+export const SKIP_REASONS = {
+  OUTSIDE_ROOT: 'outside-module-root',   // 不在清单所在的模块根下（根级 README / 外层文件夹）
+  DIRECTORY: 'directory-entry',          // 目录条目（解包只处理文件）
+  PACKAGING_JUNK: 'packaging-junk',      // __MACOSX / .DS_Store / Thumbs.db
+  PATH_REJECTED: 'path-rejected',        // 没通过草稿路径闸（后缀 / 越界 / 敏感路径）
+  FILE_TOO_LARGE: 'single-file-too-large',
+  TOTAL_TOO_LARGE: 'total-too-large',
+  WRITE_FAILED: 'write-failed'
+};
+
+/**
  * 把 zip 内容解到指定草稿。
  * @param {object} ctx
  * @param {string} draftId
  * @param {Buffer} buffer zip 字节
  * @param {(buf: Buffer) => Array<{name:string,data:Buffer}>} parseZip 注入的解析器（含安全校验）
- * @returns {{ok:boolean, error?:string, rejected?:boolean, files:string[], skipped:string[], kind?:string}}
+ * @returns {{ok:boolean, error?:string, rejected?:boolean, files:string[],
+ *   skipped: Array<{path:string,size:number,reason:string}>, kind?:string}}
+ *   skipped 的每一条都带原因，前端据此提示"哪些文件没解出来、为什么"。
  */
 export function extractZipToDraft(ctx, draftId, buffer, parseZip) {
   let entries;
@@ -326,36 +409,73 @@ export function extractZipToDraft(ctx, draftId, buffer, parseZip) {
   const files = [];
   const skipped = [];
   let totalBytes = 0;
-  for (let i = 0; i < entries.length; i++) {
-    // 模块根之外的条目（根级 README / __MACOSX / 作者套的外层文件夹）一律丢弃。
+  /** 记一条跳过项：path 用**包内原始名**（用户要在自己的 zip 里找得到它）。 */
+  const skipEntry = (i, reason, detail = '') => {
+    skipped.push({
+      path: names[i],
+      size: Number(entries[i]?.data?.length) || 0,
+      reason,
+      ...(detail ? { detail: String(detail) } : {})
+    });
+  };
+
+  /**
+   * 单个条目的分类判据：返回 `{ reason, detail }` 表示该跳过，返回
+   * `{ rel, abs, data }` 表示可解。
+   *
+   * 主循环与"总量耗尽之后"的剩余条目**共用这一份**，不能再各自写一套：
+   * 之前剩余条目只区分目录、其余一律记 TOTAL_TOO_LARGE，于是 `__MACOSX/._x.js`
+   * 与根级 `README.md` 也被算进"因体积超限未解出"，界面上那条红色告警
+   * （"这个技能可能无法正常工作"）被打包垃圾撑大，夸大了残缺程度。
+   *
+   * 判据顺序即语义优先级：打包垃圾先认（它在包里哪个位置都是垃圾），
+   * 再判模块根越界，再判目录 / 路径闸 / 单文件体积。
+   */
+  const classifyEntry = (i) => {
+    // mac 打包垃圾会原样出现在 zip 里（parseZip 不管这个），这里丢掉
+    if (/(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db)(\/|$)/i.test(names[i])) {
+      return { reason: SKIP_REASONS.PACKAGING_JUNK };
+    }
+    // 模块根之外的条目（根级 README / 作者套的外层文件夹）一律丢弃。
     // 必须"不在 prefix 下就跳过"，不能一律 slice(prefix.length)：
     // `__MACOSX/._index.js` 切掉同样长度会得到 `index.js`，凭空写出一份假入口。
-    if (prefix && !names[i].startsWith(prefix)) { skipped.push(names[i]); continue; }
+    if (prefix && !names[i].startsWith(prefix)) return { reason: SKIP_REASONS.OUTSIDE_ROOT };
     const rel = names[i].slice(prefix.length);
     // 目录条目 parseZip 已滤掉，这里兜一层（剥根目录后可能剩下空串）
-    if (!rel || rel.endsWith('/')) { skipped.push(names[i]); continue; }
-    // mac 打包垃圾会原样出现在 zip 里（parseZip 不管这个），这里丢掉
-    if (/(^|\/)(__MACOSX|\.DS_Store|Thumbs\.db)(\/|$)/i.test(rel)) { skipped.push(names[i]); continue; }
+    if (!rel || rel.endsWith('/')) return { reason: SKIP_REASONS.DIRECTORY };
 
     // 纵深防御：parseZip 已查过非法路径与禁用后缀，这里再走一遍本文件的四道闸。
     // 不依赖上游：上游改了校验规则不该导致这里变松。
     const r = resolveDraftPath(ctx, draftId, rel);
-    if (!r.ok) { skipped.push(`${names[i]}（${r.error}）`); continue; }
+    if (!r.ok) return { reason: SKIP_REASONS.PATH_REJECTED, detail: r.error };
 
     const data = entries[i].data;
-    if (data.length > lim.maxFileBytes) { skipped.push(`${names[i]}（单文件超限）`); continue; }
-    if (totalBytes + data.length > lim.maxTotalBytes) {
-      skipped.push(`${names[i]}（已超总体积上限 ${(lim.maxTotalBytes / 1024 / 1024).toFixed(1)}MB，后续条目不再解）`);
+    if (data.length > lim.maxFileBytes) return { reason: SKIP_REASONS.FILE_TOO_LARGE };
+    return { rel, abs: r.abs, data };
+  };
+
+  for (let i = 0; i < entries.length; i++) {
+    const c = classifyEntry(i);
+    if (c.reason) { skipEntry(i, c.reason, c.detail); continue; }
+
+    if (totalBytes + c.data.length > lim.maxTotalBytes) {
+      // 到这里就不能再解了，但**后续条目同样"没解出来"**：不记账的话用户会以为
+      // 包里只有这几项，装完发现功能缺失却无从查起。逐个按同一判据记原因，
+      // 只有真正"本来能解、被总量挡下"的条目才记 TOTAL_TOO_LARGE。
+      for (let j = i; j < entries.length; j++) {
+        const cj = classifyEntry(j);
+        skipEntry(j, cj.reason || SKIP_REASONS.TOTAL_TOO_LARGE, cj.detail);
+      }
       break;
     }
 
     try {
-      fs.mkdirSync(path.dirname(r.abs), { recursive: true });
-      fs.writeFileSync(r.abs, data);
-      files.push(r.rel);
-      totalBytes += data.length;
+      fs.mkdirSync(path.dirname(c.abs), { recursive: true });
+      fs.writeFileSync(c.abs, c.data);
+      files.push(c.rel);
+      totalBytes += c.data.length;
     } catch (e) {
-      skipped.push(`${names[i]}（写盘失败：${e.message}）`);
+      skipEntry(i, SKIP_REASONS.WRITE_FAILED, e.message);
     }
   }
 
@@ -394,10 +514,17 @@ export const FORGE_TOOLS = [
   {
     id: 'forge_read_file',
     name: '读草稿文件',
-    description: '读回自己刚写的文件（带行号）。改之前先读一遍，避免漏掉已有内容。',
+    description: '读回自己刚写的文件（带行号）。改之前先读一遍，避免漏掉已有内容。'
+      + `大文件分段读：一次最多回 ${READ_PAGE_DEFAULT_LINES} 行，返回头部会写「共 N 行，本次显示 a–b」，`
+      + '末尾会写还剩多少行、下次该用哪个 offset —— 看到"还有 N 行未显示"就接着读，'
+      + `不要用同样的参数反复读（那样永远只能拿到前 ${READ_PAGE_DEFAULT_LINES} 行）。`,
     parameters: {
       type: 'object',
-      properties: { path: { type: 'string', description: '草稿内相对路径' } },
+      properties: {
+        path: { type: 'string', description: '草稿内相对路径' },
+        offset: { type: 'number', description: '起始行号（1 起），不填从头开始' },
+        limit: { type: 'number', description: `本次读取行数，默认 ${READ_PAGE_DEFAULT_LINES}，上限 ${READ_PAGE_MAX_LINES}` }
+      },
       required: ['path']
     },
     execute: readFileTool

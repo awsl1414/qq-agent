@@ -30,7 +30,7 @@ import { normalizeProtocol, protocolLabel } from './api-protocols.js';
 import { scanModelsVision, visionResults, modelImageVerdict } from './vision-scan.js';
 import { builtinVisionResults } from './model-vision-docs.js';
 import { todayKey } from './util.js';
-import { logger } from './logger.js';
+import { logger, parseLogDate, parseLevels, LOG_LEVELS } from './logger.js';
 import { skillManager } from './skills/manager.js';
 import { buildPluginUsage } from './plugin-usage.js';
 import { getSkillConfig, setSkillConfig, setSkillEnabled, listConfiguredSkillIds } from './skills/config.js';
@@ -48,7 +48,7 @@ import { TARGET_TYPES } from './backup/targets/index.js';
 import { collect as collectBackupSources, listBackupCategories } from './backup/sources/index.js';
 
 import { listBundleOptions, exportBundle, inspectBundle, moduleZipOf, dataDirOf, discardBundle } from './bundle.js';
-import { SKILLS_DIR, PLUGINS_DIR, isBuiltinModuleDir } from './plugin-loader.js';
+import { SKILLS_DIR, PLUGINS_DIR, isBuiltinModuleDir, PLUGIN_TRUST_REASON } from './plugin-loader.js';
 import { toOpenAiTools, executeTool } from './tools.js';
 import { publicSentEntries } from './sessions.js';
 import { readLocalImage } from './media-registry.js';
@@ -58,6 +58,12 @@ import { publicView as protocolDetectView } from './protocol-detect.js';
 
 const BACKUP_SECRET_FIELDS = ['credentials', 'secretAccessKeyCipher', 'accessKeyId', 'username', 'password', 'secretAccessKey'];
 const BACKUP_TARGET_FIELDS = ['id', 'name', 'type', 'enabled', 'dir', 'url', 'endpoint', 'region', 'bucket', 'forcePathStyle', 'allowInsecureTLS', 'categories'];
+// 日志下载上限：正常单日文件 < 10MB，超过 32MB 基本是异常膨胀（见 logger.prune 的
+// 256MB 截断），整份下发给浏览器没有意义且容易把控制台页面撑死。
+const LOG_DOWNLOAD_MAX_BYTES = 32 * 1024 * 1024;
+// 级别取值与 src/logger.js 的 LEVELS 同源（LOG_LEVELS 由它导出），
+// 不再在这里另存一份：两份取值一旦漂移，接口放行 logger 不认、或反之。
+const LOG_LEVEL_SET = new Set(LOG_LEVELS);
 function publicBackupConfig(config = {}) {
   return { ...config, targets: (config.targets || []).map((target) => {
     const out = Object.fromEntries(BACKUP_TARGET_FIELDS.filter((key) => key in target).map((key) => [key, target[key]]));
@@ -156,7 +162,9 @@ function openDirNative(dir) {
 export function createRoutes(deps) {
   const {
     store, memory, sessions, onebot, orchestrator, sender,
-    emit, log,
+    // 分级日志对象 {debug,info,warn,error}（app.js 注入 subLogger('app')）。
+    // 级别在调用点按语义给出；缺省用 console，测试可以只注入需要的几个方法。
+    emit, log = console,
     // app.js 内部的过程/状态
     localVersion, compareSemver,
     sanitizeConfig, keyEndpointAllowed, sanitizeProvider,
@@ -201,6 +209,22 @@ export function createRoutes(deps) {
     };
   };
 
+  /**
+   * 技能/插件列表的对外视图。
+   *
+   * 所有下发 `skills` 的路由（列表、重扫、导入、删除、信任）都必须走这里，
+   * 否则同一份 registry 在不同响应里字段不一致 —— 界面拿到的卡片就可能缺少
+   * 判断所需的那一项（"信任并重试"的判据正是其中之一）。
+   *
+   * 目前只把准入闸的机器可读原因码原样透出（loadErrorReason）：
+   * 前端据此决定要不要渲染信任按钮，用的是与后端 `/api/skills/trust` 完全相同的
+   * 判据，不再各自去猜错误文案里的措辞。
+   */
+  const skillsView = (context = skillRuntimeContext()) => skillManager.list(context).map((row) => {
+    const skill = skillManager.registry.get(row.id);
+    return { ...row, loadErrorReason: skill?.loadErrorReason || null };
+  });
+
   const backupHooks = {
     storeInvalidate: (key) => store?.invalidate(key),
     memoryInvalidate: (key) => memory?.invalidate(key),
@@ -227,6 +251,32 @@ export function createRoutes(deps) {
     } catch (error) { return { ...meta, bytes: null, error: String(error?.message ?? error) }; }
   });
   const sanitizedConfig = (config) => ({ ...sanitizeConfig(config), backup: publicBackupConfig(config.backup) });
+
+  /**
+   * 「保存配置 → 应用派生状态」的**唯一入口**。
+   *
+   * 所有改配置的路由都必须走这里（POST /api/config、POST /api/logs/level，
+   * 以及以后任何新增的写配置接口）。派生状态由配置决定，写在各自的 handler 里
+   * 就会像 logs.level 那样分裂：有的路径刷、有的不刷，用户看到"配置说 info、
+   * 实际还在 debug"。
+   *
+   * 其中 logs.level 属于 logger 的派生值，由 src/logger.js 自己订阅配置写入
+   * 来派生（见 config.js 的 onConfigApplied），这里不重复调 setLevel ——
+   * 那样又会多出一个写入方。
+   *
+   * @param {object|Function} patchOrFn updateConfig 的入参（对象或函数式补丁）
+   * @returns {object} 合并后的活配置
+   */
+  function applyConfigPatch(patchOrFn) {
+    const next = updateConfig(patchOrFn);
+    // 依赖按需注入（测试只装配关心的几个子系统，见测试里的 createRoutes）。
+    store?.setMaxPerChat?.(next.store?.maxMessagesPerChat ?? 0);
+    sessions?.setKeepFiles?.(next.store?.keepSessionFiles ?? 0);
+    if (next.proactive?.enabled) orchestrator?.startProactiveLoop?.(); else orchestrator?.stopProactiveLoop?.();
+    initPriceFeed(FIXED_PRICE_FEED_URL);
+    return next;
+  }
+
   return [
     // app.js 在路由分发前统一执行 authorize 和 originAllowed，与其他写接口相同。
     { method: 'GET', pattern: '/api/backup/config', handler: async ({ res, json }) => json(res, 200, { ok: true, config: publicBackupConfig(getConfig().backup) }) },
@@ -1080,7 +1130,7 @@ export function createRoutes(deps) {
           '清单必须有：id（[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}）、name、apiVersion: 1、entry。',
           `本地 createSkillApi 提供的成员：${(env?.knownApis || []).join(' / ')}`,
           `本地认的权限只有：${(env?.knownPermissions || []).join(' / ')}`,
-          `本机已装的扩展 id（撞车会被自动加 _1，但写死 id 的代码会错位）：${(env?.existingIds || []).slice(0, 40).join('、') || '（无）'}`,
+          `本机已装的扩展 id（同一 id 只能装一份：撞了会被拒绝安装，要换版本走「升级扩展」）：${(env?.existingIds || []).slice(0, 40).join('、') || '（无）'}`,
           '',
           '── 注册样板（补写 / 修补工具注册时照抄结构，键名一个都不能错）──',
           '```js',
@@ -1711,7 +1761,7 @@ export function createRoutes(deps) {
             human: true
           });
           if (out?.ok) {
-            log('info', `[forge] 人工确认：草稿 ${String(body.draftId)}（摘要 ${String(out.digest || '').slice(0, 12)}…，10 分钟内有效）`);
+            log.info(`[forge] 人工确认：草稿 ${String(body.draftId)}（摘要 ${String(out.digest || '').slice(0, 12)}…，10 分钟内有效）`);
           }
           return json(res, 200, { available: true, ...out });
         } catch (error) {
@@ -1786,10 +1836,27 @@ export function createRoutes(deps) {
         }
       }
     },
+    {
+      // 查一个草稿是否有内容完全相同的未安装副本（同 digest）。
+      // 市场口令去重用：重复下载同一口令时直接复用已有草稿，而不是再落一份。
+      method: 'POST', pattern: '/api/forge/find-duplicate',
+      handler: async ({ req, res, json }) => {
+        const body = await bodyOf(req);
+        const ctx = skillRuntimeContext();
+        const provs = skillManager.getCapabilityProviders('forge.find-duplicate', ctx);
+        if (!provs.length) return json(res, 200, { ok: false, available: false, error: '「扩展锻造台」插件未启用' });
+        try {
+          return json(res, 200, { available: true, ...provs[0].fn({ draftId: body.draftId }) });
+        } catch (error) {
+          return json(res, 500, { ok: false, available: true, error: String(error?.message ?? error) });
+        }
+      }
+    },
 
     // ── 升级已有扩展（harness → 升级扩展）──────────────────────────────────
-    // 与 forge.install 的分界：install 靠"撞车加 _1"永不覆盖；升级靠 manifest.id
-    // 一致性覆盖原目录（插件侧强制备份 + 失败自恢复）。详见 src/harness/forge/。
+    // 与 forge.install 的分界：install **拒绝**同 id（要装第二个副本请先卸载或走升级），
+    // 升级靠 manifest.id 一致性覆盖原目录（插件侧强制备份 + 失败自恢复）。
+    // 详见 src/harness/forge/。
 
     {
       // 已装扩展清单（可升级对象）。不读内存注册表读磁盘清单：升级要对的是"目录里的版本"
@@ -2401,7 +2468,7 @@ export function createRoutes(deps) {
           catch (error) { gate = { ok: false, error: String(error?.message ?? error) }; }
           drafts.push({ key, ok: true, draftId: out.draftId, gate });
         }
-        log('info', `[bundle] 解包登台：${drafts.filter((d) => d.ok).length}/${keys.length} 个扩展进入暂存区（bundle ${bundleId}）`);
+        log.info(`[bundle] 解包登台：${drafts.filter((d) => d.ok).length}/${keys.length} 个扩展进入暂存区（bundle ${bundleId}）`);
         return json(res, 200, { ok: true, drafts });
       }
     },
@@ -2450,7 +2517,7 @@ export function createRoutes(deps) {
         if (installed) {
           try { await reloadSkills({ reason: 'bundle-install' }); } catch { /* 重扫失败不影响安装结果 */ }
         }
-        log('info', `[bundle] 批量安装：${installed}/${results.length} 成功（${enable ? '已启用' : '装后关闭'}）`);
+        log.info(`[bundle] 批量安装：${installed}/${results.length} 成功（${enable ? '已启用' : '装后关闭'}）`);
         return json(res, 200, { ok: installed > 0, installed, total: results.length, results });
       }
     },
@@ -3630,6 +3697,24 @@ export function createRoutes(deps) {
           return json(res, 200, { ok: false, rejected: !!out?.rejected, error: out?.error || '导入暂存区失败' });
         }
 
+        // ── 幂等：同一份内容只留一个未安装草稿 ──────────────────────────
+        // 同一口令连点几次（或两个入口同时下载），每次都会落一份内容一字不差的
+        // 草稿，用户面前就是三份"待安装"。判据是内容摘要（路径 + 字节的 sha256），
+        // 与口令、文件名无关；已安装过的草稿不参与（那是装完留下的暂存副本）。
+        // 判定与丢弃都交给锻造台，这里只负责把结果翻译成响应。
+        let deduped = false;
+        try {
+          const dup = skillManager.getCapabilityProviders('forge.find-duplicate', ctx)[0]?.fn({ draftId: out.draftId });
+          if (dup?.ok && dup.duplicateOf?.draftId) {
+            const keepId = dup.duplicateOf.draftId;
+            // 丢掉本次刚落的这份，改用已有的那份：两份字节相同，留谁在语义上等价，
+            // 但"已有"的那份可能已经被用户打开过、拍过快照，统一指向它更稳。
+            skillManager.getCapabilityProviders('forge.discard', ctx)[0]?.fn({ draftId: out.draftId });
+            out = { ...out, draftId: keepId, kind: dup.duplicateOf.kind || out.kind };
+            deduped = true;
+          }
+        } catch { /* 去重失败就按新草稿处理，宁可多一份草稿也不能让安装链路挂掉 */ }
+
         // 适配前快照：之后模型改了什么、你确认的是哪一版，都靠它对比（失败不阻断）
         try {
           skillManager.getCapabilityProviders('forge.snapshot', ctx)[0]?.fn({ draftId: out.draftId, label: 'pre' });
@@ -3650,8 +3735,8 @@ export function createRoutes(deps) {
         try { gate = skillManager.getCapabilityProviders('forge.gate', ctx)[0]?.fn({ draftId: out.draftId }) || null; }
         catch (error) { gate = { ok: false, error: String(error?.message ?? error) }; }
 
-        log('info', `[market] 口令 ${code} 已导入锻造台暂存区（草稿 ${out.draftId}，`
-          + `${gate?.ok ? '闸门通过' : `闸门阻断 ${gate?.blocking ?? '?'} 项`}），等待人工确认`);
+        log.info(`[market] 口令 ${code} ${deduped ? '命中已有草稿（内容一致，未重复落盘）' : '已导入锻造台暂存区'}`
+          + `（草稿 ${out.draftId}，${gate?.ok ? '闸门通过' : `闸门阻断 ${gate?.blocking ?? '?'} 项`}），等待人工确认`);
 
         return json(res, 200, {
           ok: true,
@@ -3663,8 +3748,11 @@ export function createRoutes(deps) {
           files: out.files,
           skipped: out.skipped,
           gate,
-          message: '已下载到「扩展锻造台」暂存区，还没写进 skills/ plugins —— '
-            + '去 harness → 扩展锻造台 核对闸门结论、确认安装。'
+          ...(deduped ? { deduped: true } : {}),
+          message: deduped
+            ? '这个技能已经下载过了，直接用现有草稿（没有重复落盘）—— 去 harness → 扩展锻造台 核对闸门结论、确认安装。'
+            : '已下载到「扩展锻造台」暂存区，还没写进 skills/ plugins —— '
+              + '去 harness → 扩展锻造台 核对闸门结论、确认安装。'
         });
       }
     },
@@ -3675,7 +3763,7 @@ export function createRoutes(deps) {
       method: 'GET', pattern: '/api/skills',
       handler: async ({ res, json }) => {
         const context = skillRuntimeContext();
-        const baseList = skillManager.list(context);
+        const baseList = skillsView(context);
         // 给每条补「是不是随应用分发的内置模块」，前端「下载 → 技能 / 插件」
         // 据此做"来源"筛选（内置 / 第三方分开，方便管理自己后来装的那些）。
         // ⚠️ 刻意算在这里、而不是 manager.status 里：plugin-loader 已经 import 了
@@ -3688,6 +3776,11 @@ export function createRoutes(deps) {
         // uninstalled：配置里还有 skills.<id> 段、但磁盘上已经没有这个条目
         // （删目录后的配置残留）。UI 显示成"已配置但未安装"，并提供一键清理。
         const installedIds = new Set(baseList.map((s) => s.id));
+        // 孤儿目录：磁盘上有、注册表里没有（历史撞名产生的 `xxx_1`、手工拷贝、
+        // 中断的安装）。这里只让锻造台报一次 warn —— 页面加载时顺手体检，
+        // 不新增定时任务，也**不自动删除**（目录里可能是用户自己的代码）。
+        try { skillManager.getCapabilityProviders('forge.orphans', context)[0]?.fn({}); }
+        catch { /* 体检失败不影响列表 */ }
         const uninstalled = listConfiguredSkillIds()
           .filter((id) => !installedIds.has(id))
           .map((id) => {
@@ -3751,7 +3844,7 @@ export function createRoutes(deps) {
             loaded: result.loaded.map((r) => r.id),
             failed: result.failed.map((r) => ({ id: r.id, error: r.error })),
             pruned: result.pruned,
-            skills: skillManager.list(context),
+            skills: skillsView(context),
             summary: skillManager.summary(context),
             capabilities: skillManager.capabilities.list().sort()
           });
@@ -3767,10 +3860,12 @@ export function createRoutes(deps) {
       // trustedPlugins 数组，那等于"根本用不了自己写的插件"，于是闸门会被
       // 绕过或被整体关掉。这里给一次点击的入口。
       //
-      // ⚠️ 严格限定「只能信任当前**确实因高危能力被拒**的模块」，否则这个接口
+      // ⚠️ 严格限定「只能信任当前**确实因能力扫描被拒**的模块」，否则这个接口
       //   就退化成万能放行口（配合任意 id 猜测，可以把某个第三方模块悄悄标成
-      //   可信，而界面上看不出差别）。判据：它必须已注册在 skillManager.errors 里，
-      //   且错误文本带本次闸门的标记。
+      //   可信，而界面上看不出差别）。判据只有一个：注册表里这张卡片的
+      //   `loadErrorReason === PLUGIN_TRUST_REASON.CAPABILITY_SCAN` —— 与界面
+      //   决定"要不要显示信任按钮"用的是**同一个字段**。不匹配错误文案：
+      //   文案会改，原因码不会。
       // 登记后立刻 reloadSkills()，用户点完就能看到结果。
       method: 'POST', pattern: '/api/skills/trust',
       handler: async ({ req, res, json }) => {
@@ -3779,7 +3874,7 @@ export function createRoutes(deps) {
         //   用户脚本、以及**模型直接构造的请求**（缺陷报告由 AI 代测提交，模型会猜
         //   字段名 skillId/dir/dirName 或干脆不带 body）。只回「缺少 id」不教正确写法，
         //   调用方反复换字段重试，体感就是"信任要 id、id 要信任"的死循环。
-        //   宽容别名不影响安全性：下面仍有三路 find、"触碰了高危能力"前置校验、
+        //   宽容别名不影响安全性：下面仍有三路 find、原因码前置校验、
         //   只登记目录名三道闸守着。
         const raw = String(body?.id ?? body?.skillId ?? body?.dir ?? body?.dirName ?? body?.moduleName ?? '').trim();
         if (!raw) {
@@ -3798,10 +3893,10 @@ export function createRoutes(deps) {
         //   见"永不覆盖"策略），而清单里的 id 不变，两者就分叉：`errors['meme-tracker']`
         //   明明在，按目录名查 `meme-tracker_1` 却永远查不到，用户怎么点都信任不了。
         //   所以回**注册表**找这张卡片自己那一条（界面就是用它渲染的，`dir` 一定对得上），
-        //   读它的 `loadError`，与界面决定"要不要显示信任按钮"用的是**同一个字段**。
+        //   读它的 `loadErrorReason`，与界面决定"要不要显示信任按钮"用的是**同一个字段**。
         let row = null;
         try {
-          const rows = skillManager.list(skillRuntimeContext()) || [];
+          const rows = skillsView() || [];
           row = rows.find((r) => String(r.dir || '').replace(/\\/g, '/') === norm)
             || rows.find((r) => path.basename(String(r.dir || '').replace(/\\/g, '/')) === base)
             || rows.find((r) => String(r.id || '') === base)
@@ -3811,15 +3906,13 @@ export function createRoutes(deps) {
           return json(res, 400, { ok: false, error: `找不到模块「${raw}」（可能已被移除，刷新列表后再试）。` });
         }
 
-        // 前置校验：它此刻必须正处于「因高危能力被拦」的状态
-        const errText = String(row.loadError || '')
-          || String(skillManager.errors?.get?.(String(row.id || '')) ?? '')
-          || String(skillManager.errors?.get?.(base) ?? '');
-        const TRUST_MARK = '触碰了高危能力';
-        if (!errText.includes(TRUST_MARK)) {
+        // 前置校验：它此刻必须正处于「因能力扫描被拦」的状态。
+        // 判据只看准入闸给出的原因码，不匹配任何文案 —— 文案会改，原因码不会。
+        // 这条闸让接口不至于退化成万能放行口（否则任意 id 都能被标成可信）。
+        if (row.loadErrorReason !== PLUGIN_TRUST_REASON.CAPABILITY_SCAN) {
           return json(res, 400, {
             ok: false,
-            error: `模块「${row.name || row.id}」当前不是因高危能力被拦截（无法作为信任对象）。`
+            error: `模块「${row.name || row.id}」当前不是因能力扫描被拦截（无法作为信任对象）。`
               + '若它因其它原因加载失败，请先解决那个原因。'
           });
         }
@@ -3850,7 +3943,7 @@ export function createRoutes(deps) {
           ok: true,
           trusted: id,
           stillFailing: failRow ? (failRow.error || '仍然失败') : null,
-          skills: skillManager.list(context),
+          skills: skillsView(context),
           summary: skillManager.summary(context)
         });
       }
@@ -3884,20 +3977,20 @@ export function createRoutes(deps) {
         if (!result.installed.length) {
           return json(res, 400, { ok: false, error: result.errors[0]?.error || '导入失败', errors: result.errors });
         }
-        log('info', `[skill] 本地导入：${result.installed.map((r) => `${r.kind}s/${r.id}`).join('、')}`);
+        log.info(`[skill] 本地导入：${result.installed.map((r) => `${r.kind}s/${r.id}`).join('、')}`);
         // 重扫 + 激活 + 刷工具，并重建目录监听（新目录必须重新 watch 才能热重载）
         let reload = null;
         try {
           if (typeof reloadSkills === 'function') reload = await reloadSkills({ reason: 'import' });
         } catch (e) {
-          log('warn', `[skill] 导入后重扫失败：${String(e?.message ?? e)}`);
+          log.warn(`[skill] 导入后重扫失败：${String(e?.message ?? e)}`);
         }
         const context = skillRuntimeContext();
         return json(res, 200, {
           ok: true,
           installed: result.installed.map((r) => ({ kind: r.kind, id: r.id, dir: r.dir, files: r.files })),
           errors: result.errors,
-          skills: skillManager.list(context),
+          skills: skillsView(context),
           summary: skillManager.summary(context),
           reloaded: Boolean(reload)
         });
@@ -3992,7 +4085,7 @@ export function createRoutes(deps) {
           ok: true,
           id,
           dir: skill.relDir || '',
-          skills: skillManager.list(context),
+          skills: skillsView(context),
           summary: skillManager.summary(context),
           capabilities: skillManager.capabilities.list().sort(),
           config: sanitizedConfig(getConfig())
@@ -4089,11 +4182,8 @@ export function createRoutes(deps) {
       handler: async ({ req, res, json }) => {
         const patch = await readBody(req);
         if (patch.backup) patch.backup = prepareBackupConfig(patch.backup);
-        const next = updateConfig(patch);
-        store.setMaxPerChat(next.store?.maxMessagesPerChat ?? 0);
-        sessions?.setKeepFiles?.(next.store?.keepSessionFiles ?? 0);
-        if (next.proactive?.enabled) orchestrator.startProactiveLoop(); else orchestrator.stopProactiveLoop();
-        initPriceFeed(FIXED_PRICE_FEED_URL);
+        // 唯一入口：保存 + 派生状态（含 logger 级别由配置派生，见 applyConfigPatch）
+        const next = applyConfigPatch(patch);
         // ffmpeg 的解析结果带缓存。用户可能刚改了「手填路径 / 优先使用哪一组」，
         // 不主动作废的话要等下一次缓存过期（甚至永远，命中即长期缓存）才生效，
         // 表现为"设置改了但界面和实际调用都还是旧的"。这里无条件作废，代价一次探测。
@@ -4619,21 +4709,90 @@ export function createRoutes(deps) {
     },
 
     // ── 日志系统 ─────────────────────────────────────────────────────
+    //
+    // 两个数据源各司其职：
+    //   · 内存（logger.query）：最近 500 条，带完整 ts，支持实时筛选；
+    //   · 磁盘（logger.readHistory）：按天读文件尾部，能看当天 1700 行之外的更早记录。
+    // 前端的"日志页"先用 /api/logs 出首屏，滚动到底再按 before 游标翻磁盘。
     {
-      // 最近的日志（UI 日志页签首次加载）
+      // 内存日志查询：level/module/q/since/until/before/limit
       method: 'GET', pattern: '/api/logs',
       handler: async ({ res, json, url }) => {
-        const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 200));
-        return json(res, 200, { logs: logger.recent(limit), level: logger.getLevel() });
+        const p = url.searchParams;
+        const levelRaw = p.get('level');
+        if (levelRaw && parseLevels(levelRaw).size === 0) {
+          // 拼错级别（level=war）不能静默退化成"全都不筛"：那会让用户以为自己在看 warn
+          return json(res, 400, { error: `level 取值无效（可选 ${LOG_LEVELS.join(' / ')}，逗号分隔多值）` });
+        }
+        const result = logger.query({
+          level: p.get('level'), module: p.get('module'), q: p.get('q'),
+          since: p.get('since'), until: p.get('until'), before: p.get('before'), limit: p.get('limit')
+        });
+        return json(res, 200, { ...result, level: logger.getLevel(), dates: logger.listHistoryDates() });
       }
     },
     {
-      // 调整最低落盘级别（debug/info/warn/error）
+      // 磁盘历史：读取某日日志文件的尾部，反向分块，不整文件读入
+      method: 'GET', pattern: '/api/logs/history',
+      handler: async ({ res, json, url }) => {
+        const p = url.searchParams;
+        const date = p.get('date') || undefined;
+        if (date !== undefined && !parseLogDate(date)) {
+          return json(res, 400, { error: 'date 格式无效（应为 YYYY-MM-DD）' });
+        }
+        const result = await logger.readHistory({ date, limit: p.get('limit'), before: p.get('before') });
+        return json(res, 200, result);
+      }
+    },
+    {
+      // 可查询的日期列表（新到旧）
+      method: 'GET', pattern: '/api/logs/dates',
+      handler: async ({ res, json }) => {
+        return json(res, 200, { dates: logger.listHistoryDates() });
+      }
+    },
+    {
+      // 单日日志文件下载（attachment；上限 32MB，超限 413）。
+      // 只注册 GET：HEAD 走不到 handler（app.js 的方法匹配会直接跳过），
+      // 前端探针因此用 GET + 取消 body（见 ui/app/20-logs.js 的 logsDownload）。
+      method: 'GET', pattern: '/api/logs/download',
+      handler: async ({ res, json, url }) => {
+        const hit = logger.historyFile(url.searchParams.get('date') || undefined);
+        if (!hit) return json(res, 400, { error: 'date 格式无效（应为 YYYY-MM-DD）' });
+        let st;
+        try { st = fs.statSync(hit.file); } catch { return json(res, 404, { error: `${hit.date} 没有日志文件` }); }
+        if (!st.isFile()) return json(res, 404, { error: `${hit.date} 没有日志文件` });
+        if (st.size > LOG_DOWNLOAD_MAX_BYTES) {
+          return json(res, 413, {
+            error: `日志文件 ${(st.size / 1024 / 1024).toFixed(1)}MB 超过 32MB 下载上限，请按日期分段查看或在本机直接打开 ${hit.file}`
+          });
+        }
+        res.writeHead(200, {
+          'content-type': 'text/plain; charset=utf-8',
+          'content-length': st.size,
+          'content-disposition': `attachment; filename="qq-agent-${hit.date}.log"`,
+          'cache-control': 'no-store'
+        });
+        // 流式发送：客户端中途断开时销毁读流，否则 'error' 会冒成 uncaughtException
+        const stream = fs.createReadStream(hit.file);
+        stream.on('error', () => { try { res.destroy(); } catch { /* 已断开 */ } });
+        res.on('close', () => { try { stream.destroy(); } catch { /* 已结束 */ } });
+        stream.pipe(res);
+      }
+    },
+    {
+      // 调整最低落盘级别。**不直接 setLevel**：级别是配置派生值，
+      // 这里只把请求转成 logs.level 的配置补丁，走与其他配置写入相同的
+      // applyConfigPatch → onConfigApplied → logger.applyConfiguredLevel 链路，
+      // 保证 GET /api/logs 与 GET /api/config 的级别永远同源。
       method: 'POST', pattern: '/api/logs/level',
       handler: async ({ req, res, json }) => {
         const body = await bodyOf(req);
-        const level = String(body.level || 'info');
-        logger.setLevel(level);
+        const level = String(body.level || '');
+        if (!LOG_LEVEL_SET.has(level)) {
+          return json(res, 400, { error: `level 必须是 ${LOG_LEVELS.join(' / ')} 之一` });
+        }
+        applyConfigPatch((cfg) => ({ logs: { ...(cfg.logs || {}), level } }));
         return json(res, 200, { ok: true, level: logger.getLevel() });
       }
     },

@@ -9,7 +9,7 @@ process.env.QQ_AGENT_DATA_DIR = path.join(temp, 'data');
 const { setup, providers } = await import('../src/harness/forge/index.js');
 after(() => fs.rmSync(temp, { recursive: true, force: true }));
 
-test('锻造台候选目录耗尽不覆盖现有模块，失败不消耗确认票据', () => {
+test('锻造台拒绝同 id 重装，不覆盖现有模块、不产生 _1 副本、失败不消耗确认票据', () => {
   setup({ config: () => ({}), log() {}, appRoot: temp });
   const draftId = 'sample';
   const draft = path.join(process.env.QQ_AGENT_DATA_DIR, 'plugin-data', 'extension-forge', 'staging', draftId);
@@ -18,18 +18,21 @@ test('锻造台候选目录耗尽不覆盖现有模块，失败不消耗确认�
   fs.writeFileSync(path.join(draft, 'index.js'), 'export function setup(api) {}');
   const ticket = providers['forge.confirm-ticket']({ draftId, human: true });
   assert.equal(ticket.ok, true, JSON.stringify(ticket));
-  for (let i = 0; i <= 100; i++) {
-    const dir = path.join(temp, 'skills', i ? `sample_${i}` : 'sample');
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'index.js'), 'original');
-  }
+  const dir = path.join(temp, 'skills', 'sample');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'index.js'), 'original');
   const result = providers['forge.install']({ draftId, approvalToken: ticket.approvalToken, confirmIssues: true });
   assert.equal(result.ok, false);
-  assert.match(result.error, /占用/);
-  assert.equal(fs.readFileSync(path.join(temp, 'skills', 'sample_100', 'index.js'), 'utf8'), 'original');
-  fs.rmSync(path.join(temp, 'skills', 'sample_100'), { recursive: true });
+  assert.equal(result.conflict, true);
+  assert.equal(result.existing.id, 'sample');
+  // 只有一个目录，内容未被覆盖
+  assert.deepEqual(fs.readdirSync(path.join(temp, 'skills')), ['sample']);
+  assert.equal(fs.readFileSync(path.join(dir, 'index.js'), 'utf8'), 'original');
+  // 冲突不消耗票据：把占位的目录挪走，同一张票应能落地
+  fs.rmSync(dir, { recursive: true });
   const retried = providers['forge.install']({ draftId, approvalToken: ticket.approvalToken, confirmIssues: true });
   assert.equal(retried.ok, true, JSON.stringify(retried));
+  assert.deepEqual(fs.readdirSync(path.join(temp, 'skills')), ['sample']);
 });
 
 test('锻造台升级复制失败可恢复旧扩展，不因缺少目标根目录丢失旧版', (t) => {

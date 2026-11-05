@@ -37,6 +37,8 @@ import { logger } from './logger.js';
 import { PANEL_ROUTE_PREFIX, PANEL_DATA_FILE, normalizePanelAsset, panelUrl, panelDataUrl } from './skills/panel.js';
 import { skillErrorText } from './skills/errors.js';
 import { getConfig, DATA_DIR } from './config.js';
+// 内置模块 id 名单：装载侧拒绝第三方占用（见 loadSkillDir 的同名检查）。
+import { isCoreModuleId, coreModuleRelDir } from './core-modules.js';
 import { registerLocalImage } from './media-registry.js';
 // 受保护 fetch（H3）：扩展的 api.fetch 必须走这里，不能给裸 globalThis.fetch
 import { guardedFetch } from './safe-fetch.js';
@@ -133,7 +135,8 @@ function builtinModuleIds() {
  * 那边判"能不能免检"，被改过的内置模块必须走能力扫描；
  * 这里判"它是不是随应用带的那个"，被「升级扩展」改过的内置模块仍然是
  * 随应用带的那一个（用户要的是"哪些是我后来装的"，不是"哪些被改过"）。
- * 目录名是磁盘上真实的一级目录名，第三方装进来无法自选（安装器遇同名会递增后缀）。
+ * 目录名是磁盘上真实的一级目录名，第三方装进来无法自选：安装器同 id / 同名一律
+ * 拒绝落地，想冒充内置模块就只能占到某个没被占用的名字。
  */
 export function isBuiltinModuleDir(dirName) {
   return builtinModuleIds().has(String(dirName || ''));
@@ -170,7 +173,8 @@ export function moduleFileSha1(buf) {
  *   - harness → 升级扩展（extension-forge 覆盖安装 / 回滚）
  *   - harness → 自动修复（self-fix 落地 / 回滚）
  * 但随包基线不会跟着变。下一轮热重扫时内容指纹失配，
- * 模块会被本文件的能力闸当"占名顶替"拦下（文案还写着"触碰高危能力"，非常误导）。
+ * 模块会被本文件的能力闸当"占名顶替"拦下（拒载文案会先列出失配文件，见
+ * builtinContentMatches —— 那些提示对普通用户仍然很像"代码有问题"）。
  * 落地/回滚成功后立刻重算，让基线与磁盘对齐。
  *
  * 不做的事（有意为之）：不覆盖"装新扩展"。新装的模块本来就该走第三方信任流程
@@ -346,8 +350,28 @@ function readJsFiles(dir, entry, out = [], depth = 0) {
 }
 
 /**
+ * 准入闸拒载的机器可读原因码。
+ *
+ * 判据是状态，不是人写给人看的那句话：界面据此决定"卡片上要不要给
+ * 「信任并重试」"、`/api/skills/trust` 据此决定"这个模块能不能被信任"。
+ * 早期两边各自去匹配拒载文案里的某个短语，而文案改过措辞之后两端同时失配，
+ * 信任按钮从此永不出现、接口恒回 400（且失配时没有任何地方报错）。
+ *
+ * 目前只有一种拒载原因：能力扫描无法确认安全。扫描被截断（fail-closed）与
+ * 扫到具体高危能力共用这个码 —— 对用户是同一件事（确认可信即可放行），
+ * 差别只在 message 里写明是扫到了什么、还是扫不完。
+ * 内置指纹失配本身不是拒载理由（失配后照常走能力扫描），只在 message 里提示。
+ * 新增原因码时必须同时检查 routes 的信任接口与 ui/app/06-settings-render.js
+ * 的判断，否则会重现"按钮不出现"这一类问题。
+ */
+export const PLUGIN_TRUST_REASON = Object.freeze({
+  CAPABILITY_SCAN: 'capability-scan'
+});
+
+/**
  * 静态准入检查。
- * @returns {{ok:true}|{ok:false, reason:string}}
+ * @returns {{ok:true}|{ok:false, reason:string, message:string}} reason 是
+ *   PLUGIN_TRUST_REASON 里的原因码，message 是给人看的完整说明。
  */
 export function checkPluginTrust(id, entryPath) {
   // 随应用分发的模块（在 builtin-modules.json 基线里）→ 放行
@@ -380,7 +404,7 @@ export function checkPluginTrust(id, entryPath) {
   // （实测：目录名 totally-unrelated + 清单 id 写成 legit-plugin + 危险代码 → 放行）。
   // 那一刻 trustedPlugins 从"用户的白名单"变成了"攻击者抄一下就能用的通行证"。
   // 目录名是磁盘上真实的一级目录名，第三方装进来时无法自选
-  // （安装器会对同名目录递增后缀），所以它才是可信判据。
+  // （安装器遇同名直接拒绝落地，不再有递增后缀可用来绕开），所以它才是可信判据。
   let trusted = [];
   try { trusted = getConfig().trustedPlugins || []; } catch { trusted = []; }
   if (Array.isArray(trusted) && trusted.map(String).includes(dirName)) return { ok: true };
@@ -402,7 +426,8 @@ export function checkPluginTrust(id, entryPath) {
   if (truncated) {
     return {
       ok: false,
-      reason: builtinNote + `模块「${id}」的文件太多或嵌套太深，无法完成安全扫描（已扫描上限仍未见底）。`
+      reason: PLUGIN_TRUST_REASON.CAPABILITY_SCAN,
+      message: builtinNote + `模块「${id}」的文件太多或嵌套太深，无法完成安全扫描（已扫描上限仍未见底）。`
         + '为了不放过暗藏的危险代码，这类模块默认拒绝加载。'
         + `若确认可信，请在 config.trustedPlugins 里加入 "${dirName}"。`
     };
@@ -420,7 +445,8 @@ export function checkPluginTrust(id, entryPath) {
 
   return {
     ok: false,
-    reason: builtinNote
+    reason: PLUGIN_TRUST_REASON.CAPABILITY_SCAN,
+    message: builtinNote
       + `模块「${id}」的能力扫描命中：${bad.join('、')}。`
       + '扩展与宿主主进程共享权限，仍受宿主账号和操作系统权限约束。'
       + `若确认可信，请在 config.trustedPlugins 里加入它的目录名（这里填 "${dirName}"）。`
@@ -698,6 +724,9 @@ function readManifest(dir) {
  * 分类与主要用法不符时提示作者调整目录；能否触发取决于是否有真实调用方。
  *
  * 目录语义定义见 skills/manifest.js 的 DIR_KIND。
+ *
+ * 这里的 log 是分级日志对象（{debug,info,warn,error}），由 app.js 的
+ * subLogger('app') 注入。级别在调用点按语义给出，装配点不做任何推断。
  */
 function lintKindPlacement(kind, { manifest, toolIds, providers, hooks, promptSections }, log) {
   const warnings = [];
@@ -722,7 +751,7 @@ function lintKindPlacement(kind, { manifest, toolIds, providers, hooks, promptSe
     warnings.push(`${manifest.id} 注册了工具但没有提示词片段（promptSections/prompt）：`
       + '模型能"调"到它，但不知道什么时候该用 —— 无人触发时检查策略段是否缺引导。');
   }
-  for (const w of warnings) log(`[skill] ⚠️ ${w}`);
+  for (const w of warnings) log.warn(`[skill] ⚠️ ${w}`);
   return warnings;
 }
 
@@ -742,7 +771,7 @@ function lintKindPlacement(kind, { manifest, toolIds, providers, hooks, promptSe
  *
  * @returns {Promise<{dir, loaded, id?, error?, skill?}>}
  */
-async function loadSkillDir(dir, { log = console.log, kind = null } = {}) {
+async function loadSkillDir(dir, { log = console, kind = null } = {}) {
   const dirName = path.basename(dir);
   const found = readManifest(dir);
   const hadPrevious = found.error ? null : skillManager.isLoaded(
@@ -754,7 +783,11 @@ async function loadSkillDir(dir, { log = console.log, kind = null } = {}) {
   // 注册后 /api/skills 与技能页就能显示"加载失败 + 原因"，而不是条目凭空消失。
   // 注册的 manifest 用最小骨架（只有 id/dir），能力/工具/钩子一概没有：失败的
   // Skill 不该有任何副作用，只是"可见"。
-  const failRegister = (id, error) => {
+  //
+  // loadErrorReason 与 loadError 一起挂：前者是机器可读的原因码（取值见
+  // PLUGIN_TRUST_REASON），界面与信任接口只认它；后者仍是给人看的文案。
+  // 两个字段必须成对出现/清空，否则会出现"卡片说加载失败、按钮却不可用"。
+  const failRegister = (id, error, reason = null) => {
     const existing = skillManager.registry.get(id);
     // 旧实例还活着且这次只是新版本坏了：保留旧实例（stale-but-working），
     // 只把失败文案挂到旧实例上，UI 显示"上次重载失败，正在沿用旧版本"。
@@ -771,7 +804,8 @@ async function loadSkillDir(dir, { log = console.log, kind = null } = {}) {
       available: null, availableReason: '', activate: null, deactivate: null,
       dispose: () => { unregisterToolsBySkill(id); },
       hooks: {}, providers: {}, promptSections: null,
-      loadError: error
+      loadError: error,
+      loadErrorReason: reason
     });
     skillManager.errors.set(id, error);
     return { dir, loaded: false, id, error };
@@ -784,27 +818,46 @@ async function loadSkillDir(dir, { log = console.log, kind = null } = {}) {
       skillManager.errors.set(id, `${found.error}（已沿用旧版本继续运行）`);
       // 失败原因必须进日志：这条路径以前只写状态不打日志，
       // 日志里只剩"N 失败"的计数，排查时查不出是谁、为什么（conversation-memory 的现场）。
-      log(`[skill] ❌ ${id}：${found.error}（已保留旧版本继续运行）`);
+      log.warn(`[skill] ❌ ${id}：${found.error}（已保留旧版本继续运行）`);
       return { dir, loaded: false, id, error: `${found.error}（保留旧版本）` };
     }
     const r = failRegister(id, found.error);
-    log(`[skill] ❌ ${id}：${found.error}`);
+    log.warn(`[skill] ❌ ${id}：${found.error}`);
     return r;
   }
 
   const { manifest, problems } = normalizeManifest(found.raw, { fallbackId: dirName });
-  for (const p of problems) log(`[skill] ⚠️ ${dirName}：${p}`);
+  for (const p of problems) log.warn(`[skill] ⚠️ ${dirName}：${p}`);
   if (!isManifestUsable(manifest, problems)) {
     const error = `清单不可用：${problems.join('；')}`;
     if (hadPrevious) {
       skillManager.errors.set(manifest.id, `${error}（已沿用旧版本继续运行）`);
-      log(`[skill] ❌ ${manifest.id}：${error}（已保留旧版本继续运行）`);
+      log.warn(`[skill] ❌ ${manifest.id}：${error}（已保留旧版本继续运行）`);
       return { dir, loaded: false, id: manifest.id, error: `${error}（保留旧版本）` };
     }
     const r = failRegister(manifest.id, error);
-    log(`[skill] ❌ ${manifest.id}：${error}`);
+    log.warn(`[skill] ❌ ${manifest.id}：${error}`);
     return r;
   }
+  // ── 内置模块 id 的占用检查 ─────────────────────────────────────────────
+  // 内置模块（kind='core'）不落 skills/ 与 plugins/，所以「磁盘上的扩展」里
+  // 出现它们的 id 只可能是第三方顶替：安装链路漏了一道，或者有人手工拷目录。
+  // 必须在这里拦，且**不能**沿用旧实例：旧实例就是同名 core 条目，放行等于让
+  // 第三方把内置模块的能力整块顶掉（manager.register 会先 removeOwner(id)；
+  // 实测 forge.install 提供者 1 → 0，而扩展页上看不到任何异常条目）。
+  // 即使安装侧已经拒绝（src/module-id.js），这条独立校验也要保留：
+  // 安全边界的每一层各守一处，不能以"上游查过了"为由删掉。
+  //
+  // 这里**不**走 failRegister：注册表按 manifest.id 落键，登记一条失败的
+  // 同 id 条目仍会覆盖 core 实例（正是要避免的事）。拒绝以日志体现，
+  // 目录处置（删除 / 改 id）留给人。
+  if (isCoreModuleId(manifest.id)) {
+    const error = `id「${manifest.id}」属于内置模块（${coreModuleRelDir(manifest.id)}），`
+      + '第三方扩展不能占用 —— 请修改清单里的 id，或删除这个目录';
+    log.warn(`[skill] ❌ ${path.basename(dir)}/${found.file}：${error}`);
+    return { dir, loaded: false, id: manifest.id, error };
+  }
+
   // 旧 plugin.json 的 prompt 形态 → 新 prompt.sections，避免旧插件提示词静默失效
   adaptLegacyPrompt(found.raw, manifest);
 
@@ -820,7 +873,7 @@ async function loadSkillDir(dir, { log = console.log, kind = null } = {}) {
     // 路径穿越属于安全拒绝，不是普通失败：即使旧实例在跑也不沿用（entry
     // 已经越界，"旧版本"和这次磁盘上的东西未必是一回事），直接登记失败条目。
     const r = failRegister(manifest.id, `entry 必须是 Skill 目录内的相对路径：${entryRel}`);
-    log(`[skill] ❌ ${manifest.id}：entry 越界已被拒绝`);
+    log.warn(`[skill] ❌ ${manifest.id}：entry 越界已被拒绝`);
     return r;
   }
   // 符号链接也要挡住（realpath 之后重新判断是否仍在目录内）
@@ -830,7 +883,7 @@ async function loadSkillDir(dir, { log = console.log, kind = null } = {}) {
     const relReal = path.relative(realDir, realEntry);
     if (relReal.startsWith('..') || path.isAbsolute(relReal)) {
       const r = failRegister(manifest.id, `entry 指向了 Skill 目录外（符号链接）：${entryRel}`);
-      log(`[skill] ❌ ${manifest.id}：entry 经符号链接越界已被拒绝`);
+      log.warn(`[skill] ❌ ${manifest.id}：entry 经符号链接越界已被拒绝`);
       return r;
     }
   } catch { /* 文件不存在等情况交给下面统一报错 */ }
@@ -838,11 +891,11 @@ async function loadSkillDir(dir, { log = console.log, kind = null } = {}) {
     const error = `入口文件不存在：${entryRel}`;
     if (hadPrevious) {
       skillManager.errors.set(manifest.id, `${error}（已沿用旧版本继续运行）`);
-      log(`[skill] ❌ ${manifest.id}：${error}（已保留旧版本继续运行）`);
+      log.warn(`[skill] ❌ ${manifest.id}：${error}（已保留旧版本继续运行）`);
       return { dir, loaded: false, id: manifest.id, error: `${error}（保留旧版本）` };
     }
     const r = failRegister(manifest.id, error);
-    log(`[skill] ❌ ${manifest.id}：${error}`);
+    log.warn(`[skill] ❌ ${manifest.id}：${error}`);
     return r;
   }
 
@@ -867,14 +920,14 @@ async function loadSkillDir(dir, { log = console.log, kind = null } = {}) {
   // 从默认行为变成了知情选择。见 README 的「插件安全」一节。
   const trust = checkPluginTrust(manifest.id, entryPath);
   if (!trust.ok) {
-    const error = trust.reason;
+    const error = trust.message;
     if (hadPrevious) {
       skillManager.errors.set(manifest.id, `${error}（已沿用旧版本继续运行）`);
-      log(`[skill] ❌ ${manifest.id}：${error}（已保留旧版本继续运行）`);
+      log.warn(`[skill] ❌ ${manifest.id}：${error}（已保留旧版本继续运行）`);
       return { dir, loaded: false, id: manifest.id, error: `${error}（保留旧版本）` };
     }
-    const r = failRegister(manifest.id, error);
-    log(`[skill] ❌ ${manifest.id}：${error}`);
+    const r = failRegister(manifest.id, error, trust.reason);
+    log.warn(`[skill] ❌ ${manifest.id}：${error}`);
     return r;
   }
 
@@ -887,11 +940,11 @@ async function loadSkillDir(dir, { log = console.log, kind = null } = {}) {
     const msg = `加载失败：${error.message}`;
     if (hadPrevious) {
       skillManager.errors.set(manifest.id, `${msg}（已沿用旧版本继续运行）`);
-      log(`[skill] ❌ ${manifest.id}：${msg}（已保留旧版本继续运行）`);
+      log.warn(`[skill] ❌ ${manifest.id}：${msg}（已保留旧版本继续运行）`);
       return { dir, loaded: false, id: manifest.id, error: `${msg}（保留旧版本）` };
     }
     const r = failRegister(manifest.id, msg);
-    log(`[skill] ❌ ${manifest.id}：${msg}`);
+    log.warn(`[skill] ❌ ${manifest.id}：${msg}`);
     return r;
   }
 
@@ -902,11 +955,11 @@ async function loadSkillDir(dir, { log = console.log, kind = null } = {}) {
     const error = '入口需导出 setup(api)/register(api) 或 hooks/providers';
     if (hadPrevious) {
       skillManager.errors.set(manifest.id, `${error}（已沿用旧版本继续运行）`);
-      log(`[skill] ❌ ${manifest.id}：${error}（已保留旧版本继续运行）`);
+      log.warn(`[skill] ❌ ${manifest.id}：${error}（已保留旧版本继续运行）`);
       return { dir, loaded: false, id: manifest.id, error: `${error}（保留旧版本）` };
     }
     const r = failRegister(manifest.id, error);
-    log(`[skill] ❌ ${manifest.id}：${error}`);
+    log.warn(`[skill] ❌ ${manifest.id}：${error}`);
     return r;
   }
 
@@ -936,7 +989,7 @@ async function loadSkillDir(dir, { log = console.log, kind = null } = {}) {
   if (prevWasLive) {
     try {
       if (typeof prevSkill.deactivate === 'function') prevSkill.deactivate({ reason: 'reload' });
-    } catch (error) { log(`[skill] ⚠️ ${manifest.id} 旧实例 deactivate 失败：${error?.message ?? error}`); }
+    } catch (error) { log.warn(`[skill] ⚠️ ${manifest.id} 旧实例 deactivate 失败：${error?.message ?? error}`); }
   }
 
   const toolIds = [];
@@ -959,13 +1012,13 @@ async function loadSkillDir(dir, { log = console.log, kind = null } = {}) {
       // 救活旧实例：deactivate 过了要补 activate（对话记忆这类 Skill 的
       // 后台定时器就靠它恢复）。工具/能力/注册表全程未动，恢复原状。
       try { if (typeof prevSkill.activate === 'function') prevSkill.activate({ reason: 'reload-failed' }); }
-      catch (e2) { log(`[skill] ⚠️ ${manifest.id} 旧实例激活失败：${e2?.message ?? e2}`); }
+      catch (e2) { log.warn(`[skill] ⚠️ ${manifest.id} 旧实例激活失败：${e2?.message ?? e2}`); }
       skillManager.errors.set(manifest.id, `${msg}（已沿用旧版本继续运行）`);
-      log(`[skill] ❌ ${manifest.id}：${msg} —— 已保留旧版本继续运行`);
+      log.warn(`[skill] ❌ ${manifest.id}：${msg} —— 已保留旧版本继续运行`);
       return { dir, loaded: false, id: manifest.id, error: `${msg}（保留旧版本）` };
     }
     const r = failRegister(manifest.id, msg);
-    log(`[skill] ❌ ${manifest.id}：${msg}`);
+    log.warn(`[skill] ❌ ${manifest.id}：${msg}`);
     return r;
   }
 
@@ -995,7 +1048,7 @@ async function loadSkillDir(dir, { log = console.log, kind = null } = {}) {
     }));
     const missingTools = declaredTools.filter((d) => !registeredShort.has(d));
     if (missingTools.length) {
-      log(`[skill] ⚠️ ${manifest.id}：清单 tools[] 声明了 ${missingTools.join(', ')}，`
+      log.warn(`[skill] ⚠️ ${manifest.id}：清单 tools[] 声明了 ${missingTools.join(', ')}，`
         + '但入口没有 registerTool —— 清单里的 tools 只是元数据，不会被自动注册');
     }
   }
@@ -1023,6 +1076,7 @@ async function loadSkillDir(dir, { log = console.log, kind = null } = {}) {
     promptSections: typeof mod.promptSections === 'function' ? mod.promptSections : null
   };
   skill.loadError = null;
+  skill.loadErrorReason = null;   // 与 loadError 成对：加载成功即清空原因码
 
   const r = skillManager.register(skill);
   if (!r.ok) {
@@ -1037,23 +1091,23 @@ async function loadSkillDir(dir, { log = console.log, kind = null } = {}) {
   // 用户在界面上看到"生效中"却不知道模型根本调不到。
   skill.lintWarnings = lintKindPlacement(kind, skill, log);
 
-  log(`[skill] ✅ 加载成功：${manifest.name}（${manifest.id} v${manifest.version}，api v${manifest.apiVersion || SKILL_API_VERSION}）`);
+  log.info(`[skill] ✅ 加载成功：${manifest.name}（${manifest.id} v${manifest.version}，api v${manifest.apiVersion || SKILL_API_VERSION}）`);
   return { dir, loaded: true, id: manifest.id, skill };
 }
 
 /** 扫描一个目录下的所有 Skill。 */
-async function loadSkillRoot(rootDir, { log = console.log, label = 'skill' } = {}) {
+async function loadSkillRoot(rootDir, { log = console, label = 'skill' } = {}) {
   if (!fs.existsSync(rootDir)) {
     // 不再静默：目录找不到必须打日志（历史上这里返回 missing 后被丢弃，
     // 表现为"安装版一个 Skill 都没有，且日志里毫无线索"）。
-    log(`[${label}] ⚠️ 目录不存在，已跳过：${rootDir}`);
+    log.warn(`[${label}] ⚠️ 目录不存在，已跳过：${rootDir}`);
     return { loaded: [], failed: [], missing: true, rootDir };
   }
   const dirs = fs.readdirSync(rootDir, { withFileTypes: true })
     .filter((e) => e.isDirectory())
     .map((e) => path.join(rootDir, e.name));
   if (!dirs.length) {
-    log(`[${label}] ${path.basename(rootDir)}/ 为空：${rootDir}`);
+    log.info(`[${label}] ${path.basename(rootDir)}/ 为空：${rootDir}`);
     return { loaded: [], failed: [], empty: true, rootDir };
   }
 
@@ -1065,7 +1119,11 @@ async function loadSkillRoot(rootDir, { log = console.log, label = 'skill' } = {
   }
   const loaded = results.filter((r) => r.loaded);
   const failed = results.filter((r) => !r.loaded);
-  log(`[${label}] ${path.basename(rootDir)}/（${rootDir}）：${loaded.length} 成功，${failed.length} 失败`);
+  // 汇总行的级别跟着真实结果走：有任何失败就是 warn，全部成功才是 info。
+  // 不再靠文案里的"失败"二字让装配点去猜 —— 判据是 failed.length 这个真实计数。
+  const summary = `[${label}] ${path.basename(rootDir)}/（${rootDir}）：${loaded.length} 成功，${failed.length} 失败`;
+  if (failed.length) log.warn(summary);
+  else log.info(summary);
   return { loaded, failed, rootDir };
 }
 
@@ -1073,10 +1131,9 @@ async function loadSkillRoot(rootDir, { log = console.log, label = 'skill' } = {
  * 加载全部 Skill（skills/ + plugins/）。
  * 幂等：重复调用会重新加载并覆盖同 id 的 Skill（热重载依赖这个语义）。
  */
-export async function loadPlugins({ log = console.log, roots = null } = {}) {
+export async function loadPlugins({ log = console, roots = null } = {}) {
   const skillsRoot = roots?.skills ? path.resolve(roots.skills) : SKILLS_DIR;
   const pluginsRoot = roots?.plugins ? path.resolve(roots.plugins) : PLUGINS_DIR;
-  skillManager.setLog(log);
   const skillRes = await loadSkillRoot(skillsRoot, { log, label: 'skill' });
   const pluginRes = await loadSkillRoot(pluginsRoot, { log, label: 'plugin' });
   // 与磁盘对齐：把已经不存在于任何目录里的 Skill 卸掉（开发期删目录/改名的幽灵残留）。
@@ -1089,7 +1146,7 @@ export async function loadPlugins({ log = console.log, roots = null } = {}) {
     ...pluginRes.loaded.map((r) => r.id), ...pluginRes.failed.map((r) => r.id)
   ].filter(Boolean);
   const pruned = skillManager.pruneMissing(aliveIds, {});
-  if (pruned.length) log(`[skill] 已卸载磁盘上不存在的 Skill：${pruned.join(', ')}`);
+  if (pruned.length) log.info(`[skill] 已卸载磁盘上不存在的 Skill：${pruned.join(', ')}`);
 
   // 孤儿工具清扫：热重载覆盖注册后，旧版本独有（新版本没再注册）的工具
   // 不会有人清。unregisterToolsBySkill 会连新工具一起删（同 skillId 分不清
@@ -1102,7 +1159,7 @@ export async function loadPlugins({ log = console.log, roots = null } = {}) {
   const orphanTools = listTools().filter((t) => t.skillId && !declaredToolIds.has(t.id));
   for (const t of orphanTools) unregisterTool(t.id);
   if (orphanTools.length) {
-    log(`[skill] 已清理旧版本遗留的工具：${orphanTools.map((t) => t.id).join(', ')}`);
+    log.info(`[skill] 已清理旧版本遗留的工具：${orphanTools.map((t) => t.id).join(', ')}`);
   }
   return {
     loaded: [...skillRes.loaded, ...pluginRes.loaded],
@@ -1118,7 +1175,7 @@ export async function loadPlugins({ log = console.log, roots = null } = {}) {
  * 因此整体重新扫描；但不会清空工具注册表。逐个 Skill 注册时会覆盖同 id，
  * 旧 Skill 若已删除则需要显式清理，所以先按现存目录对比出被删除的 id。
  */
-export function watchPlugins({ log = console.log, onReload, roots: rootsOpt = null, quietMs = 0 } = {}) {
+export function watchPlugins({ log = console, onReload, roots: rootsOpt = null, quietMs = 0 } = {}) {
   const skillsRoot = rootsOpt?.skills ? path.resolve(rootsOpt.skills) : SKILLS_DIR;
   const pluginsRoot = rootsOpt?.plugins ? path.resolve(rootsOpt.plugins) : PLUGINS_DIR;
   const roots = [skillsRoot, pluginsRoot].filter((d) => fs.existsSync(d));
@@ -1144,11 +1201,11 @@ export function watchPlugins({ log = console.log, onReload, roots: rootsOpt = nu
     // onReload 内部的 reloadSkills 还会再 begin 一次（嵌套计数），两层都安全。
     beginToolsetBatch();
     try {
-      log(`[skill] 检测到变化：${filename || ''}，重新扫描…`);
+      log.info(`[skill] 检测到变化：${filename || ''}，重新扫描…`);
       const result = await loadPlugins({ log, roots: { skills: skillsRoot, plugins: pluginsRoot } });
       if (typeof onReload === 'function') onReload(result);
     } catch (error) {
-      log(`[skill] 热重载失败：${error?.message ?? error}`);
+      log.warn(`[skill] 热重载失败：${error?.message ?? error}`);
     } finally {
       endToolsetBatch();
       reloading = false;
@@ -1161,7 +1218,7 @@ export function watchPlugins({ log = console.log, onReload, roots: rootsOpt = nu
   };
   const scheduleReload = (filename) => {
     if (Date.now() < quietUntil) {
-      log(`[skill] 忽略重扫余波事件（静默期）：${filename || ''}`);
+      log.debug(`[skill] 忽略重扫余波事件（静默期）：${filename || ''}`);
       return;
     }
     if (reloadTimer) clearTimeout(reloadTimer);
@@ -1174,15 +1231,15 @@ export function watchPlugins({ log = console.log, onReload, roots: rootsOpt = nu
       // 防御操作系统在监听建立后报告的权限/目录失效：这些异步 error 不会
       // 被外层 try/catch 接住，缺少监听器会让 EventEmitter 直接终止进程。
       watcher.on('error', (error) => {
-        try { log(`[skill] 目录监听失效 ${root}：${error?.message ?? error}（请手动刷新扩展以重建监听）`); }
+        try { log.warn(`[skill] 目录监听失效 ${root}：${error?.message ?? error}（请手动刷新扩展以重建监听）`); }
         catch { /* 日志出口故障不能让 watcher 的错误处理再次抛出 */ }
       });
       watchers.push(watcher);
     } catch (error) {
-      log(`[skill] 无法监听 ${root}：${error?.message ?? error}`);
+      log.warn(`[skill] 无法监听 ${root}：${error?.message ?? error}`);
     }
   }
-  log(`[skill] 热重载已启用（监听 ${roots.map((r) => path.basename(r)).join(' + ')}）`);
+  log.info(`[skill] 热重载已启用（监听 ${roots.map((r) => path.basename(r)).join(' + ')}）`);
   return {
     close: () => {
       // pending 的防抖定时器也必须清。原实现只关 fs.watch 句柄，

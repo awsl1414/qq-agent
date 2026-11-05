@@ -331,6 +331,12 @@ export const DEFAULT_CONFIG = {
     // 静默时段（小时）：该区间内不发保活请求。空数组 = 全天保活。
     quietHours: [1, 2, 3, 4, 5, 6]
   },
+  // 日志（src/logger.js 读取）
+  logs: {
+    // 最低落盘级别 debug/info/warn/error。UI 的级别选择器写这里，重启后保持。
+    // 与 logger 构造期默认（info）一致：配置缺失时行为不变。
+    level: 'info'
+  },
   // 存储
   store: {
     // 单群 JSON 最大保留条数。0 = 不限制。
@@ -865,6 +871,34 @@ export function getConfigVersion() {
   return configVersion;
 }
 
+/**
+ * 配置写入后的订阅者（派生状态刷新）。
+ *
+ * 为什么挂在配置层而不是调用方：`logs.level` 这类"配置 → 运行时开关"的派生值
+ * 必须由配置唯一决定。写在路由里（POST /api/config 之后顺手 setLevel）会漏掉
+ * 任何不经过那条路由的写入 —— 备份恢复走 `setRuntimeConfig(loadConfig())`、
+ * 脚本直接调 `updateConfig`，都让"配置说 info、实际还在 debug"重新出现
+ * （K1 实测：POST /api/config 写 info 后 GET /api/logs 仍返回 debug）。
+ * 所以在两条写路径的统一出口通知一次，谁派生谁自己订阅。
+ */
+const configAppliedListeners = new Set();
+
+/**
+ * 订阅"配置已写入"。返回退订函数。
+ * 监听器内不得抛：一次配置写入会广播给所有订阅者，单个派生刷新失败
+ * 不该让保存接口整体失败（该派生值下一次写入还会再刷）。
+ */
+export function onConfigApplied(fn) {
+  configAppliedListeners.add(fn);
+  return () => configAppliedListeners.delete(fn);
+}
+
+function notifyConfigApplied() {
+  for (const fn of [...configAppliedListeners]) {
+    try { fn(); } catch { /* 单个派生刷新失败不影响其它订阅者与保存结果 */ }
+  }
+}
+
 export function updateConfig(patchOrFn) {
   // 函数式入口：先取当前配置喂给回调，再走下面同一条合并路径
   const rawPatch = typeof patchOrFn === 'function' ? patchOrFn(getConfig()) : patchOrFn;
@@ -898,6 +932,9 @@ export function updateConfig(patchOrFn) {
   fs.writeFileSync(tmp, JSON.stringify(currentConfig, null, 2), 'utf8');
   fs.renameSync(tmp, CONFIG_FILE);
   configVersion += 1;   // 写盘成功才算一次世代更替（见 getConfigVersion 注释）
+  // 派生状态刷新放在写盘成功之后：写盘失败时配置并没有真的生效，
+  // 提前刷新会让内存态与磁盘态分裂（重启后又变回去）。
+  notifyConfigApplied();
   return currentConfig;
 }
 
@@ -905,6 +942,7 @@ export function updateConfig(patchOrFn) {
 export function setRuntimeConfig(cfg) {
   currentConfig = cfg;
   configVersion += 1;   // 整份配置被替换，同样可能改变工具可用性
+  notifyConfigApplied();
 }
 
 /**

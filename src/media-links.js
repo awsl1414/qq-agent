@@ -55,10 +55,10 @@ export function extractCandidateUrls(text, max = MAX_MEDIA_LINKS_PER_MESSAGE) {
  *
  * @param {Array} urls      候选链接
  * @param {Array} providers [{ skillId, fn }]，来自 getCapabilityProviders('media.download')
- * @param {object} ctx      { onebot, sender, kind, chatId }（会透传给 provider）
+ * @param {object} log      分级日志对象 { info, warn }（见 logger.js 的 subLogger）
  * @returns {Promise<Array>} 每个链接的结果，便于测试与排障
  */
-export async function dispatchMediaLinks({ urls, providers, ctx = {}, log = () => {} }) {
+export async function dispatchMediaLinks({ urls, providers, ctx = {}, log = console }) {
   const list = Array.isArray(urls) ? urls : [];
   const provs = Array.isArray(providers) ? providers : [];
   const outcomes = [];
@@ -73,19 +73,19 @@ export async function dispatchMediaLinks({ urls, providers, ctx = {}, log = () =
         r = await p.fn({ url, ...ctx });
       } catch (error) {
         // provider 内部一般已 try/catch，这里再兜一层：一个提供者炸了不能连累别的
-        log(`[media] ${p.skillId} 处理链接失败：${error?.message ?? error}`);
+        log.warn(`[media] ${p.skillId} 处理链接失败：${error?.message ?? error}`);
         continue;
       }
       if (!r || r.skip) continue;          // 不认领 → 把机会给下一个提供者
 
       settled = true;
       if (r.ok) {
-        log(`[media] ${p.skillId} 已转发（${r.platform || '未知平台'}）：${r.title || url}`);
+        log.info(`[media] ${p.skillId} 已转发（${r.platform || '未知平台'}）：${r.title || url}`);
         outcomes.push({ url, skillId: p.skillId, status: 'handled', result: r });
         break;
       }
 
-      log(`[media] ${p.skillId} 下载失败：${r.error || '未知原因'}`);
+      log.warn(`[media] ${p.skillId} 下载失败：${r.error || '未知原因'}`);
       outcomes.push({ url, skillId: p.skillId, status: 'failed', result: r });
       if (r.friendly) {
         try { await ctx.sender?.sendTextBatch?.(chatKey, [r.friendly]); } catch { /* 提示失败就算了 */ }

@@ -40,7 +40,7 @@ import { runGates, GATE_MAX_FILES, draftDigest } from './gate.js';
 // zip 解析复用核心那套（项目里"往磁盘写可执行 JS 的入口"的集中实现）。
 // 插件 import src/ 下工具模块是本项目既有做法（media-download → safe-fetch、
 // reply-safety → llm），不是特例。
-import { parseZip, writeModuleDirectory } from '../../zip-install.js';
+import { parseZip } from '../../zip-install.js';
 // 数据目录以核心的 DATA_DIR 为唯一真源（含 QQ_AGENT_PROFILE 推导），
 // 不用 `QQ_AGENT_DATA_DIR || '.'` 拼（那样会回落到进程 cwd）。
 import { DATA_DIR } from '../../config.js';
@@ -48,6 +48,11 @@ import { DATA_DIR } from '../../config.js';
 // 不刷新的话，下一轮热重扫会把它当"占了内置目录名的第三方"拦下。细节见
 // plugin-loader.js 的 refreshBuiltinEntry 注释。
 import { refreshBuiltinEntry } from '../../plugin-loader.js';
+// 孤儿扫描要对着"当前真正加载了哪些扩展"判断，唯一真源是进程级单例。
+import { skillManager } from '../../skills/manager.js';
+// 同 id 判据（内置模块 / 磁盘目录 / 注册表三份真源）与清单读取：与本地导入、
+// zip 落地共用 src/module-id.js，避免锻造台自己再实现一套。
+import { findModuleIdConflict, knownModules, readManifestOf } from '../../module-id.js';
 
 const DEFAULTS = {
   maxFiles: 20,
@@ -58,10 +63,16 @@ const DEFAULTS = {
 };
 
 let cfg = () => DEFAULTS;
+// 日志分两级：log 是常规信息，warn 专门给"用户需要知道但不阻断"的情况。
+// 宿主（harness/index.js）注入的是 { info, warn, error }；只给函数的写法
+// （老测试里常见）就退化成同一出口，不会因为缺 warn 而丢日志。
 let log = (..._a) => {};
+let warn = log;
 let api_ = null;
 let appRoot = null;
 let dataBase = null;      // <DATA_DIR>（含 logs/ 与 plugin-data/）
+// 上一次孤儿报告的内容指纹（relDir 排序后拼接）。null = 还没报过。
+let lastOrphanReport = null;
 
 /**
  * 本地环境快照：给"适配"用。
@@ -74,17 +85,15 @@ function envSnapshot() {
   const hasCapability = (name) => {
     try { return api_?.hasCapability?.(name) === true; } catch { return false; }
   };
-  // 已装扩展的 id：直接看目录名。安装时是按 manifest.id 建目录的，
-  // 所以"目录名有没有被占"就是"id 会不会撞"。
-  const existingIds = new Set();
-  for (const sub of ['skills', 'plugins']) {
-    try {
-      for (const e of fs.readdirSync(path.join(appRoot, sub), { withFileTypes: true })) {
-        if (e.isDirectory()) existingIds.add(e.name);
-      }
-    } catch { /* 目录不存在就跳过 */ }
-  }
-  return { hasCapability, existingIds, envReady: true };
+  // 已占用的 **manifest.id**：判定"id 会不会撞"必须按清单 id，不能按目录名 ——
+  // 两者在历史实现里可以分叉（撞名加 `_1` 的那份目录名就不再等于 id），
+  // 按目录名判断会漏掉真正会撞的那一类。
+  // 必须把**内置模块**算进来：它们不落 skills/ / plugins/，只扫磁盘目录时
+  // 闸门的 id-conflict 提示对 core 完全失效（见 src/module-id.js 头部说明）。
+  // existing 与 existingIds 同一份数据：前者按 id 给出占用者（闸门要区分"内置模块
+  // 不可占用"与"已装扩展先卸载"两种处置），后者是给适配 prompt 的简单清单。
+  const existing = knownModules({ appRoot, registry: skillManager });
+  return { hasCapability, existingIds: new Set(existing.keys()), existing, envReady: true };
 }
 
 /** 给适配 prompt 用的一段人话描述（模型改代码前该知道的本地情况）。 */
@@ -115,6 +124,76 @@ function limits() {
 /** 给工具层用的运行环境。 */
 function toolCtx(draftId = null) {
   return { dataRoot: dataBase, appRoot, limits: limits(), draftId };
+}
+
+/**
+ * 查同 id 的已占扩展。命中返回 { existing: {id, kind, version, dir, relDir} }，否则 null。
+ *
+ * 判据统一在 src/module-id.js，三处真源按序判定：
+ *   ① 内置模块名单（kind='core'）—— 它们不落 skills/ 与 plugins/，也不在
+ *      builtin-modules.json 基线里，只查磁盘目录时这一类**完全查不到**（实测：
+ *      第三方装一个 id=extension-forge 的包会落地成功，随后把锻造台整块打哑）；
+ *   ② SkillManager 注册表 —— 正在生效的条目，覆盖自定义 roots 与非默认目录；
+ *   ③ skills/ 与 plugins/ 下的清单 id —— 不依赖运行期状态，启动早期也能判。
+ * kind 不参与判定：技能与插件共用一个 id 空间（注册表、配置键、工具前缀都按 id），
+ * 一个 id 同时存在两份只会互相覆盖，装第二份没有意义。
+ */
+function findIdConflict(manifestId) {
+  const existing = findModuleIdConflict(manifestId, { appRoot, registry: skillManager });
+  return existing ? { existing } : null;
+}
+
+/**
+ * 孤儿扫描：磁盘上有目录、但注册表里没有在**跑**的那一份。
+ *
+ * 为什么会存在：历史实现撞名加 `_1`，产生"磁盘两份、注册表一份"。第一份目录
+ * 不再被管理，用户既看不到也删不掉，还会在下次热重扫时被重新加载。现在的安装
+ * 已经拒绝撞名，但老数据（以及用户手工拷贝、半途中断的安装）仍可能留下这种目录。
+ *
+ * ⚠️ **只 warn，不自动删除**：目录里可能有用户手改过的代码、甚至是他自己
+ * 放进去的配置。删除权必须留在人手上（扩展页 / 文件管理器）。
+ *
+ * ⚠️ 注册表**没有**的 id 不能一律当孤儿：磁盘上的目录名是清白的判据之一，
+ * 但"注册表里查不到"最常见的两种原因是新手艺而不是孤儿：
+ *   · 刚装完、热重扫还没跑（安装本身不触发重扫）；
+ *   · 热重载被关掉（config.extensions.hotReload=false），要重启才会装载。
+ * 所以只有**同一 id 有另一份目录正在跑**（shadowed）才算确定的孤儿；
+ * 完全没人认领的目录归为 unmanaged，调用方按需降级处理（见 providers 里的说明）。
+ *
+ * @returns {Array<{dir, relDir, manifestId, reason: 'shadowed'|'unmanaged'}>}
+ */
+export function scanOrphans({ appRoot: root = appRoot, registry = skillManager } = {}) {
+  // id → 注册表**实际采用**的那个目录（相对 appRoot 的 `skills/x` 形式）。
+  // 只记 id 是不够的：撞名现场是两个目录同一个 id，注册表里只有一条，
+  // 另一个目录按 id 查是"存在"的，按目录查才知道它没被采用。
+  const adopted = new Map();
+  for (const s of registry?.registry?.list?.() || registry?.list?.() || []) {
+    const id = s?.manifest?.id;
+    if (!id) continue;
+    const rel = String(s.relDir || '');
+    if (rel) adopted.set(String(id), rel);
+  }
+  const out = [];
+  for (const sub of ['skills', 'plugins']) {
+    const base = path.join(root, sub);
+    let ents = [];
+    try { ents = fs.readdirSync(base, { withFileTypes: true }); } catch { continue; }
+    for (const e of ents) {
+      if (!e.isDirectory()) continue;
+      const hit = readManifestOf(path.join(base, e.name));
+      if (!hit?.manifest?.id) continue;   // 没清单的目录装载器也不认，不归这里管
+      const manifestId = String(hit.manifest.id);
+      const relDir = `${sub}/${e.name}`;
+      if (adopted.get(manifestId) === relDir) continue;
+      out.push({
+        dir: e.name,
+        relDir,
+        manifestId,
+        reason: adopted.has(manifestId) ? 'shadowed' : 'unmanaged'
+      });
+    }
+  }
+  return out;
 }
 
 // ── 草稿元数据（_meta/<draftId>.json）──────────────────────────────────────
@@ -202,7 +281,10 @@ function gateOpts(id = '') {
   // 草稿内容会被原样复制进模块目录，标记文件混进去是污染；且那份内容第三方能改，当判据不可信。
   let meta = {};
   try { meta = id ? readMetaRaw(toolCtx(), sanitizeDraftId(id)) : {}; } catch { meta = {}; }
-  const thirdParty = meta.origin === 'import' || Boolean(meta.upgradeOf);
+  // 别人打的包：zip 导入 / 市场下载 / 升级副本 / 备份里的模块。
+  // 「备份恢复」走的是同一条 import-zip，但 meta 里只有 source='backup'，
+  // 不认它的话，用户自己的备份会被当成模型现写的草稿按最严尺度检查。
+  const thirdParty = meta.origin === 'import' || Boolean(meta.upgradeOf) || meta.source === 'backup';
   return {
     allowNetwork: cfg().allowNetwork === true,
     env: envSnapshot(),
@@ -216,6 +298,7 @@ export function setup(api) {
   api_ = api;
   cfg = () => ({ ...DEFAULTS, ...(api.config() || {}) });
   log = api.log;
+  warn = typeof api.warn === 'function' ? api.warn : api.log;
 
   // 本插件自己的数据目录：<DATA_DIR>/plugin-data/extension-forge/
   // 用 `QQ_AGENT_DATA_DIR || '.'` 的话，env 没设时**回落进程 cwd**，而核心的
@@ -302,7 +385,28 @@ export const providers = {
       writeMetaRaw(toolCtx(), id, { ...readMetaRaw(toolCtx(), id), origin: 'import' });
     } catch { /* 写失败就退化为最严档位，只会更严，不会放宽 */ }
 
-    log(`导入 zip：${zipName || '(未命名)'} → 草稿 ${id}（${out.files.length} 个文件，跳过 ${out.skipped.length}）`);
+    // 跳过项按体积类/其余分开记日志：体积超限意味着包不完整，是要追查的事；
+    // 打包杂质（__MACOSX 等）不必让人去翻日志。两个数分开写才分得清。
+    const sizeLost = out.skipped.filter((s) => s.reason === 'single-file-too-large' || s.reason === 'total-too-large');
+    // 体积超限的清单要落进 _meta：解包结果是**一次性响应**，用户关掉页面 / 隔天
+    // 回来打开这份草稿时响应早就不在了，草稿列表与详情页必须还能说清
+    // "这个包少了哪些文件"。写 _meta（草稿目录外）而不是草稿里：草稿内容会被
+    // 原样复制进模块目录，那是污染。
+    if (sizeLost.length) {
+      try {
+        writeMetaRaw(toolCtx(), id, {
+          ...readMetaRaw(toolCtx(), id),
+          skippedOversize: sizeLost.map((s) => ({ path: s.path, size: s.size, reason: s.reason }))
+        });
+      } catch { /* 写失败只影响展示，不影响导入结果 */ }
+    }
+    log(`导入 zip：${zipName || '(未命名)'} → 草稿 ${id}（${out.files.length} 个文件，跳过 ${out.skipped.length}`
+      + `${sizeLost.length ? `，其中 ${sizeLost.length} 个因体积超限` : ''}）`);
+    if (sizeLost.length) {
+      warn(`⚠️ 导入的包少了 ${sizeLost.length} 个文件（体积超限未解出）：`
+        + sizeLost.map((s) => `${s.path}（${(s.size / 1024).toFixed(0)}KB）`).join('、')
+        + ' —— 这个扩展可能无法正常工作');
+    }
     return {
       ok: true,
       draftId: id,
@@ -310,6 +414,61 @@ export const providers = {
       kind: out.kind,
       files: out.files,
       skipped: out.skipped
+    };
+  },
+
+  /**
+   * 找一个内容完全相同的**未安装**草稿（同 digest）。
+   *
+   * 用途：市场口令重复下载。同一口令连点几次会各生成一份草稿，内容一字不差，
+   * 用户面前却出现三份"待安装"。判定只认内容摘要（draftDigest，按路径排序的
+   * sha256），不看口令、不看名字：同一份字节换个口令下载也算重复。
+   *
+   * 已经安装过的草稿不算（keepStaging=true 时落地后草稿仍然留着）：
+   * 那已经不是"待安装副本"，再去重会把人引到一份已装完的草稿上。
+   *
+   * 并发安全：两个请求可能同时各落一份，各自扫描时都能看见对方。所以选
+   * **草稿 id 字典序最小**的那一份（id 前缀是时间序，最早的那份胜出），
+   * 两边因此收敛到同一个答案，不会互相把对方当成"已有的那份"而都返回对方。
+   *
+   * @param {{draftId: string}} args
+   * @returns {{ok:boolean, duplicateOf?: {draftId, digest, kind, name}, error?: string}}
+   */
+  'forge.find-duplicate': ({ draftId } = {}) => {
+    if (!draftId) return { ok: false, error: '缺少 draftId' };
+    const id = sanitizeDraftId(draftId);
+    const tctx = toolCtx();
+    const selfDir = draftDir(tctx, id);
+    if (!fs.existsSync(selfDir)) return { ok: false, error: '草稿不存在' };
+    const digest = draftDigest(selfDir);
+    if (!digest) return { ok: true, duplicateOf: null };
+
+    const root = stagingRoot(tctx);
+    let ents = [];
+    try { ents = fs.readdirSync(root, { withFileTypes: true }); } catch { return { ok: true, duplicateOf: null }; }
+    const matches = [id];
+    for (const e of ents) {
+      if (!e.isDirectory() || e.name.startsWith('_') || e.name === id) continue;
+      const meta = readMetaRaw(tctx, e.name);
+      if (meta.installedAt) continue;                       // 已装过，不算"待安装副本"
+      const dir = draftDir(tctx, e.name);
+      if (!fs.existsSync(dir)) continue;
+      if (draftDigest(dir) !== digest) continue;
+      matches.push(e.name);
+    }
+    if (matches.length < 2) return { ok: true, duplicateOf: null };
+    matches.sort();
+    const winner = matches[0];
+    if (winner === id) return { ok: true, duplicateOf: null };
+    const gate = runGates(tctx, winner, gateOpts(winner));
+    return {
+      ok: true,
+      duplicateOf: {
+        draftId: winner,
+        digest,
+        kind: gate?.kind || null,
+        name: gate?.manifest?.name || null
+      }
     };
   },
 
@@ -396,6 +555,34 @@ export const providers = {
   'forge.env': () => ({ ok: true, ...envBrief() }),
 
   /**
+   * 孤儿检查：磁盘上有目录、但注册表里没有在跑的那一份（见 scanOrphans 头注释）。
+   * **只报告不删除**：这些目录可能含用户手改的代码，处理权留给人。
+   *
+   * 级别按确定性分：`shadowed`（同 id 的另一份正在跑）是确定的孤儿，报 warn；
+   * `unmanaged`（谁也认不得）可能只是"刚装完还没重扫"，只报 info，避免把正常的
+   * 安装流程刷成告警。
+   *
+   * 日志按"当前这批孤儿"去重：`/api/skills` 每刷一次列表就会调一次，
+   * 每次都报一遍会把日志刷成噪音，反而盖住真正要看的那条。
+   * 集合变了（新增 / 手工清掉）才再报一次。
+   */
+  'forge.orphans': () => {
+    const orphans = scanOrphans();
+    const key = orphans.map((o) => `${o.reason}:${o.relDir}`).sort().join('\n');
+    if (key !== lastOrphanReport) {
+      lastOrphanReport = key;
+      for (const o of orphans) {
+        const text = `发现未纳管的扩展目录：${o.relDir}（清单 id ${o.manifestId}`
+          + (o.reason === 'shadowed' ? '，同一 id 的另一份正在运行' : '，注册表里没有它')
+          + '）—— 不会自动删除；确认无用后自行删除该目录';
+        if (o.reason === 'shadowed') warn(`⚠️ ${text}`);
+        else log(`ℹ️ ${text}`);
+      }
+    }
+    return { ok: true, orphans };
+  },
+
+  /**
    * 存草稿元数据（原始需求 / 来源）。
    * 必须放草稿目录**外**（_meta/），草稿目录里的文件会被闸门扫描、会被
    * install 原样复制进正式扩展，需求文本混进去就是污染。
@@ -435,6 +622,9 @@ export const providers = {
       source: String(meta.source || ''),   // 'market' | ''（自创 / 导入 / 升级）
       originName: String(meta.originName || ''),
       originCode: String(meta.originCode || ''),
+      // 解包时因体积超限没解出来的文件（导入时记下的）。解包响应是一次性的，
+      // 草稿列表/详情页靠这一份才能事后继续提醒"这个包是残缺的"。
+      skippedOversize: Array.isArray(meta.skippedOversize) ? meta.skippedOversize : [],
       confirmedAt: meta.approval?.at || ''
     };
   },
@@ -446,8 +636,9 @@ export const providers = {
   // 所以流程与"自创"同构：复制进暂存区当草稿 → 模型改 / zip 对比 → 闸门 →
   // 展示"更新了什么"→ 用户确认 → 备份原版 → 覆盖 →（出问题可回滚）。
   //
-  // 与"安装新扩展"的安全差异：upgrade-install 用 **manifest.id 一致性** 当准入，
-  // 而不是撞车加 _1：id 不同就拒绝覆盖，"升级"的定义就是同一个扩展的新版本。
+  // 与"安装新扩展"的分界：upgrade-install 用 **manifest.id 一致性** 当准入 ——
+  // id 不同就拒绝覆盖，"升级"的定义就是同一个扩展的新版本；而普通安装反过来，
+  // 发现同 id 已装就拒绝落地（见 forge.install 的冲突检查），不制造第二份副本。
 
   /** 列出可升级的已装扩展（读 plugins/ 与 skills/ 的清单）。 */
   'forge.installed': () => {
@@ -571,7 +762,7 @@ export const providers = {
       return {
         ok: false,
         error: `id 不一致：草稿是 ${dm.manifest.id}，目标是 ${tm.manifest.id}。`
-          + `覆盖安装只允许同 id 升级；要装成新扩展请走普通安装（会自动避开重名）。`
+          + `覆盖安装只允许同 id 升级；要装成另一个扩展，请把草稿的 id 改掉再走普通安装。`
       };
     }
 
@@ -627,7 +818,8 @@ export const providers = {
     }
 
     // ⑤ 内置模块被覆盖后，随包基线的指纹不再一致：下一轮热重扫会被准入闸
-    //    当"占名顶替"拦下（文案还写着"触碰高危能力"，非常误导）。
+    //    当"占名顶替"拦下（旧文案还写着"触碰高危能力"，非常误导；现在的提示按
+    //    原因码 capability-scan 生成，此处保留旧文案仅作历史说明）。
     //    这里当作落地的一部分，即时重算该模块的基线（目标不是内置目录时自动跳过）。
     try {
       const rb = refreshBuiltinEntry(safeDir, { appRoot });
@@ -749,7 +941,10 @@ export const providers = {
         originName: String(meta.originName || ''),
         originCode: String(meta.originCode || ''),
         digest: gate?.digest || '',
-        confirmedAt: meta.approval?.at ? new Date(meta.approval.at).toISOString() : ''
+        confirmedAt: meta.approval?.at ? new Date(meta.approval.at).toISOString() : '',
+        // 导入时因体积超限没解出来的文件：草稿列表要能标出"这份包是残缺的"，
+        // 否则用户隔天回来只看到"已过闸 · 待安装"，不知道当初少了解出来的文件。
+        skippedOversize: Array.isArray(meta.skippedOversize) ? meta.skippedOversize : []
       });
     }
     // 新的在前（id 前缀是时间序）
@@ -856,25 +1051,68 @@ export const providers = {
     // ①' 人工确认票据（闸门替代不了"有人同意"）
     const ticket = verifyApproval(tctx, id, gate, approvalToken);
     if (!ticket.ok) return { ...ticket, gate };
+
+    // ①'' 同 id 冲突：**拒绝落地**，不生成第二份目录。
+    //
+    // 历史实现是"撞名加 _1"（writeModuleDirectory），后果是磁盘两份、注册表一份：
+    // 注册表按 manifest.id 去重只剩后者，先装的那份目录既不在列表里也没人管，
+    // 卸载时删的是注册表那条，原目录变成孤儿；孤儿在下次热重扫时又被加载，
+    // 而它的 config 已随卸载清空 → 按 enabledByDefault 自动启用，等于"卸载
+    // 反而把它复活了"。真正的愿望（升级）本来就有专门的入口，不该靠静默复制。
+    // 顺带：这一步放在用票之前，撞名时票据不被消耗，用户处理好冲突可以直接重试。
+    const conflict = findIdConflict(String(gate.manifest?.id || ''));
+    if (conflict) {
+      const ex = conflict.existing;
+      // 内置模块 id 的措辞必须单独给：它没有可卸载的目录，"先卸载再装"对用户
+      // 是死路（内置模块不可卸载、不可禁用）。唯一出路是改清单 id。
+      return {
+        ok: false, conflict: true,
+        existing: ex,
+        error: ex.kind === 'core'
+          ? `id「${ex.id}」属于内置模块（${ex.relDir}），第三方扩展不能占用 —— 请修改草稿清单里的 id`
+          : `已安装 ${ex.id}${ex.version ? ` v${ex.version}` : ''}（${ex.relDir}）。要升级请用「升级扩展」，或先卸载再装。`
+      };
+    }
     markApprovalConsumed(tctx, id, true);
 
     // ② 目标目录：skill.json → skills/，plugin.json → plugins/
     const kind = gate.kind;
     const baseDir = path.join(appRoot, kind === 'plugin' ? 'plugins' : 'skills');
 
-    // ③ 目录名：用清单 id，冲突则递增（绝不覆盖：覆盖写一半会让热重载加载出半截代码）
-    const wantName = sanitizeDraftId(String(gate.manifest?.id || id));
+    // ③ 目录名 = 清单 id。此处**不再**有 `_1` 兜底：冲突已经在上面拒绝。
+    //    目录名仍要 sanitize 一次（id 已过闸门正则，这里是同一份规则的兜底），
+    //    与写入目录的实际名字必须一致，否则返回给前端的 dir 与磁盘对不上。
+    const finalName = sanitizeDraftId(String(gate.manifest?.id || id));
+    const target = path.join(baseDir, finalName);
     // ④ 复制（不是移动：保留暂存副本便于回溯"当初怎么生成的"）
+    //    用 mkdir 独占创建：调用方已经查过冲突，这里再撞只可能是并发安装
+    //    同一 id（两个请求同时走到这一步）—— 那种情况必须报错，不能覆盖。
     const copied = [];
-    let finalName, target;
     try {
-      const installed = writeModuleDirectory(baseDir, wantName, (dir) => {
-        copyDir(draftDir(tctx, id), dir, copied);
-      });
-      finalName = installed.id;
-      target = installed.dir;
+      // skills/ 或 plugins/ 目录本身可能还不存在（全新安装 / 用户删过）。
+      // 只对**容器**建递归，对目标目录用非递归 mkdir 保持"已存在即报错"的语义。
+      fs.mkdirSync(baseDir, { recursive: true });
+      fs.mkdirSync(target);
     } catch (e) {
-      // 独占目录的创建/清理由 writeModuleDirectory 负责，不能删已有同名模块。
+      markApprovalConsumed(tctx, id, false);
+      if (e?.code === 'EEXIST') {
+        return {
+          ok: false, conflict: true,
+          existing: { id: finalName, version: '', dir: finalName, relDir: `${kind === 'plugin' ? 'plugins' : 'skills'}/${finalName}` },
+          error: `目标目录 ${finalName} 刚刚被占用（可能是另一个安装请求），请刷新扩展列表后重试。`
+        };
+      }
+      return { ok: false, error: `落地失败：${e.message}` };
+    }
+    try {
+      copyDir(draftDir(tctx, id), target, copied);
+    } catch (e) {
+      // 只清理本次创建的目录：独占 mkdir 保证它一定是本轮出现的
+      try { fs.rmSync(target, { recursive: true, force: true }); }
+      catch (cleanupError) {
+        markApprovalConsumed(tctx, id, false);
+        return { ok: false, error: `落地失败且清理 ${target} 失败：${e.message}；${cleanupError.message}` };
+      }
       // 票还回去：内容没落地，人刚才的确认不该白白消耗掉
       markApprovalConsumed(tctx, id, false);
       return { ok: false, error: `落地失败：${e.message}` };
@@ -899,17 +1137,21 @@ export const providers = {
       }, null, 2), 'utf8');
     } catch { /* 来源记录失败不影响安装 */ }
 
+    // 已安装标记：keepStaging 为 true（默认）时落地后草稿仍留在暂存区，
+    // 去重扫描（forge.find-duplicate）必须能认出"这份已经装完了"，
+    // 否则重复下载会把人引到一份已落地的老草稿上。
+    try { writeMetaRaw(tctx, id, { ...readMetaRaw(tctx, id), installedAt: new Date().toISOString() }); }
+    catch { /* 标记失败只影响去重精度，不影响安装结果 */ }
+
     if (!cfg().keepStaging) { clearDraft(tctx, id); clearSnapshots(id); clearDraftMeta(id); }
 
     log(`已落地 ${kind}：${finalName}（${copied.length} 个文件）`);
     return {
       ok: true,
       kind,
-      // ⚠️ id 与 dir 是**两件事**，别混用：
-      //    · dir   = 磁盘上的目录名，id 撞车时会变成 `xxx_1`
-      //    · id    = 清单里的 id，也是**注册表/配置里的键**：扩展被装载后就是按它注册的
-      //    要开关这个扩展（写 skills.<id>.enabled）必须用 id：用 dir 的话，
-      //    一旦发生过撞车重命名，就会给一个不存在的 id 写配置，开关静默失效。
+      // id 与 dir 在正常路径上相等（目录名就是清单 id）。保留两个字段是因为
+      // 它们的来源不同：id 来自清单、dir 来自磁盘。调用方写配置（skills.<id>.enabled）
+      // 一律用 id —— 那是注册表的键，与目录名只是恰好同值。
       id: String(gate.manifest?.id || finalName),
       dir: finalName,
       path: target,
@@ -993,21 +1235,6 @@ function copyDir(from, to, acc) {
     fs.copyFileSync(fp, tp);
     acc.push(path.relative(from, fp).replace(/\\/g, '/'));
   }
-}
-
-/**
- * 读一个扩展目录的清单（skill.json 优先，plugin.json 兜底，与 plugin-loader 同序）。
- * 含 BOM 处理：已装扩展也可能是 Windows 编辑器写的。
- */
-function readManifestOf(base) {
-  for (const name of ['skill.json', 'plugin.json']) {
-    try {
-      let text = fs.readFileSync(path.join(base, name), 'utf8');
-      if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
-      return { kind: name === 'skill.json' ? 'skill' : 'plugin', manifest: JSON.parse(text), file: name };
-    } catch { /* 下一个 / 不存在 / 解析失败都按"没有"处理 */ }
-  }
-  return null;
 }
 
 /** 递归复制目录，但白名单外的后缀跳过并记录（闸门对它们一票否决，复制了也装不上）。 */

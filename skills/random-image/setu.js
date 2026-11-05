@@ -16,11 +16,14 @@ import { safeFetch } from '../../src/safe-fetch.js';
 // 常量与标签 Set 在 config.js，这里只导入本文件直接使用的
 import {
   MAX_COUNT, NSFW_TRIGGER_RE, MULTI_PERSON_TAGS, MALE_CHARACTER_TAGS, HORROR_TAGS,
-  DEFAULT_SETU_BASE_URL, SETU_IMAGE_SIZE, SETU_NSFW_SORT, SETU_SFW_SORT, SETU_REQUEST_TIMEOUT_MS
+  DEFAULT_SETU_BASE_URL, SETU_IMAGE_SIZE, SETU_NSFW_SORT, SETU_SFW_SORT, SETU_REQUEST_TIMEOUT_MS,
+  FETCH_ROUNDS
 } from './config.js';
 
 // 响应解析是纯函数（可独立单测），见 response.js
 import { extractImageUrls } from './response.js';
+// 日志出口（setup 时由 index.js 注入核心 logger）
+import { log, warn, error } from './log.js';
 
 // 过滤函数在 filters.js（纯函数，可独立单元测试）
 import {
@@ -128,11 +131,17 @@ function clampCount(value) {
  */
 export function buildPicUrl(api, sortKey, num, { nsfw }) {
   const base = String(api?.baseUrl ?? '').trim();
-  if (!base) throw new Error('随机图片接口地址为空');
+  // 配置类故障不可恢复（要用户改设置），落 error 级别：这两条以前只 throw 给模型，
+  // data/logs 里一个字都没有，"随机图发不出去"时无法判断是配置还是网络。
+  if (!base) {
+    error('随机图片接口地址为空，请到「设置 → 工具与技能 → 二次元随机图片」填写接口地址');
+    throw new Error('随机图片接口地址为空');
+  }
   let u;
   try {
     u = new URL(base);
   } catch {
+    error(`随机图片接口地址不是合法 URL：${base}`);
     throw new Error(
       `随机图片接口地址不是合法 URL：${base}。请到「设置 → 工具与技能 → 二次元随机图片 → 接口地址」改成完整地址，例如 ${DEFAULT_SETU_BASE_URL}`
     );
@@ -155,15 +164,19 @@ async function fetchPicUrls(cfg, sortKey, num, { category }) {
       timeoutMs: Number(api?.requestTimeoutMs) > 0 ? Number(api.requestTimeoutMs) : SETU_REQUEST_TIMEOUT_MS
     }));
   } catch (error) {
-    console.warn(`[setu] 取图接口请求失败 ${sortKey}: ${error?.message ?? error}`);
+    warn(`取图接口请求失败 ${sortKey}: ${error?.message ?? error}`);
     return [];
   }
   let data;
   try { data = JSON.parse(body || ''); } catch {
-    console.warn('[setu] 取图接口返回不是合法 JSON');
+    warn('取图接口返回不是合法 JSON');
     return [];
   }
-  return extractImageUrls(data);
+  const urls = extractImageUrls(data);
+  // 一行说清"取图这步走到哪了"：真实故障里这条链上原本只有下载侧日志，
+  // 接口返回 0 条与接口没请求成功在日志里无从区分。
+  log(`取图接口返回 ${urls.length} 条 URL（sort=${sortKey} num=${num}）`);
+  return urls;
 }
 
 function dedupeInBatch(batch, limit) {
@@ -268,20 +281,36 @@ async function runSetuRequestGuarded({ cfg, chatKey, requested, keyword, source 
 
   const limit = clampCount(cfg.send?.count);
   const label = categoryLabel(category);
-  // 多要 3 张备胎：随机池同样存在"唯一候选下载失败 → 整次失败"的单点，
-  // spares 让 pickBestImages 失败时有下一个可换（与关键词路径同一机制）
-  const urls = await fetchFreshUrls(cfg, source, sortKeyFor(cfg.api, category), limit + 3, category);
-  if (!urls.length) return { outcome: 'no-image', message: `${label}接口暂时拉不到图，稍后再试试吧～` };
+  const sortKey = sortKeyFor(cfg.api, category);
+  const download = (url) => downloadImage(url, cfg);
+  const remember = (url) => source.remember(url, cfg.send?.dedupMaxSize);
 
-  const picked = await pickBestImages(
-    urls,
-    limit,
-    (url) => downloadImage(url, cfg),
-    () => true,
-    (url) => source.remember(url, cfg.send?.dedupMaxSize)
-  );
+  // 按需取图：先只取需要的数量，下载失败才补取。
+  //
+  // 旧实现无条件多要 3 张（limit + 3）并让 pickBestImages 并发下载
+  // max(limit, 4) 张，等于「要 1 张、下 4 张」。这两层冗余都解决不了
+  // 真正的网络故障（4 张并发全挂），却让正常路径恒定多付 3 张图的流量
+  // 与临时文件。单张图内部本来就有 4 个 CDN 镜像的串行重试（pximgAttempts），
+  // 那才是应对单点故障的机制；外层备胎真正覆盖的是「这张图本身没了」
+  // （作者删除 / 搜索缓存里的旧 URL），属于少数情况，按需补取即可。
+  const picked = [];
+  for (let round = 0; round < FETCH_ROUNDS && picked.length < limit; round += 1) {
+    const need = limit - picked.length;
+    const urls = await fetchFreshUrls(cfg, source, sortKey, need, category);
+    if (!urls.length) break;
+    const got = await pickBestImages(urls, need, download, () => true, remember);
+    picked.push(...got);
+    if (got.length < need) continue;   // 本轮有失败，下一轮补取
+    break;                             // 取满了
+  }
+
   const images = picked.map((p) => p.got);
-  if (!images.length) return { outcome: 'no-image', message: `${label}图片下载失败了，稍后再试～` };
+  if (!images.length) {
+    const message = picked.length < limit && images.length === 0
+      ? `${label}图片下载失败了，稍后再试～`
+      : `${label}接口暂时拉不到图，稍后再试试吧～`;
+    return { outcome: 'no-image', message };
+  }
 
   source.markSent();
   return { outcome: 'ok', category, label, downgraded: category !== wanted, images };
@@ -327,7 +356,7 @@ export async function diagnoseEmptyResult(cfg, tags, category, lookup = lookupBo
       };
     }
     // ③ 不成立：样本里没有双人/多人标签，过滤不是原因，落到④
-    console.log(`[setu] 诊断：「${tags}」有内容但样本无双人标签，soloOnly 不是过滤原因`);
+    log(`诊断：「${tags}」有内容但样本无双人标签，soloOnly 不是过滤原因`);
   }
 
   // ④ femaleOnly 开启：有内容但都含男性角色
@@ -341,7 +370,7 @@ export async function diagnoseEmptyResult(cfg, tags, category, lookup = lookupBo
       };
     }
     // ④ 不成立：样本里没有男性角色标签，过滤不是原因，落到④.5
-    console.log(`[setu] 诊断：「${tags}」有内容但样本无男性标签，femaleOnly 不是过滤原因`);
+    log(`诊断：「${tags}」有内容但样本无男性标签，femaleOnly 不是过滤原因`);
   }
 
   // ④.5 noHorror 开启：有内容但都含恐怖/血腥标签
@@ -355,7 +384,7 @@ export async function diagnoseEmptyResult(cfg, tags, category, lookup = lookupBo
         tip: `这个标签在图库里有内容，样本里确实有恐怖/血腥标签（${horrorInSample.join('、')}），被恐怖内容过滤（noHorror）滤掉了。这个标签下的图大多是恐怖/血腥内容，不适合群聊发送。不要改 tagMap。`
       };
     }
-    console.log(`[setu] 诊断：「${tags}」有内容但样本无恐怖标签，noHorror 不是过滤原因`);
+    log(`诊断：「${tags}」有内容但样本无恐怖标签，noHorror 不是过滤原因`);
   }
 
   // ⑤ R-18/R-15 过滤：nsfwAllowed=false 时过滤 R-18，strictSfw=true 时额外过滤 R-15
@@ -403,7 +432,7 @@ async function runKeywordSearch({ cfg, source, chatKey, keyword, wanted }) {
   // 色图/无色图安全兜底：关键词里没有明确色图词时强制 sfw。
   // 模型可能自作主张传 nsfw，但「美图」不该出黄图。
   if (wanted === 'nsfw' && !NSFW_TRIGGER_RE.test(keyword)) {
-    console.log(`[setu] 「${keyword}」关键词无明确色图词，强制 sfw（模型传的是 nsfw）`);
+    log(`「${keyword}」关键词无明确色图词，强制 sfw（模型传的是 nsfw）`);
     wanted = 'sfw';
   }
 
@@ -443,7 +472,7 @@ async function runKeywordSearch({ cfg, source, chatKey, keyword, wanted }) {
   if (!urls.length && booru.translateOnEmpty !== false && hasCJK(keyword) && tags === keyword) {
     const translated = await translateTag(cfg, keyword);
     if (translated && translated !== tags) {
-      console.log(`[setu] 「${keyword}」原样搜索 0 条，翻译为「${translated}」重试`);
+      log(`「${keyword}」原样搜索 0 条，翻译为「${translated}」重试`);
       searchTag = translated;
       urls = await fetchBooruCandidates(cfg, source, searchTag, limit, soloOnly, femaleOnly, noHorror, singleCharacterOnly);
     }
@@ -452,7 +481,7 @@ async function runKeywordSearch({ cfg, source, chatKey, keyword, wanted }) {
   if (!urls.length) {
     // 诊断用实际搜索的标签（翻译兜底后是日文标签），不用原始中文标签
     const diag = await diagnoseEmptyResult(cfg, searchTag, category, lookupBooruTag, soloOnly, femaleOnly);
-    console.log(`[setu] 「${keyword}」搜索 0 条（搜索标签=「${searchTag}」），诊断=${diag.message}`);
+    log(`「${keyword}」搜索 0 条（搜索标签=「${searchTag}」），诊断=${diag.message}`);
     return { outcome: 'no-image', keyword, message: diag.message, tip: diag.tip };
   }
 
@@ -466,11 +495,11 @@ async function runKeywordSearch({ cfg, source, chatKey, keyword, wanted }) {
     (url) => source.remember(url, cfg.send?.dedupMaxSize)
   );
   const images = picked.map((p) => p.got);
-  console.log(`[setu] 「${keyword}」下载完成：候选=${urls.length} 成功=${images.length} 目标=${limit}`);
+  log(`「${keyword}」下载完成：候选=${urls.length} 成功=${images.length} 目标=${limit}`);
   // 记录已发送图片的 Pixiv 作品 ID，方便用户排查标签
   const sentIds = picked.map((p) => pixivArtworkId(p.url)).filter(Boolean);
   if (sentIds.length > 0) {
-    console.log(`[setu] 「${keyword}」已发送 Pixiv 作品 ID: ${sentIds.join(', ')}`);
+    log(`「${keyword}」已发送 Pixiv 作品 ID: ${sentIds.join(', ')}`);
   }
   if (!images.length) return { outcome: 'no-image', message: `「${keyword}」搜到了但图片都没能下载下来，稍后再试～` };
 

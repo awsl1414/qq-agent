@@ -55,12 +55,10 @@ function fileUriToPath(uri) {
 }
 
 export class SendQueue {
-  constructor({ onebot, store, onSent = null, log = null }) {
+  constructor({ onebot, store, onSent = null }) {
     this.onebot = onebot;
     this.store = store;
     this.onSent = onSent;
-    // 回退/降级这类"行为变了但没报错"的事必须留痕，否则排查时看不到曾经降级过
-    this.log = typeof log === 'function' ? log : null;
     this.chains = new Map();      // chatKey -> enqueue fn
     this.minuteTimes = new Map(); // chatKey -> [ts]
     this.hourTimes = new Map();   // chatKey -> [ts]
@@ -296,9 +294,7 @@ export class SendQueue {
         }
       }
       if (banHit) {
-        const msg = `[sender] ${chatKey} 发送被拒且符合禁言签名（result=120），已标记为禁言（风控可能同码，存疑）：${detail}`;
-        logger.warn('sender', msg);
-        this.log?.(msg);
+        logger.warn('sender', `[sender] ${chatKey} 发送被拒且符合禁言签名（result=120），已标记为禁言（风控可能同码，存疑）：${detail}`);
       }
       if (sent.length === 0) {
         const e = new Error(detail);
@@ -307,10 +303,9 @@ export class SendQueue {
         if (banHit) { e.muteRejection = true; e.chatKey = chatKey; }
         throw e;
       }
-      console.warn(`[sender] 部分发送失败（${failed.length}/${parts.length}）：${detail}`);
-      // 同时进应用日志：QQ 侧的拒发（如 result=241）原来只在协议端日志里出现，
-      // 控制台「日志」页看不到，排障时容易误判为"发成功了"。
-      this.log?.(`[sender] 部分发送失败（${failed.length}/${parts.length}）：${detail}`);
+      // QQ 侧的拒发（如 result=241）原来只在协议端日志里出现，控制台「日志」页
+      // 看不到，排障时容易误判为"发成功了"。logger 自己也镜像到 console。
+      logger.warn('sender', `[sender] 部分发送失败（${failed.length}/${parts.length}）：${detail}`);
     }
     return { sent, failed };
   }
@@ -351,7 +346,7 @@ export class SendQueue {
             if (p && fs.existsSync(p)) {
               const buf = fs.readFileSync(p);
               if (buf.length && buf.length <= 15 * 1024 * 1024) {
-                this.log?.(`[sender] 本地表情路径发送失败（${firstError?.message ?? firstError}），改 base64 发送`);
+                logger.warn('sender', `[sender] 本地表情路径发送失败（${firstError?.message ?? firstError}），改 base64 发送`);
                 data = await sendVia(`base64://${buf.toString('base64')}`);
               }
             }
@@ -367,7 +362,7 @@ export class SendQueue {
             const ret = await this.onebot.call('get_image', { file: fileKey });
             const cached = ret?.file || ret?.filename || '';
             if (cached) {
-              this.log?.(`[sender] 表情直链发送失败（${firstError?.message ?? firstError}），改用协议端缓存重试`);
+              logger.warn('sender', `[sender] 表情直链发送失败（${firstError?.message ?? firstError}），改用协议端缓存重试`);
               data = await sendVia(cached);
             }
           } catch { /* 继续走回退 2 */ }
@@ -376,7 +371,7 @@ export class SendQueue {
             const { safeFetchBinary } = await import('./safe-fetch.js');
             const { buffer } = await safeFetchBinary(primary, 15 * 1024 * 1024);
             if (!buffer?.length) throw firstError;
-            this.log?.(`[sender] 表情直链发送失败，已下载 ${Math.round(buffer.length / 1024)}KB 转 base64 发送`);
+            logger.warn('sender', `[sender] 表情直链发送失败，已下载 ${Math.round(buffer.length / 1024)}KB 转 base64 发送`);
             data = await sendVia(`base64://${buffer.toString('base64')}`);
           }
         }
@@ -447,7 +442,7 @@ export class SendQueue {
             const st = localPath && fs.existsSync(localPath) ? fs.statSync(localPath) : null;
             if (st && st.size > 0 && st.size <= 15 * 1024 * 1024) {
               const buf = fs.readFileSync(localPath);
-              this.log?.(`[sender] 本地图片路径发送失败（${error?.message ?? error}），改 base64 发送`);
+              logger.warn('sender', `[sender] 本地图片路径发送失败（${error?.message ?? error}），改 base64 发送`);
               data = await this.#sendAllowed(chatKey, 'sendImage', kind, id, `base64://${buf.toString('base64')}`, {
                 replyToMessageId: options.replyToMessageId ?? null,
                 atUserId: options.atUserId ?? null
@@ -455,7 +450,7 @@ export class SendQueue {
             }
           } catch { /* 读不到就走下面的 dataUrl 回退 */ }
           if (!data && dataUrl) {
-            this.log?.(`本地路径发送失败（${error?.message ?? error}），回退 base64 重试一次`);
+            logger.warn('sender', `本地路径发送失败（${error?.message ?? error}），回退 base64 重试一次`);
             data = await this.#sendAllowed(chatKey, 'sendImage', kind, id, dataUrl, {
               replyToMessageId: options.replyToMessageId ?? null,
               atUserId: options.atUserId ?? null
@@ -465,7 +460,7 @@ export class SendQueue {
         } else {
           // 无本地文件：只有 dataUrl 备份可用，回退一次
           if (!dataUrl) throw error;
-          this.log?.(`本地路径发送失败（${error?.message ?? error}），回退 base64 重试一次`);
+          logger.warn('sender', `本地路径发送失败（${error?.message ?? error}），回退 base64 重试一次`);
           data = await this.#sendAllowed(chatKey, 'sendImage', kind, id, dataUrl, {
             replyToMessageId: options.replyToMessageId ?? null,
             atUserId: options.atUserId ?? null
@@ -523,7 +518,7 @@ export class SendQueue {
         // 抛原始错误。
         const retrySegs = this.#localSegmentsToBase64(segs);
         if (retrySegs) {
-          this.log?.(`[sender] 媒体本地路径发送失败（${error?.message ?? error}），图片段改 base64 重发`);
+          logger.warn('sender', `[sender] 媒体本地路径发送失败（${error?.message ?? error}），图片段改 base64 重发`);
           data = await this.#sendAllowed(chatKey, 'sendSegments', kind, id, retrySegs);
         } else {
           throw error;

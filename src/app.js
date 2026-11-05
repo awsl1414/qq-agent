@@ -50,7 +50,7 @@ import { createRoutes } from './routes.js';
 // 桌宠 HTTP 适配器：只处理 /api/desktop-pet/*，且挂在控制台鉴权 + 同源检查之后。
 import { handleDesktopPetRequest } from './desktop-pet-api.js';
 import * as instanceLockModule from './instance-lock.js';
-import { logger } from './logger.js';
+import { logger, subLogger } from './logger.js';
 import { startCommunitySync, isGloballyBlocked, FIXED_PRICE_FEED_URL } from './community.js';
 import { noteMuted, noteUnmuted } from './ban-state-client.js';
 
@@ -103,13 +103,24 @@ function compareSemver(a, b) {
   return 0;
 }
 
-/* createApp 产生的所有 appLog 函数（模块级 WeakSet）。
-   用于识别"调用方传入的 log 是不是上一次 createApp 留下的 appLog"，
-   防止监听器链式递归（见 createApp 内的递归护栏注释）。 */
-const appLogFns = new WeakSet();
+/**
+ * 核心子系统（plugin-loader / upgrade / harness / cache-warm / media-links /
+ * telemetry / community / routes）统一接收这个分级日志对象：
+ *
+ *   log.info('[skill] ✅ …')   log.warn('[skill] ❌ …')   log.error(…)
+ *
+ * 级别由调用点按语义给出。装配点不再做任何推断 —— 曾经这里用中文关键字正则
+ * （❌/⚠️/失败/错误/异常/拒绝/超时）把一条文案回调分流成 INFO/WARN，那是
+ * "自然语言判据"：新增文案漏带关键字就静默降级成 INFO，而"8 成功，0 失败"
+ * 这类正常统计行又得靠第二个豁免正则才不至于误标 WARN。两个正则现均已删除。
+ */
+const subLog = subLogger('app');
 
-export function createApp({ log = console.log, desktopPetHost = null } = {}) {
+export function createApp({ desktopPetHost = null } = {}) {
   const cfg = getConfig();
+  // 持久化的日志级别（config.logs.level）在装配时应用一次：此前级别只在内存里，
+  // 重启就回到默认 info，用户选了 debug 却发现"重启又没调试日志"。
+  logger.applyConfiguredLevel();
 
   // 桌面伙伴：能力按"已激活的插件"取用，插件没装/被禁用时返回 null，
   // 整个桌宠链路（API、事件转发、窗口）降级为无操作，不影响群聊。
@@ -148,38 +159,9 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   // 不写入 HTML / preload / 配置文件，避免把 server.token 暴露给页面或其他本机进程。
   const rendererAuthToken = randomBytes(32).toString('hex');
 
-  // 详尽日志：把 createApp 的 log 接到分级日志系统（落盘 + 内存缓冲 + SSE）。
-  // 只写 logger、不再调原 log，logger 的 mirrorConsole 已经会走 console，再调一次
-  // 就会在 log 被指回 appLog 时无限递归（selftest 就是这么挂的）。
-  const appLog = (...args) => {
-    logger.info('app', ...args);
-  };
-  // 监听器必须持有"调用方原本传入的 log"的独立引用：下面会把形参 `log` 改指
-  // appLog，而监听器闭包与形参共享同一个绑定，改指后监听器调到的是 appLog 自己，
-  // 日志经 logger 的重入防护被静默丢弃，终端与 Electron 主进程 console 全部收不到
-  // （headless 下表现为启动后终端一片空白，连端口都看不到）。
-  const forwardLog = log;
-  // 把调用方传入的 log 挂到 logger 的监听器上，与 mirrorConsole 解耦：mirrorConsole
-  // 管 console，监听器管调用方的 log。
-  //
-  // 递归护栏（15GB 日志事故根因）：调用方传入的 log 可能本身就是上一次 createApp
-  //   留下的 appLog（同进程内二次 createApp：Electron 重启核心 / 测试串行多轮），
-  //   监听器链会形成 appLog→logger→监听器→appLog 的无限递归，每轮再包一层 [app]
-  //   前缀，几个小时内日志文件就能写到 15GB。这里用 WeakSet 识别并跳过挂载。
-  //   （这也是为什么监听器必须用 forwardLog：形参 `log` 马上会被改指 appLog。）
-  // 同时持有退订函数：原实现把 logger.onLog 的返回值直接丢掉，同进程二次 createApp
-  // 时旧监听器仍在，每条日志广播 N 份，并持有上一个 app 的 log 闭包。
-  let unsubscribeAppLog = null;
-  if (!appLogFns.has(forwardLog)) {
-    unsubscribeAppLog = logger.onLog((entry) => {
-      try { forwardLog(`[${entry.module}] ${entry.text}`); } catch { /* ignore */ }
-    });
-  }
-  appLogFns.add(appLog);
-  // 关掉 logger 的 console 镜像，避免与上面的监听器重复打印（调用方 log 通常就是 console.log）。
-  logger.mirrorConsole = false;
-  // 后续内部调用统一指向 appLog（关键事件落盘 + 走调用方 log）
-  log = appLog;
+  // 日志只有一个出口：src/logger.js（落盘、内存缓冲 → UI 日志页、SSE 推送、
+  // console 镜像）。它默认开 mirrorConsole，headless 与 Electron 主进程的终端输出
+  // 都由它负责，调用方不需要、也不再提供自定义 log。
   // 启动时清理过期日志文件
   logger.prune();
 
@@ -852,6 +834,62 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     }
   };
 
+  // ── 日志 SSE 推送（节流批处理）────────────────────────────────────────
+  //
+  // 为什么必须合并：logger 是热路径，启动期实测可达 56 条/秒，插件一次性刷 500 条
+  // 也常见。一条日志一次 emit 会把几百个 SSE frame 灌进同一条连接（帧头重复、
+  // 每帧一次 JSON.stringify + 一次 write），浏览器侧还要逐条派发。
+  // 合并成一帧数组后，同样的流量只占 1/时间窗 条连接写入。
+  //
+  // 200ms 窗口：肉眼实时性足够（人看不出 200ms 的延迟），同时能把突发完整吸进
+  // 一批。定时器 unref：它不该拖住进程退出。
+  //
+  // 注意：emit 内部不能再打日志。logger 的 #write 有重入保护，emit 里若触发
+  // logger.*，这条日志会被静默丢弃，更糟的是定时器回调里打日志会反过来喂自己。
+  //
+  // 单条正文由 logger 截断到 64KB（见 src/logger.js 的 MAX_LOG_TEXT_CHARS），
+  // 但一批 200ms 的流量仍可到 500 条 × 64KB ≈ 32MB —— 浏览器要整段 JSON.parse。
+  // 所以整批再设一个字节上限：超出时丢掉本批**更早**的部分（实时流里最新的
+  // 那几条才是用户正要看的东西），保留最近的若干条，并在批次开头补一条可见
+  // 提示，说明这段实时流不完整、全量请看磁盘历史。提示放在开头（而不是末尾）
+  // 是为了让它按时间顺序落在被丢内容的原位置——前端把批次倒序后插到列表顶部。
+  const pendingLogs = [];
+  let logFlushTimer = null;
+  const LOG_FLUSH_MS = 200;
+  const LOG_SSE_BATCH_MAX_CHARS = 256 * 1024;
+  function flushLogs() {
+    logFlushTimer = null;
+    if (!pendingLogs.length) return;
+    const batch = pendingLogs.splice(0, pendingLogs.length);
+    let kept = batch;
+    let total = 0;
+    for (let i = batch.length - 1; i >= 0; i--) {
+      total += batch[i].text.length;
+      if (total > LOG_SSE_BATCH_MAX_CHARS && i < batch.length - 1) {
+        const dropped = i + 1;
+        kept = batch.slice(i + 1);
+        kept.unshift({
+          ts: kept[0].ts,
+          level: 'warn',
+          module: 'logger',
+          text: `本批实时日志超过 ${Math.round(LOG_SSE_BATCH_MAX_CHARS / 1024)}KB，已丢弃更早的 ${dropped} 条；完整内容请用磁盘历史翻页查看`
+        });
+        break;
+      }
+    }
+    emit('log', kept);
+  }
+  // 退订函数必须在 stop() 里调用：否则每次 createApp 都在 logger 上叠一个监听器，
+  // 旧的 pendingLogs / emit 闭包一直被持有（测试里尤其明显，串味且泄漏）。
+  const unsubscribeLogSse = logger.onLog((entry) => {
+    // 复制一份：logger 的 entry 对象会被内存缓冲继续持有，不共享引用给 SSE
+    pendingLogs.push({ ts: entry.ts, level: entry.level, module: entry.module, text: entry.text });
+    if (!logFlushTimer) {
+      logFlushTimer = setTimeout(flushLogs, LOG_FLUSH_MS);
+      logFlushTimer.unref?.();
+    }
+  });
+
   // ── 组件 ──
   const visionScan = { running: false };   // 模型图片输入能力扫描的运行状态
   const store = new ChatStore(cfg.store?.maxMessagesPerChat ?? 0);   // 0 = 不限
@@ -870,13 +908,12 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     httpUrl: cfg.protocol?.httpUrl,
     accessToken: cfg.protocol?.accessToken,
     httpToken: cfg.protocol?.httpAccessToken || cfg.protocol?.accessToken,
-    onEvent: (event) => handleOneBotEvent(event).catch((error) => log('[ingest] 处理事件出错:', error?.message ?? error))
+    onEvent: (event) => handleOneBotEvent(event).catch((error) => logger.warn('app', `[ingest] 处理事件出错: ${error?.message ?? error}`))
   });
   setOnebotClient(onebot);
-  const sender =   new SendQueue({
+  const sender = new SendQueue({
     onebot, store,
-    onSent: ({ chatKey, text }) => log(`[发送 -> ${chatKey}] ${String(text).slice(0, 60)}`),
-    log
+    onSent: ({ chatKey, text }) => logger.info('app', `[发送 -> ${chatKey}] ${String(text).slice(0, 60)}`)
   });
   const reminders = new ReminderStore();
   const videoReader = new VideoReader(onebot);
@@ -921,7 +958,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     }
     const saved = updateConfig({ protocol: next });
     // 只记路径与账号，不记令牌
-    log(`[onebot] 已从协议端配置自动填充端点（账号 ${hit.uin || '未知'}，来源 ${hit.dir}）`);
+    logger.info('app', `[onebot] 已从协议端配置自动填充端点（账号 ${hit.uin || '未知'}，来源 ${hit.dir}）`);
     try {
       await onebot.setEndpoint({
         wsUrl: saved.protocol?.wsUrl,
@@ -940,13 +977,13 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   initPriceFeed(FIXED_PRICE_FEED_URL);
 
   // 云端统一屏蔽名单：启动先用 data 缓存，后台同步；网络失败不影响本地拦截。
-  const communitySyncTimer = startCommunitySync(log);
+  const communitySyncTimer = startCommunitySync(subLog);
   communitySyncTimer.unref?.();
 
   // 前缀缓存保活：默认开启（会主动联网，开关改动无需重启）。
   // 保活构造前缀要用到 skillManager 的当前状态，而它晚于本行加载，所以首次 tick
   // 延迟 20 秒兜住。
-  const cacheWarm = startCacheWarm(log);
+  const cacheWarm = startCacheWarm(subLog);
 
   // 启动即预热：保活只能等"本次运行"构造出前缀才知道要预热什么，于是每个会话的
   // 第一次调用永远赶不上预热。这里在启动时载入上次运行落盘的前缀，直接暖一次。
@@ -965,11 +1002,11 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         // 少了这条兜底，启动预热在第一次重启后永远没有样本，而第一次调用恰恰最需要它。
         const ok = loadPersistedPrefix() || seedPrefixFromSessions();
         if (!ok) return;
-        const r = await warmOnce({ log });
+        const r = await warmOnce({ log: subLog });
         if (r.ok) {
           markCurrentShapeWarmed();   // 登记"这份形状已预热"，避免重复预热
-          if (r.dedup) log(`[cache-warm] 启动预热跳过（${r.reason}）`);
-          else log(`[cache-warm] 启动预热完成（${r.prompt} tok，命中 ${r.cached}）`);
+          if (r.dedup) logger.info('app', `[cache-warm] 启动预热跳过（${r.reason}）`);
+          else logger.info('app', `[cache-warm] 启动预热完成（${r.prompt} tok，命中 ${r.cached}）`);
         }
       } catch { /* 启动预热失败不影响任何功能 */ }
     }, 15000);
@@ -1104,11 +1141,11 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         //    话术要让用户知道"是这条转发读不了"，而不是"程序坏了"。
         const errMsg = String(e?.message ?? e);
         if (e?.code === 'NOT_FORWARD') {
-          log(`[ingest] 展开合并转发被跳过（判据判定为非转发，属预期）: ${errMsg}`);
+          logger.debug('app', `[ingest] 展开合并转发被跳过（判据判定为非转发，属预期）: ${errMsg}`);
         } else if (e?.retcode === 100 || /payload is empty/i.test(errMsg)) {
-          log(`[ingest] 合并转发内容读不到（协议端返回空载荷：该转发可能已过期或当前账号无权读取）: ${errMsg}`);
+          logger.warn('app', `[ingest] 合并转发内容读不到（协议端返回空载荷：该转发可能已过期或当前账号无权读取）: ${errMsg}`);
         } else {
-          log(`[ingest] 展开合并转发失败（保留占位符）: ${errMsg}`);
+          logger.warn('app', `[ingest] 展开合并转发失败（保留占位符）: ${errMsg}`);
         }
       }
     }
@@ -1153,7 +1190,10 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         onebot,
         sender,
         store,
-        log,
+        // ctx.log 是扩展契约（doc/extend_development/skill-reference.md 第 10 节）：
+        // 分级对象 {debug,info,warn,error}，扩展自己按语义选级别（ctx.log.warn(…)），
+        // 而不是让核心猜"这句话是不是失败"。
+        log: subLog,
         sendSegments: sendHookSegments,
         // opts 可选透传（如 { dedupe: false }），给"进度提示"这类本就该重复的内容用。
         // 不传时走默认去重。
@@ -1186,7 +1226,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
 
     // 链接媒体转发（确定性）：刻意不 await，百兆级下载/上传不能卡住 ingest 热路径。
     // 内部已把错误全部收口（含 provider 抛错），这里再挂一次 catch 只为防漏网。
-    forwardLinkedMedia(kind, id, text).catch((e) => log(`[media] 链接转发失败：${e?.message ?? e}`));
+    forwardLinkedMedia(kind, id, text).catch((e) => logger.warn('app', `[media] 链接转发失败：${e?.message ?? e}`));
   }
 
   /**
@@ -1217,7 +1257,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       commandMute: { active: { __replace__: { ...(cfg.commandMute?.active || {}), [String(groupId)]: until } } }
     }));
     const untilStr = until ? new Date(until).toLocaleTimeString('zh-CN', { hour12: false }) : '直到手动解除';
-    log(`[指令禁言] 群 ${groupId} 已被「${command}」禁言，响应档位临时固定为 1 档（仅艾特），${untilStr} 解除`);
+    logger.info('app', `[指令禁言] 群 ${groupId} 已被「${command}」禁言，响应档位临时固定为 1 档（仅艾特），${untilStr} 解除`);
     emit('chat-update', `group:${groupId}`);
   }
 
@@ -1240,7 +1280,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       urls: extractCandidateUrls(text),
       providers,
       ctx: { onebot, sender, kind, chatId: id, text },
-      log
+      log: subLog
     });
   }
 
@@ -1403,7 +1443,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     if (mid == null) return;
     const marked = store.markRecalled(chatKey, mid);
     if (marked) {
-      log(`[撤回] ${chatKey} 消息 #${mid} 已被撤回，后续不再发给模型`);
+      logger.info('app', `[撤回] ${chatKey} 消息 #${mid} 已被撤回，后续不再发给模型`);
       emit('chat-update', chatKey);
     }
     // onRecall 钩子：反撤回插件在这里把撤回的消息原文重发回群。
@@ -1414,7 +1454,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     // 段发送通过 SendQueue，准入、限频、去重与留档口径一致。
     try {
       skillManager.runHook('onRecall', {
-        event, chatKey, mid, onebot, sender, store, log,
+        event, chatKey, mid, onebot, sender, store, log: subLog,
         sendSegments: sendHookSegments
       }).catch(() => {});
     } catch { /* ignore */ }
@@ -1428,7 +1468,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   // ── HTTP API ──
   const server = http.createServer((req, res) => {
     handleHttp(req, res).catch((error) => {
-      log('[http] 处理出错:', error?.message ?? error);
+      logger.error('app', `[http] 处理出错: ${error?.message ?? error}`);
       try {
         res.writeHead(500, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: String(error?.message ?? error) }));
@@ -1669,7 +1709,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
   // 路由 handler 通过闭包取用这些依赖，handleHttp 只负责匹配分发。
   const apiRoutes = createRoutes({
     store, memory, sessions, onebot, orchestrator, sender,
-    emit, log,
+    emit, log: subLog,
     localVersion, compareSemver,
     sanitizeConfig, keyEndpointAllowed, sanitizeProvider,
     readBody, authorize,
@@ -1729,7 +1769,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         try {
           await handleDesktopPetRequest({ req, res, url, readBody, json, desktopHost: desktopPetHost, emit });
         } catch (error) {
-          log('[desktop-pet] API 处理失败：', error?.message ?? error);
+          logger.warn('app', `[desktop-pet] API 处理失败：${error?.message ?? error}`);
           if (!res.headersSent) json(res, error?.status || error?.statusCode || 500, { ok: false, error: String(error?.message || '桌宠操作失败') });
           else if (!res.writableEnded) res.end();
         }
@@ -1754,7 +1794,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         if (error?.expose && Number.isInteger(error.status)) {
           return json(res, error.status, { error: String(error.message || '请求无效') });
         }
-        log(`[api] ${method} ${pathname} 处理失败：${error?.stack ?? error?.message ?? error}`);
+        logger.error('app', `[api] ${method} ${pathname} 处理失败：${error?.stack ?? error?.message ?? error}`);
         return json(res, 500, { error: '服务器内部错误' });
       }
       return json(res, 404, { error: `未知 API：${method} ${pathname}` });
@@ -1955,9 +1995,9 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     // 抢同名能力。reloadSkills 读的正是这份 trustedPlugins。
     // 同步、开销极小（几次 stat），失败也绝不阻塞启动。
     try {
-      runUpgrades({ log });
+      runUpgrades({ log: subLog });
     } catch (error) {
-      log(`[upgrade] ⚠️ 迁移流程异常（不影响启动）：${error?.message ?? error}`);
+      logger.warn('app', `[upgrade] ⚠️ 迁移流程异常（不影响启动）：${error?.message ?? error}`);
     }
 
     // ── 启动顺序 ──────────────────────────────────────────────────────
@@ -1983,12 +2023,12 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     // 每次启动覆盖；故意不在退出时删除，应用没起时脚本还能读到"上次端口"作为猜测起点。
     try {
       fs.writeFileSync(path.join(DATA_DIR, 'console-port'), String(port), 'utf8');
-      log(`[api] 控制台实际端口 ${port} 已写入 ${path.join(DATA_DIR, 'console-port')}`);
-    } catch (e) { log(`[api] ⚠️ 端口落盘失败（不影响使用）：${e?.message ?? e}`); }
+      logger.info('app', `[api] 控制台实际端口 ${port} 已写入 ${path.join(DATA_DIR, 'console-port')}`);
+    } catch (e) { logger.warn('app', `[api] ⚠️ 端口落盘失败（不影响使用）：${e?.message ?? e}`); }
 
     // 匿名用量遥测：默认关闭（config.telemetry.enabled），未启用时不装任何定时器。
     // 要自己收数据时在 config.json 填 telemetry.reportUrl 并打开开关。
-    startTelemetryLoop(log);
+    startTelemetryLoop(subLog);
 
     // 会话索引后台对账：启动读的是毫秒级缓存，这里异步补扫磁盘修正差异
     // （缓存缺失的新文件/外部删除的文件）。不 await，不挡任何启动步骤。
@@ -2004,26 +2044,27 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         const pluginResult = await reloadSkills({ reason: 'boot' });
         const okCount = pluginResult.loaded.length;
         const failCount = pluginResult.failed.length;
-        if (okCount > 0) log(`[skill] 已加载 ${okCount} 个 Skill`);
+        if (okCount > 0) logger.info('app', `[skill] 已加载 ${okCount} 个 Skill`);
         for (const f of pluginResult.failed) {
-          log(`[skill] ❌ ${f.id || '(未知)'}：${f.error}`);
+          // 单个扩展加载失败只影响它自己，不阻断启动：warn。
+          logger.warn('app', `[skill] ❌ ${f.id || '(未知)'}：${f.error}`);
         }
-        if (failCount > 0) log(`[skill] ${failCount} 个 Skill 加载失败`);
+        if (failCount > 0) logger.warn('app', `[skill] ${failCount} 个 Skill 加载失败`);
 
         const toolCount = orchestrator.refreshToolDefs();
-        log(`[skill] 工具集已刷新：${toolCount} 个工具`);
+        logger.info('app', `[skill] 工具集已刷新：${toolCount} 个工具`);
 
         // 热重载日志：reloadSkills({reason:'boot'}) 里已经把 watcher 建好了
         // （默认开 config.extensions.hotReload，QQ_AGENT_DEV=1 可强制打开）
         if (pluginWatcher) {
           // 明确告知"落地的代码会被执行"，让用户知道这个行为的边界
-          log('[skill] 热重载已启用：放入 plugins/ 或 skills/ 的目录会自动加载并执行'
+          logger.info('app', '[skill] 热重载已启用：放入 plugins/ 或 skills/ 的目录会自动加载并执行'
             + '（要关闭请设 config.extensions.hotReload=false）');
         } else {
-          log('[skill] 热重载未启用（config.extensions.hotReload=false）：改动后需重启');
+          logger.info('app', '[skill] 热重载未启用（config.extensions.hotReload=false）：改动后需重启');
         }
       } catch (error) {
-        log('[skill] 加载失败:', error?.message ?? error);
+        logger.warn('app', `[skill] 加载失败: ${error?.message ?? error}`);
       }
     })();
 
@@ -2036,7 +2077,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       skillsReady,
       new Promise((resolve) => {
         skillGraceTimer = setTimeout(() => {
-          log(`[skill] 初始化超过 ${SKILL_GRACE_MS / 1000} 秒，先继续打开控制台；插件加载仍在后台等待。`);
+          logger.warn('app', `[skill] 初始化超过 ${SKILL_GRACE_MS / 1000} 秒，先继续打开控制台；插件加载仍在后台等待。`);
           resolve('skills-grace-timeout');
         }, SKILL_GRACE_MS);
       }),
@@ -2062,12 +2103,12 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       lastAutoFillAt = Date.now();
       try {
         const r = await autoFillProtocol();
-        if (r?.applied) log(`[onebot] ${why}：已自动读取协议端配置并重连（账号 ${r.uin || '未知'}）`);
-        else if (r?.found) log(`[onebot] ${why}：探测到协议端配置，与当前设置一致`);
-        else log(`[onebot] ${why}：${r?.reason || '未找到协议端配置'}`);
+        if (r?.applied) logger.info('app', `[onebot] ${why}：已自动读取协议端配置并重连（账号 ${r.uin || '未知'}）`);
+        else if (r?.found) logger.info('app', `[onebot] ${why}：探测到协议端配置，与当前设置一致`);
+        else logger.info('app', `[onebot] ${why}：${r?.reason || '未找到协议端配置'}`);
       } catch (error) {
         // 探测是"锦上添花"：失败一律不影响连接，用户还能手动填
-        log('[onebot] 自动读取协议端配置失败（已忽略）：', error?.message ?? error);
+        logger.warn('app', `[onebot] 自动读取协议端配置失败（已忽略）：${error?.message ?? error}`);
       }
     };
     if (shouldAutoFill()) setTimeout(() => void runAutoFill('首次启动'), 0);
@@ -2132,14 +2173,14 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       }
       obPortWasOpen = open;
       } catch (error) {
-        try { log('[onebot] 端口轮询异常（已忽略，2 秒后继续）:', error?.message ?? error); } catch { /* ignore */ }
+        try { logger.warn('app', `[onebot] 端口轮询异常（已忽略，2 秒后继续）: ${error?.message ?? error}`); } catch { /* ignore */ }
       }
     }, 2000);
     obPortPollTimer.unref?.();
 
     if (getConfig().proactive?.enabled) orchestrator.startProactiveLoop();
     orchestrator.startReminderLoop();   // 提醒（闹钟）调度：到点往群里发提醒
-    log(`控制台已就绪：http://127.0.0.1:${port}`);
+    logger.info('app', `控制台已就绪：http://127.0.0.1:${port}`);
 
     // ── 用量档案后台预热 ─────────────────────────────────────────────────
     // 首次打开用量页要先把全部会话文件解析一遍（实测 170MB ≈ 3.1 秒）。延迟 8 秒
@@ -2147,8 +2188,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     // 事件循环。
     const usageWarmTimer = setTimeout(() => {
       warmUsageArchive()
-        .then((r) => { if (r) log(`[usage] 用量档案已后台预热（${r.files} 个会话，${r.ms}ms）`); })
-        .catch((error) => log(`[usage] 后台预热失败（首次打开用量页时会现场重算）：${error?.message ?? error}`));
+        .then((r) => { if (r) logger.info('app', `[usage] 用量档案已后台预热（${r.files} 个会话，${r.ms}ms）`); })
+        .catch((error) => logger.warn('app', `[usage] 后台预热失败（首次打开用量页时会现场重算）：${error?.message ?? error}`));
     }, 8000);
     usageWarmTimer.unref?.();
 
@@ -2164,11 +2205,12 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
         const level = diskPressure();
         if (level === 'ok') return;
         const text = diskPressureText();
-        if (level === 'critical') log(`[disk] 🔴 ${text} —— 已暂停图片缓存写入，请清理空间`);
-        else log(`[disk] 🟡 ${text} —— 建议清理（图片缓存 TTL 3 天 + 总量闸 2GB）`);
+        // 磁盘压力直接影响写入与发送，两条都是用户要处理的问题：warn。
+        if (level === 'critical') logger.warn('app', `[disk] 🔴 ${text} —— 已暂停图片缓存写入，请清理空间`);
+        else logger.warn('app', `[disk] 🟡 ${text} —— 建议清理（图片缓存 TTL 3 天 + 总量闸 2GB）`);
       } catch (error) {
         // 同上：catch 里也不许再抛（log 失败 → 这里的抛出就是 uncaughtException）
-        try { log(`[disk] 磁盘巡检异常（已忽略，不影响运行）: ${error?.message ?? error}`); } catch { /* ignore */ }
+        try { logger.warn('app', `[disk] 磁盘巡检异常（已忽略，不影响运行）: ${error?.message ?? error}`); } catch { /* ignore */ }
       }
     };
     diskCheck();
@@ -2177,8 +2219,8 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     diskPatrolTimer.unref?.();
     startBackupOperations();
     startBackupSchedule({ runBackup, getConfig });
-    log(`OneBot 协议端: ws=${getConfig().protocol?.wsUrl} http=${getConfig().protocol?.httpUrl}`);
-    log(`模型: ${getConfig().api.model || '（未设置，请在设置里选择）'} @ ${getConfig().api.baseUrl}`);
+    logger.info('app', `OneBot 协议端: ws=${getConfig().protocol?.wsUrl} http=${getConfig().protocol?.httpUrl}`);
+    logger.info('app', `模型: ${getConfig().api.model || '（未设置，请在设置里选择）'} @ ${getConfig().api.baseUrl}`);
     return port;
   }
 
@@ -2202,13 +2244,13 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       // 无视入参再扫一遍会让每个插件的 setup() 实跑两遍：日志洪水、插件副作用双跑
       // （计时器/计数/通知）、工具集反复重建导致系统提示重建 → 前缀缓存断裂 ×N。
       // 手动/接口入口没有预载结果，照常全量扫。
-      const result = preloaded || await loadPlugins({ log });
+      const result = preloaded || await loadPlugins({ log: subLog });
       // 内置工具链（自检/修复/锻造台/开发工单）：不走插件目录，由核心直接注册。
       // 放在 loadPlugins 之后、激活循环之前，它同样需要参与 activate 与工具刷新。
-      try { registerHarness({ skillManager, log }); } catch (error) { log(`[harness] 注册失败：${error?.message ?? error}`); }
+      try { registerHarness({ skillManager, log: subLog }); } catch (error) { logger.warn('app', `[harness] 注册失败：${error?.message ?? error}`); }
       for (const st of skillManager.list()) {
         if (st.enabled && st.loaded) {
-          try { skillManager.activate(st.id); } catch (error) { log(`[skill] 激活 ${st.id} 失败：${error?.message ?? error}`); }
+          try { skillManager.activate(st.id); } catch (error) { logger.warn('app', `[skill] 激活 ${st.id} 失败：${error?.message ?? error}`); }
         }
       }
       try { orchestrator.refreshToolDefs(); } catch { /* 刷新失败不影响主流程 */ }
@@ -2222,11 +2264,11 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       if (hotReloadOn) {
         // 新 watcher 继承一段静默期：重建后 quietUntil=0 的话，重扫自己 import/触碰
         // skill 目录产生的晚到事件会立刻再触发一轮全量重扫。
-        pluginWatcher = watchPlugins({ log, quietMs: 2500, onReload: (r) => reloadSkills({ reason: 'watch', result: r }) });
+        pluginWatcher = watchPlugins({ log: subLog, quietMs: 2500, onReload: (r) => reloadSkills({ reason: 'watch', result: r }) });
       }
 
       if (reason !== 'boot') {
-        log(`[skill] 重扫完成（${reason}）：${result.loaded.length} 成功，${result.failed.length} 失败`
+        logger.info('app', `[skill] 重扫完成（${reason}）：${result.loaded.length} 成功，${result.failed.length} 失败`
           + (result.pruned?.length ? `，卸载 ${result.pruned.length} 个已删除的 Skill` : ''));
         emit('status', { configUpdated: true });
       }
@@ -2238,21 +2280,26 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
       // absorbed = 本轮扫描被折叠掉的中间变化次数，每一次原本都是一次全前缀重算
       // （实测 17k tok）。这条日志是"装插件到底省了几次击穿"的凭据。
       if (released && released.absorbed > 0) {
-        log(`[tools-batch] 重扫结束：折叠 ${released.absorbed} 次中间工具集变化`
+        logger.info('app', `[tools-batch] 重扫结束：折叠 ${released.absorbed} 次中间工具集变化`
           + `（原本各击穿一次前缀缓存），${released.scopes} 个会话桶待下次请求按最终集合生效`);
       }
     }
   }
 
   async function stop() {
+    // 日志节流批次立即落地：停止前最后一批日志若还等在 200ms 窗口里，SSE 客户端
+    // 已经要断开了，等下去只会写进已关闭的连接。
+    if (logFlushTimer) { clearTimeout(logFlushTimer); logFlushTimer = null; flushLogs(); }
+    // 退订 logger.onLog：不退回的话每 createApp 一次就叠一个监听器，且每个都
+    // 持有本实例的 pendingLogs / emit 闭包。"stop 之后彻底静默"必须是成立的契约
+    // ——测试里每个 app 都 stop 掉，监听器却永久累积（实测 1 → stop 后仍 1 →
+    // 第二个 createApp 后 2）。
+    unsubscribeLogSse();
     stopBackupSchedule();
     await stopBackupOperations();
     // 先停掉热重载 watcher：否则 stop() 之后文件变动仍会触发重载 + 广播
     try { pluginWatcher?.close?.(); } catch { /* ignore */ }
     pluginWatcher = null;
-    // 退订本次 createApp 挂的日志监听器（见上方 onLog 注释）
-    try { unsubscribeAppLog?.(); } catch { /* ignore */ }
-    unsubscribeAppLog = null;
     await orchestrator.abortAll();
     orchestrator.stopReminderLoop();
     // 主动发言循环也要停：只停 reminderLoop 的话，proactiveTimer 在 stop() 后仍会
@@ -2279,8 +2326,7 @@ export function createApp({ log = console.log, desktopPetHost = null } = {}) {
     for (const c of [...sseClients]) {
       try { c.end(); } catch { /* ignore */ }
     }
-    sseClients.clear();
-    onebot.close();
+    sseClients.clear();    onebot.close();
     server.close();
     // 便携 QQ：默认保留运行（避免误杀用户登录态），如需清理可在 UI 手动关闭
     // try { await stopPortableQQ(); } catch { /* ignore */ }

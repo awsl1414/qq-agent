@@ -236,11 +236,18 @@ function renderConnectionPage(v, appLogsData) {
                   <label class="sl-level" for="app-log-level">
                     <span>写进文件的详细程度</span>
                     <select id="app-log-level" title="只有达到这个详细程度的日志才会写进文件；选得越详细，文件越大">
-                      ${['debug', 'info', 'warn', 'error'].map((x) =>
+                      ${LOG_LEVELS.map((x) =>
                         `<option value="${x}" ${level === x ? 'selected' : ''}>${x}</option>`).join('')}
                     </select>
                   </label>
                   <button class="btn btn-small" id="app-logs-refresh-btn" title="重新拉取最近日志">刷新</button>
+                </span>
+              </div>
+              <!-- 这一块只显示最近 200 条（且不带筛选）。完整日志、磁盘历史与
+                   实时流都在独立页里，此处只留一行入口，不再复制一套筛选控件。 -->
+              <div class="sl-panel-foot">
+                <span>这里只显示最近 200 条；按级别 / 模块 / 关键字筛选，或翻更早的历史，见
+                  <button class="sl-link" type="button" id="conn-goto-logs" title="打开完整日志页">工具 → 日志</button>。
                 </span>
               </div>
               <pre class="snowluma-logs-view${appLog.arr.length ? '' : ' is-empty'}" id="conn-logs-view">${esc(appLog.text)}</pre>
@@ -622,6 +629,9 @@ function bindConnectionPage(box, v, appLogsData) {
     }
   });
   $('#app-logs-refresh-btn')?.addEventListener('click', () => loadConnectionPage());
+  // 「工具 → 日志」入口。已有别的入口直达日志页（顶栏导航），这里只是把这句
+  // 提示变成可点的，省得用户读完还得自己去顶栏找。
+  $('#conn-goto-logs')?.addEventListener('click', () => switchTab('logs'));
 
   // ── 复制诊断信息（反馈用）：全部来自本页已取到的状态与日志，不新增请求 ──
   const copyBtn = $('#conn-copy-diag');

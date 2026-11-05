@@ -28,6 +28,9 @@ import { chatCompletion, addUsage, emptyUsage } from './llm.js';
 import { modelImageVerdict } from './vision-scan.js';
 import { logger } from './logger.js';
 
+/** 未注入日志出口时的空实现：缓存预热是尽力而为的后台动作，不注入就等于不记录。 */
+const NOOP_LOG = { debug() {}, info() {}, warn() {}, error() {} };
+
 /** 保活用的会话上下文。取值只需保证"与真实调用同构"，不需要真实存在。 */
 function warmContext() {
   const cfg = getConfig();
@@ -344,7 +347,7 @@ function shapeFingerprint(p) {
  *   · 去重按形状判：同一形状"已预热指纹相同"或"已排队"就跳过。多群在线时
  *     单槽判重会让 A 群每来一条消息都算"形状变了"（因为 B 群刚改过）。
  */
-export function noteShapeChange({ systemPrompt, tools, log = () => {}, force = false, shapeKey = '' } = {}) {
+export function noteShapeChange({ systemPrompt, tools, log = NOOP_LOG, force = false, shapeKey = '' } = {}) {
   if (getConfig().cacheWarm?.enabled !== true) return;
   const key = shapeKey || shapeKeyOfSystem(systemPrompt) || shapeKeyOfSystem(lastRealSystemPrompt);
   if (!key) return;
@@ -411,7 +414,7 @@ async function flushShapeWarms() {
  * 真实调用的 messages 里含具体历史内容，预热无法逐字节复刻。这里能做到的是
  * "把 system+tools 段写热 + 让历史块的起点与真实调用一致"，收益有限但成本也低。
  */
-export function noteContextTier(tier, { log = () => {}, systemPrompt = '' } = {}) {
+export function noteContextTier(tier, { log = NOOP_LOG, systemPrompt = '' } = {}) {
   if (getConfig().cacheWarm?.enabled !== true) return;
   const key = shapeKeyOfSystem(systemPrompt) || shapeKeyOfSystem(lastRealSystemPrompt);
   if (!key) return;
@@ -551,7 +554,7 @@ async function sendWarmRequest(args) {
  * 在真实调用前预热缓存。**不阻塞主流程**：调用方 await 它也只是等它发出请求，
  * 失败/超时都不影响后续真实调用。
  */
-export async function warmBeforeRealCall({ log = () => {}, label = '', sample = null } = {}) {
+export async function warmBeforeRealCall({ label = '', sample = null } = {}) {
   const cfg = getConfig();
   if (cfg.cacheWarm?.enabled !== true) return { ok: false, reason: '未启用' };
   if (cfg.cacheWarm?.preCall === false) return { ok: false, reason: '调用前预热已关闭' };
@@ -637,7 +640,6 @@ export async function warmBeforeRealCall({ log = () => {}, label = '', sample = 
       // skillManager.recordError(id, msg)，它每个 id 只保留最后一条消息，连续两次
       // 预热会把第一条覆盖掉，日志里就永远看不到预热成功。
       logger.info('cache-warm', `调用前预热完成（${acc.promptTokens} tok，命中 ${acc.cachedTokens}）[自建前缀]`);
-      void log;
       return { ok: true, prompt: acc.promptTokens, cached: acc.cachedTokens, mode: 'built' };
     } catch (error) {
       // 预热失败绝不能影响真实调用，只记一行
@@ -698,11 +700,11 @@ function inQuietHours(now = new Date()) {
 
 /**
  * 发一次保活请求。
- * @param {{log?:Function, systemPrompt?:string, tools?:Array, force?:boolean}} args
+ * @param {{log?:{info:Function,warn:Function}, systemPrompt?:string, tools?:Array, force?:boolean}} args
  *   force=true 绕过「同形状去重」（档位跳变 R3 要暖的是新历史窗口，不是同一份前缀）
  * @returns {{ok:boolean, reason?:string, cached?:number, prompt?:number, dedup?:boolean}}
  */
-export async function warmOnce({ log = () => {}, systemPrompt = '', tools = null, force = false } = {}) {
+export async function warmOnce({ log = NOOP_LOG, systemPrompt = '', tools = null, force = false } = {}) {
   const cfg = getConfig();
   if (cfg.cacheWarm?.enabled !== true) return { ok: false, reason: '未启用' };
   if (warmCooldownActive()) return { ok: false, reason: '限流冷却中，跳过预热' };
@@ -787,7 +789,7 @@ export async function warmOnce({ log = () => {}, systemPrompt = '', tools = null
       const ms = Date.now() - startedAt;
       const rate = prompt ? (cached / prompt * 100).toFixed(0) : '?';
       boundedMapSet(lastWarmOkByShape, dedupKey, Date.now());
-      log(`[cache-warm] 已保活前缀（形状=真实body，${prompt} tok，命中 ${cached} = ${rate}%，${ms}ms）`);
+      log.info(`[cache-warm] 已保活前缀（形状=真实body，${prompt} tok，命中 ${cached} = ${rate}%，${ms}ms）`);
       return { ok: true, cached, prompt, ms, mode: 'shape-real-body' };
     }
 
@@ -812,14 +814,14 @@ export async function warmOnce({ log = () => {}, systemPrompt = '', tools = null
     const ms = Date.now() - startedAt;
     const rate = prompt ? (cached / prompt * 100).toFixed(0) : '?';
     boundedMapSet(lastWarmOkByShape, dedupKey, Date.now());
-    log(`[cache-warm] 已保活前缀（${prompt} tok，命中 ${cached} = ${rate}%，${ms}ms）`);
+    log.info(`[cache-warm] 已保活前缀（${prompt} tok，命中 ${cached} = ${rate}%，${ms}ms）`);
     return { ok: true, cached, prompt, ms, mode: 'system-only' };
   } catch (error) {
     // 失败不抛出：保活是尽力而为的后台动作，绝不能影响主流程。但也不能静默，
     // 一直失败说明配置有问题（Key 失效 / 余额不足），用户需要能在日志里看到。
     // 限流类失败额外触发冷却（见 WARM_429_COOLDOWN_MS）。
     noteWarmFailure(error);
-    log(`[cache-warm] 保活失败（忽略，不影响使用）：${error?.message ?? error}`);
+    log.warn(`[cache-warm] 保活失败（忽略，不影响使用）：${error?.message ?? error}`);
     return { ok: false, reason: String(error?.message ?? error) };
   }
 }
@@ -832,7 +834,7 @@ export async function warmOnce({ log = () => {}, systemPrompt = '', tools = null
  *
  * @returns {{stop:Function, warmNow:Function}} 句柄
  */
-export function startCacheWarm(log = console.log) {
+export function startCacheWarm(log = console) {
   let timer = null;
   let stopped = false;
   let running = false;
@@ -855,7 +857,7 @@ export function startCacheWarm(log = console.log) {
   timer = setInterval(() => { tick().catch(() => {}); }, min * 60000);
   timer.unref?.();
 
-  log(getConfig().cacheWarm?.enabled === true
+  log.info(getConfig().cacheWarm?.enabled === true
     ? `[cache-warm] 前缀缓存保活已启用：每 ${min} 分钟一次`
     : '[cache-warm] 前缀缓存保活未启用（可在 设置 → 模型 API 打开）');
 

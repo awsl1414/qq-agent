@@ -5,6 +5,8 @@ import path from 'node:path';
 import { safeFetchBinary } from '../../src/safe-fetch.js';
 // detectMime 按魔数判断图片类型，不看扩展名。
 import { detectMime } from '../../src/image-type.js';
+// 日志出口（setup 时由 index.js 注入核心 logger）
+import { log, warn } from './log.js';
 import {
   TMP_DIR, TMP_MAX_AGE_MS, IMAGE_UA, IMAGE_REFERER,
   PXIMG_MIRRORS, PXIMG_BAD_TTL_MS, PROXY_DOWN_COOLDOWN_MS, DEDUP_FILE, SETU_DOWNLOAD_TIMEOUT_MS
@@ -141,7 +143,7 @@ export async function fetchWithProxyFallback(fetcher, url, proxy) {
     const msg = String(error?.message ?? error);
     const connFail = /ECONNREFUSED|ECONNRESET|EHOSTUNREACH|代理连接失败|connect/i.test(msg);
     if (connFail) PROXY_DOWN_MAP.set(proxy, Date.now() + PROXY_DOWN_COOLDOWN_MS);
-    console.warn(`[setu] 代理请求失败，改直连 ${String(url).slice(0, 100)}: ${msg}${connFail ? '（代理疑似未开，60s 内跳过代理直连）' : ''}`);
+    warn(`代理请求失败，改直连 ${String(url).slice(0, 100)}: ${msg}${connFail ? '（代理疑似未开，60s 内跳过代理直连）' : ''}`);
     return await fetcher(url, undefined);
   }
 }
@@ -178,7 +180,7 @@ export function savePayload(buffer, mode) {
     fs.writeFileSync(file, buffer);
     return { payload: file, file };
   } catch (error) {
-    console.warn(`[setu] 临时文件写入失败，退回 base64 内联: ${error?.message ?? error}`);
+    warn(`临时文件写入失败，退回 base64 内联: ${error?.message ?? error}`);
     return { payload: `base64://${buffer.toString('base64')}`, file: null };
   }
 }
@@ -197,11 +199,12 @@ export async function downloadImage(url, cfg, opts = {}) {
   const timeoutMs = opts.timeoutMs > 0 ? Math.trunc(opts.timeoutMs) : defaultTimeout;
   const pxveOrigin = cfg.booru?.baseUrl ? (() => { try { return new URL(cfg.booru.baseUrl).origin; } catch { return null; } })() : null;
   let buffer;
+  let attempt = null;
   const attempts = pximgAttempts(url, opts.proxy, pxveOrigin);
-  console.log(`[setu] downloadImage 开始: url=${String(url).slice(0, 80)} | attempts=${attempts.length} | pxveOrigin=${pxveOrigin}`);
+  log(`downloadImage 开始: url=${String(url).slice(0, 80)} | attempts=${attempts.length} | pxveOrigin=${pxveOrigin}`);
   for (let ai = 0; ai < attempts.length; ai++) {
-    const attempt = attempts[ai];
-    console.log(`[setu] attempt[${ai}]: url=${String(attempt.url).slice(0, 100)} | proxy=${attempt.proxy ? '有' : '无'}`);
+    attempt = attempts[ai];
+    log(`attempt[${ai}]: url=${String(attempt.url).slice(0, 100)} | proxy=${attempt.proxy ? '有' : '无'}`);
     try {
       const isPxveProxy = pxveOrigin && String(attempt.url).startsWith(pxveOrigin);
       const headers = isPxveProxy
@@ -218,7 +221,7 @@ export async function downloadImage(url, cfg, opts = {}) {
           } catch (e) {
             const msg = String(e?.message ?? e);
             if (/429|403|503/.test(msg)) {
-              console.warn(`[setu] PXVE 图片代理返回 HTTP ${msg.match(/\d{3}/)?.[0] || '?'}，${backoffs[ri]/1000}s 后重试 (${ri+1}/${backoffs.length})`);
+              warn(`PXVE 图片代理返回 HTTP ${msg.match(/\d{3}/)?.[0] || '?'}，${backoffs[ri]/1000}s 后重试 (${ri+1}/${backoffs.length})`);
               await sleep(backoffs[ri]);
             } else throw e;
           }
@@ -230,15 +233,20 @@ export async function downloadImage(url, cfg, opts = {}) {
       buffer = fetchResult.buffer;
       // 完整性通过才给镜像记好评：坏图/中断的下载不能巩固镜像选择
       if (validateImageIntegrity(buffer)) { markPximgHit(attempt.url); break; }
-      console.warn(`[setu] 图片不完整（下载中断） ${String(attempt.url).slice(0, 120)}: ${buffer?.length ?? 0} bytes`);
+      warn(`图片不完整（下载中断） ${String(attempt.url).slice(0, 120)}: ${buffer?.length ?? 0} bytes`);
       buffer = null;
     } catch (error) {
       markPximgMiss(attempt.url);
-      console.warn(`[setu] 图片下载失败 ${String(attempt.url).slice(0, 120)}: ${error?.message ?? error}`);
+      warn(`图片下载失败 ${String(attempt.url).slice(0, 120)}: ${error?.message ?? error}`);
     }
   }
-  if (!buffer || !buffer.length) return null;
+  if (!buffer || !buffer.length) {
+    // 收尾一行：上面每个 attempt 的 warn 已说明原因，这里给出"整张图最终失败"的结论。
+    warn(`图片下载最终失败：${String(url).slice(0, 100)}（${attempts.length} 次尝试全部失败）`);
+    return null;
+  }
   const { payload, file } = savePayload(buffer, cfg.send?.payloadMode);
+  log(`图片下载成功：${buffer.length} bytes ← ${String(attempt?.url ?? url).slice(0, 100)}`);
   return { payload, file, bytes: buffer.length, mime: detectMime(buffer) || 'image/jpeg' };
 }
 
@@ -266,11 +274,11 @@ export class SetuSource {
               this.sentOrder.push(u);
             }
           }
-          console.log(`[setu] 已加载去重记录：${this.sentSet.size} 条`);
+          log(`已加载去重记录：${this.sentSet.size} 条`);
         }
       }
     } catch (err) {
-      console.warn(`[setu] 加载去重记录失败：${err.message}`);
+      warn(`加载去重记录失败：${err.message}`);
     }
   }
 
@@ -278,7 +286,7 @@ export class SetuSource {
     try {
       fs.writeFileSync(DEDUP_FILE, JSON.stringify(this.sentOrder), 'utf8');
     } catch (err) {
-      console.warn(`[setu] 保存去重记录失败：${err.message}`);
+      warn(`保存去重记录失败：${err.message}`);
     }
   }
 
@@ -327,14 +335,19 @@ export const defaultSetuSource = new SetuSource();
 
 /**
  * 候选按序下载：从质量最优的候选开始（调用方保证 urls 已按优先级排序），
- * 一批 max(limit, 4) 个并行下载（4 = 超采兜底，Pixiv 原图有下载失败率），
- * 成功者按质量顺序取用；不足 limit 张时继续下一批，直到候选用尽。
+ * 每批并发 min(剩余需要数, 候选数) 个，成功者按质量顺序取用。
+ *
+ * 并发数此前是 max(limit, 4)，等于「要 1 张也并发下 4 张」：另外 3 张下载完
+ * 直接丢弃，恒定多付流量与临时文件。而这个放大并不能提高成功率 —— 4 张来自
+ * 同一批候选，网络故障时会一起失败。真正的单点容错在 downloadImage 内部
+ * （pximgAttempts 的多个 CDN 镜像串行重试），候选不足由调用方按需补取。
  */
 export async function pickBestImages(urls, limit, downloadOne, isAcceptable, onAccepted) {
   const picked = [];
   let cursor = 0;
   while (picked.length < limit && cursor < urls.length) {
-    const batch = urls.slice(cursor, cursor + Math.max(limit, 4));
+    const need = limit - picked.length;
+    const batch = urls.slice(cursor, cursor + need);
     cursor += batch.length;
     const results = await Promise.all(batch.map(async (url) => {
       try {

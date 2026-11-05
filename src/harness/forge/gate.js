@@ -217,12 +217,17 @@ const API_VERSION = 1;
  * @param {string} draftId
  * @param {object} [opts]
  * @param {boolean} [opts.allowNetwork]
- * @param {{hasCapability?: (n:string)=>boolean, existingIds?: Set<string>, envReady?: boolean}} [opts.env]
+ * @param {{hasCapability?: (n:string)=>boolean, existingIds?: Set<string>,
+ *   existing?: Map<string, {kind?: string, relDir?: string}>, envReady?: boolean}} [opts.env]
+ *   existingIds 是"被占用的 id 集合"（含内置模块）；existing 按 id 给出占用者的
+ *   kind/relDir，闸门据此把"内置模块不可占用"和"已装扩展先卸载"分开说。
  * @returns {{
  *   ok: boolean, canInstall: boolean, blocking: number, confirm: number, notice: number,
  *   gates: object, kind: 'skill'|'plugin'|null, manifest: object|null, entry: string|null,
- *   issues: Array
+ *   issues: Array, issueGroups: Array
  * }}
+ *   issues 是逐条命中（提示词回喂、自动修复按它处理）；
+ *   issueGroups 是同一 code 聚合后的展示项（前端渲染用，计数口径仍按 issues）。
  */
 export function runGates(ctx, draftId, opts = {}) {
   const base = draftDir(ctx, draftId);
@@ -269,8 +274,73 @@ export function runGates(ctx, draftId, opts = {}) {
     kind: structure.kind,
     manifest,
     entry,
-    issues: all
+    // 逐条命中（**未聚合**）：提示词回喂、自动修复轮都按它逐项处理，一条不能少。
+    issues: all,
+    // 按 code 聚合后的展示项：同一规则在多个文件命中时只出一条，带上全部命中位置。
+    // 只服务界面渲染 —— 计数（blocking / confirm / notice）与 digest 一律按 all 算，
+    // 否则"3 处高危导入"聚合后 confirm 从 3 变 1，票据摘要与安装校验会跟着漂。
+    issueGroups: groupIssues(all)
   };
+}
+
+/**
+ * 把逐条 issue 按 `code` 聚合成展示项。
+ *
+ * 为什么要聚合：同一个规则（如「导入高危 Node 模块」）在 lib/a.js、lib/b.js、lib/c.js
+ * 各命中一次时，界面就是三张**逐字相同**的卡片（title 只差文件名、why 一字不差），
+ * 实测能占掉六成屏幕。用户面对一屏几乎一样的警告，注意力会被耗尽，最后直接勾选
+ * "我已知悉"—— 这恰好让确认环节失去意义。聚合后一张卡列清所有命中位置。
+ *
+ * 边界：
+ *   · 只按 `code` 合并，**不同 code 永不合并**（哪怕 title 很像：它们的安全含义不同）；
+ *   · level 取组内最严（block > confirm > notice）：同一 code 在不同文件可能因
+ *     档位（third-party 降级）而级别不同，展示必须按最严的那个说；
+ *   · 组内保持首次出现的顺序（闸门顺序 = 结构/语法/危险/契约/环境），位置按
+ *     "文件:行" 升序，保证两次渲染结果稳定；
+ *   · `titles` 保留组内**全部**逐条 title：有些规则（硬依赖缺失、未知 api 成员等）
+ *     一条 issue 描述一个具体对象、却没有 file/line。只靠聚合项的 title（= 第一条）
+ *     会让后面的命中从界面上消失，用户按第一条改完仍被阻断，无法收敛。
+ *     展示层据此在 files 为空时逐条列出（见 ui/app/13-doctor.js）。
+ */
+export function groupIssues(issues) {
+  const ORDER = { block: 0, confirm: 1, notice: 2 };
+  const byCode = new Map();
+  for (const it of issues) {
+    const code = String(it.code || 'issue');
+    let g = byCode.get(code);
+    if (!g) {
+      g = {
+        code,
+        level: it.level,
+        title: it.title,
+        why: it.why,
+        files: [],
+        titles: [],
+        count: 0
+      };
+      byCode.set(code, g);
+    }
+    if ((ORDER[it.level] ?? 9) < (ORDER[g.level] ?? 9)) g.level = it.level;
+    g.count += 1;
+    if (it.title) g.titles.push(String(it.title));
+    // 位置：只有带 file 的命中才算"位置"。结构类问题（缺清单 / 空草稿）没有文件，
+    // 它的 title 本身就是结论，不该被塞进 files 里冒充一个路径。
+    if (it.file) {
+      const where = `${it.file}${it.line ? `:${it.line}` : ''}`;
+      if (!g.files.includes(where)) g.files.push(where);
+    }
+  }
+  return [...byCode.values()].map((g) => {
+    const files = g.files.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    // 卡片标题用规则本名：逐条 issue 的 title 形如「规则名（lib/x.js:1）」，
+    // 聚合后文件名由 files 列出，标题里再带一遍就是同一信息说两遍。
+    // 只剥"像路径:行号"的那个括号（含 . 或 :），规则名自带的说明性括号要保留
+    // ——例如「导入高危 Node 模块（fs / child_process / net / vm 等）」。
+    const cleanTitle = files.length
+      ? String(g.title || '').replace(/（[^（）]*[.:][^（）]*）\s*$/, '').trim() || g.title
+      : g.title;
+    return { ...g, title: cleanTitle, files };
+  });
 }
 
 // ── 闸门 4：语法 ──────────────────────────────────────────────────────────
@@ -288,21 +358,39 @@ export function runGates(ctx, draftId, opts = {}) {
 //
 // 检查器起不来（极端环境）时降级为 notice：语法闸缺失不能把整条安装链堵死，
 // 三道静态闸与人工确认仍然在。
+//
+// issue 必须带 `file`（以及能解析出来时的 `line`）：聚合层按 file 收集"命中位置"，
+// 只在 title 里写文件名的话，两个文件各错一处会被聚成一条 files=[] 的卡片，
+// 界面只看得到第一个文件 —— 用户改完它、重新过闸仍被同一条挡住，永远收敛不了。
+
 /**
  * 语法检查结果缓存。
  * key = 「输入模式 + 代码内容」的 sha1；value = { verdict, detail, at }。
  * verdict：'ok' | 'error'（有语法错，detail 是 node --check 的正文）| 'unavailable'（检查器起不来）。
- * 只缓存与文件名无关的信息：issue 的标题（含文件名）在使用处重建。
+ * 只缓存与**文件名无关**的信息（正文、行号）：缓存的错误正文里文件名是 `[stdin]`，
+ * issue 的 title / file 每次都按当前解包路径重建。
  * 上限 512 条，满了淘汰最久未访问的一半。
  */
 const SYNTAX_CACHE = new Map();
 const SYNTAX_CACHE_MAX = 512;
-function cacheSyntaxResult(key, verdict, detail) {
+function cacheSyntaxResult(key, verdict, detail, line = null) {
   if (SYNTAX_CACHE.size >= SYNTAX_CACHE_MAX) {
     const byAge = [...SYNTAX_CACHE.entries()].sort((a, b) => (a[1].at || 0) - (b[1].at || 0));
     for (let i = 0; i < Math.ceil(byAge.length / 2); i++) SYNTAX_CACHE.delete(byAge[i][0]);
   }
-  SYNTAX_CACHE.set(key, { verdict, detail, at: Date.now() });
+  SYNTAX_CACHE.set(key, { verdict, detail, line, at: Date.now() });
+}
+
+/**
+ * 从 `node --check` 的 stderr 里取首个错误行号。
+ *
+ * stdin 模式下 node 把文件名印成 `[stdin]:12`，后接错误正文。取不到就返回 null：
+ * 没有行号不妨碍定位文件，**不能**因为解析失败把整条 issue 降级或丢掉文件。
+ */
+function syntaxErrorLine(errText) {
+  const m = /^\[stdin\]:(\d+)/m.exec(String(errText || ''));
+  const n = m ? Number(m[1]) : 0;
+  return n > 0 ? n : null;
 }
 
 function gateSyntax(base, opts = {}) {
@@ -341,10 +429,10 @@ function gateSyntax(base, opts = {}) {
       cached.at = Date.now();
       if (cached.verdict === 'ok') continue;
       if (cached.verdict === 'unavailable') {
-        issues.push({ level: 'notice', code: 'syntax-check-unavailable', title: `语法检查未完成：${rel}`, why: cached.detail });
+        issues.push({ level: 'notice', code: 'syntax-check-unavailable', title: `语法检查未完成：${rel}`, why: cached.detail, file: rel });
         continue;
       }
-      issues.push({ level: 'block', code: 'syntax-error', title: `语法错误（${rel}）`, why: cached.detail });
+      issues.push({ level: 'block', code: 'syntax-error', title: `语法错误（${rel}）`, why: cached.detail, file: rel, line: cached.line ?? null });
       continue;
     }
 
@@ -354,7 +442,8 @@ function gateSyntax(base, opts = {}) {
         level: 'notice',
         code: 'syntax-check-budget',
         title: `语法检查未完成：${rel} 及后续文件`,
-        why: `语法检查（node --check）超过 ${SYNTAX_BUDGET_MS / 1000} 秒预算已停止，剩下的文件没查 —— 请人工确认代码能运行。`
+        why: `语法检查（node --check）超过 ${SYNTAX_BUDGET_MS / 1000} 秒预算已停止，剩下的文件没查 —— 请人工确认代码能运行。`,
+        file: rel
       });
       break;
     }
@@ -368,7 +457,7 @@ function gateSyntax(base, opts = {}) {
         env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
       });
     } catch {
-      issues.push({ level: 'notice', code: 'syntax-check-unavailable', title: '语法检查未运行（检查器不可用）', why: '本机无法启动语法检查器 —— 请人工确认代码能运行。' });
+      issues.push({ level: 'notice', code: 'syntax-check-unavailable', title: '语法检查未运行（检查器不可用）', why: '本机无法启动语法检查器 —— 请人工确认代码能运行。', file: rel });
       continue;
     }
     // spawnSync 不抛异常，错误在 res.error / res.status=null。
@@ -378,7 +467,7 @@ function gateSyntax(base, opts = {}) {
       const why = res.error?.code === 'ETIMEDOUT'
         ? '检查器没在时限内返回 —— 请人工确认代码能运行。'
         : `检查器启动失败（${res.error?.code || '未知原因'}）—— 请人工确认代码能运行。`;
-      issues.push({ level: 'notice', code: res.error?.code === 'ETIMEDOUT' ? 'syntax-check-timeout' : 'syntax-check-unavailable', title: `语法检查未完成：${rel}`, why });
+      issues.push({ level: 'notice', code: res.error?.code === 'ETIMEDOUT' ? 'syntax-check-timeout' : 'syntax-check-unavailable', title: `语法检查未完成：${rel}`, why, file: rel });
       cacheSyntaxResult(cacheKey, 'unavailable', why);
       continue;
     }
@@ -390,16 +479,19 @@ function gateSyntax(base, opts = {}) {
     // status !== 0：语法错误。错误输出第一段含行号列号，截给用户看关键行。
     const errText = String(res.stderr || res.stdout || '语法错误').trim();
     const firstLines = errText.split('\n').slice(0, 4).join('\n').slice(0, 600);
+    const line = syntaxErrorLine(errText);
     const issue = {
       level: 'block',
       code: 'syntax-error',
       title: `语法错误（${rel}）`,
-      why: `代码无法通过解析 —— 装上后扩展会加载失败。node --check 的报告：\n${firstLines}`
+      why: `代码无法通过解析 —— 装上后扩展会加载失败。node --check 的报告：\n${firstLines}`,
+      file: rel,
+      line
     };
     issues.push(issue);
     // 出错结果**也缓存**（同一份坏代码反复触发时不必反复起进程）；
-    // 缓存的是与文件名无关的错误正文，标题按当前文件重建。
-    cacheSyntaxResult(cacheKey, 'error', issue.why);
+    // 缓存的是与文件名无关的错误正文与行号，标题 / file 按当前解包路径重建。
+    cacheSyntaxResult(cacheKey, 'error', issue.why, line);
   }
   return { ok: !issues.some((i) => i.level === 'block'), issues };
 }
@@ -762,7 +854,7 @@ function gateContract(manifest, entryRel, base) {
 // 对**第三方**扩展尤其重要，它们往往对着另一套环境写的：
 //   · requires 声明了一个本机没人提供的能力 → 核心判定它不可用，永远不激活
 //   · 调用了本地 createSkillApi 没有的 api.xxx → 运行时 TypeError
-//   · id 与已装扩展撞车 → 会被自动加 _1 后缀，但扩展自身若硬编码自己的 id 就会行为异常
+//   · id 与已装扩展撞车 → 安装会被拒绝（v1 不再加 _1 造第二份目录），要换版本走升级
 //
 // 这一道只在调用方给了 env 时才跑。gate.js 是纯模块，不知道本机装了什么：
 //    硬要它猜只会产生假结论，不如明确地"不检查"。
@@ -799,14 +891,28 @@ function gateEnv(base, manifest, entryRel, env) {
     }
   }
 
-  // ② id 撞车：会被自动改成 xxx_1，但扩展自身写死 id 的地方会错位
-  if (env.existingIds && env.existingIds.has(String(manifest.id || ''))) {
+  // ② id 撞车：安装会被**拒绝**（不再静默加 _1 造出第二份目录）。
+  //    历史上这里是 notice 级"功能上没问题"，正是"装了两个副本、只有一个在跑、
+  //    卸载还把孤儿复活"的来源。现在同一 id 只能存在一份：要换版本走「升级扩展」，
+  //    要重装先卸载。检查级别仍是 notice 而不是 block —— 结论不在这里阻断
+  //    （否则用户只看到"闸门未通过"，不知道是撞名），真正的拒绝发生在落地那一步，
+  //    并带回 existing 信息让界面给出"去升级 / 先卸载"两条出路。
+  //
+  //    existingIds 里含**内置模块**（kind='core'）：它们不落 skills/ / plugins/，
+  //    只扫磁盘目录时这条提示对 core 完全失效。内置模块不可卸载，所以文案必须
+  //    指向"改 id"——说"先卸载"是把人引到一条死路上。
+  const conflictId = String(manifest.id || '');
+  if (env.existingIds && env.existingIds.has(conflictId)) {
+    const holder = env.existing?.get?.(conflictId) || null;
     issues.push({
       level: 'notice',
       code: 'id-conflict',
-      title: `已有一个同名扩展：${manifest.id}`,
-      why: '安装时会自动加 _1 后缀落到新目录（不覆盖已有的），所以功能上没问题。'
-        + '但如果这个扩展在代码里写死了自己的 id（比如去读自己的配置目录），加后缀后会读错地方。'
+      title: `已有一个同名扩展：${conflictId}`,
+      why: holder?.kind === 'core'
+        ? `这个 id 属于内置模块（${holder.relDir}），第三方扩展不能占用。`
+          + '安装会被拒绝：请把清单里的 id 改成别的名字再装。'
+        : '同一个 id 只能装一份。安装会被拒绝（不会产生第二个目录）：'
+          + '要换版本请用「升级扩展」（先备份原版再覆盖），要重装请先在扩展页卸载它。'
     });
   }
 

@@ -369,26 +369,6 @@ export async function downloadModuleZip({ code, verified = null } = {}) {
   return { buffer: zipBuffer, type, ident, entry };
 }
 
-/**
- * 按口令下载并安装到本地 skills/ 或 plugins/。
- * 类型路由由**服务器返回的 type** 决定（skill.json→skill / plugin.json→plugin），
- * 前端/调用方无法干预，即使在技能页输入了插件的口令，也装进 plugins/。
- *
- * ⚠️ HTTP 安装链路不再走这里：/api/market/install 改为「下载 → 锻造台暂存区 →
- *    闸门 → 人工确认 → 落地」。本函数保留给"确实要直装"的内部调用（以及历史脚本），
- *    它没有闸门也没有人工确认。
- *
- * @param {object} o { code, verified(校验阶段拿到的条目信息) }
- * @returns {Promise<{ok, kind, id, dir}>}
- */
-export async function installByCode({ code, verified }) {
-  const { buffer: zipBuffer, type, ident } = await downloadModuleZip({ code, verified });
-  const { unzipToModuleDir } = await import('./zip-install.js');
-  const dirName = await unzipToModuleDir(zipBuffer, { root: ROOT, type, preferId: ident });
-  log('info', `口令 ${code} 安装完成：${type}s/${dirName}`);
-  return { ok: true, kind: type, id: dirName, dir: path.join(ROOT, type === 'plugin' ? 'plugins' : 'skills', dirName) };
-}
-
 /* ── 市场列表的内存缓存 + 并发去重 ─────────────────────────────────────
  * 上游是阿里云 ESA/WAF 后面的公网接口（实测 gzip 136KB / 解压约 372KB，220~340ms），
  * 而市场页每切一次页签就会重拉一次、点「刷新」还会再来一次。慢的时候（上游抖动、

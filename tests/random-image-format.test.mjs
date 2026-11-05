@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { extractImageUrls } from '../skills/random-image/response.js';
 import { normalizeConfig, buildProviderResult } from '../skills/random-image/index.js';
 import { buildPicUrl } from '../skills/random-image/setu.js';
+import { setLogger } from '../skills/random-image/log.js';
 import { DEFAULT_SETU_BASE_URL } from '../skills/random-image/config.js';
 
 // ── extractImageUrls：只覆盖有真实接口出处的 4 种结构 ────────────────────
@@ -44,17 +45,23 @@ test('空数组返回 []', () => {
   assert.deepEqual(extractImageUrls({ pic: [] }), []);
 });
 
-test('未知结构返回 [] 并 warn 顶层键名', () => {
+test('未知结构返回 [] 并 warn 顶层键名', (t) => {
   const warnings = [];
-  const original = console.warn;
-  console.warn = (msg) => warnings.push(String(msg));
-  try {
-    assert.deepEqual(extractImageUrls({ result: { url: 'x' } }), []);
-  } finally {
-    console.warn = original;
-  }
+  setLogger({ warn: (msg) => warnings.push(String(msg)) });
+  t.after(() => setLogger(null));
+  assert.deepEqual(extractImageUrls({ result: { url: 'x' } }), []);
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /result/);
+});
+
+test('日志未注入时静默：不抛错、不写 console', (t) => {
+  const calls = [];
+  const originals = { log: console.log, warn: console.warn, error: console.error };
+  for (const k of Object.keys(originals)) console[k] = (...a) => calls.push([k, ...a]);
+  t.after(() => { for (const [k, fn] of Object.entries(originals)) console[k] = fn; setLogger(null); });
+  setLogger(null);
+  assert.deepEqual(extractImageUrls({ result: { url: 'x' } }), []);
+  assert.deepEqual(calls, []);
 });
 
 test('pickUrlStrings 过滤空串与纯空白，不被其挡住（经 extractImageUrls 观测面）', () => {

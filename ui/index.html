@@ -360,6 +360,12 @@
           <div id="harness-page" class="usage-pane"></div>
         </section>
 
+        <!-- 日志视图（工具 → 日志）：当天内存首屏 + 磁盘历史翻页 + SSE 实时流。
+             容器 id 由 /app/20-logs.js 独占，别的脚本别往里写。 -->
+        <section id="view-logs" class="view">
+          <div id="logs-page" class="logs-page"></div>
+        </section>
+
         <!-- 设置视图：分区菜单（#settings-sidebar）与社区入口已提升到左栏 -->
         <section id="view-settings" class="view">
           <div id="settings-form" class="settings-pane"></div>
@@ -533,6 +539,10 @@
   <script defer src="/app/vendor-md3.js"></script>
   <script defer src="/app/14-wallpaper.js"></script>
   <script defer src="/app/19-personas.js"></script>
+  <!-- 日志页（工具 → 日志）。与其它页面脚本同一种普通脚本契约：
+       靠 00-core 的全局 $/$$/api/esc/state/fmtClock 与 withToken，
+       只被 switchTab('logs') 调 loadLogsPage()，无加载顺序依赖。 -->
+  <script defer src="/app/20-logs.js"></script>
   <!-- 全界面透明（玻璃层）：把「一条滑条管全部界面」接到 applyUiCustom 上。
        必须排在最后，它要包 00-core.js 里定义的 applyUiCustom，
        早于那边就会包空（脚本内部有重试兜底，但顺序对最省事）。 -->

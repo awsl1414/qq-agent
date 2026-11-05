@@ -21,7 +21,7 @@ import { chatCompletionWithRetry, resolveApiKey } from '../../llm.js';
 import { toOpenAiTools, executeTool } from '../../tools.js';
 import { safeFetch } from '../../safe-fetch.js';
 import { marketFetch, downloadModuleZip } from '../../market.js';
-import { unzipToModuleDir } from '../../zip-install.js';
+import { unzipToSandboxDir } from '../../zip-install.js';
 
 const MAX_FILE_BYTES = 1024 * 1024;        // 单文件 1MB
 const MAX_TOTAL_BYTES = 8 * 1024 * 1024;
@@ -723,8 +723,10 @@ export function buildDevTools(projectRoot, workDir) {
           const type = String(it.type || '').toLowerCase() === 'plugin' ? 'plugin' : 'skill';
           const pulledRoot = path.join(workDir, 'pulled');
           fs.mkdirSync(pulledRoot, { recursive: true });
-          // 复用安装通道的解压器：自带路径穿越校验 + 目录名冲突递增（永不覆盖）
-          const dirName = await unzipToModuleDir(buf, { root: pulledRoot, type, preferId: want });
+          // 复用安装通道的解包器（自带路径穿越 / 清单 / 兼容性校验），但落地走
+          // 沙箱口径：不查 id、不碰 skills/ 与 plugins/。沙箱里拉同一扩展两次
+          // 是常态（改一版再拉一版对比），安装口径的同 id 拒绝在这里没有意义。
+          const dirName = await unzipToSandboxDir(buf, { root: pulledRoot, type, preferId: want });
           const abs = path.join(pulledRoot, type === 'plugin' ? 'plugins' : 'skills', dirName);
           const rel = path.relative(projectRoot, abs).replace(/\\/g, '/');
           bag.count += 1;

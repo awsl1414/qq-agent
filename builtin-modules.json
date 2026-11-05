@@ -38,7 +38,7 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "README.md": "13dfdfca986a429f",
+        "README.md": "76b2cc1189639973",
         "docs/human-like-memory.html": "2e92580070a5633c",
         "index.js": "1854ea6bcc9bc843",
         "lib/archive.js": "dc7088fb024f332d",
@@ -223,13 +223,14 @@
       "kind": "skill",
       "entry": "index.js",
       "files": {
-        "config.js": "48ebab8e5d2d87a7",
-        "downloader.js": "5fb58220ba319e23",
+        "config.js": "08e168522edf413f",
+        "downloader.js": "e7e31d5205150233",
         "filters.js": "734263f6b0b367ea",
-        "index.js": "007cc8f0c57eda1f",
-        "pixiv.js": "6f71d49a3e5cbad9",
-        "response.js": "fe319d89b54ffb45",
-        "setu.js": "71723a65f4cf3af0",
+        "index.js": "f6745665fe2fac32",
+        "log.js": "715b27b2a9466427",
+        "pixiv.js": "8b6cafc6a26a90e8",
+        "response.js": "c45d7168d050572b",
+        "setu.js": "a8b901518c62a6e5",
         "skill.json": "de96e90b08d6d353"
       }
     },

@@ -595,9 +595,11 @@ function bindSettingsEvents(c) {
       // 就是这件事）。必须放在 saveConfig 之后，此刻 state.config 才是新值。
       refreshHealthCard();
       refreshSettingsReadiness();
+      // 列表轮询的间隔可能刚被改过（setInterval 不重读配置）；间隔未变时它内部
+      // 直接复用原计时器，不会把周期清零重来。
+      // 状态轮询不需要：startStatusPoller 用 setTimeout 自续期，每轮都重读配置，
+      // 在这里重建只会打乱相位（F7 BUG-4）。
       startListPoller();
-      // 刷新间隔可能刚被改过：重建状态轮询，让新间隔立刻生效
-      startStatusPoller();
     } catch (e) {
       console.error('自动保存失败:', e);
       // ⚠️ 自动保存失败不能只写 console。这正是"关掉的功能重启后又自己打开"的

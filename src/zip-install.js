@@ -1,25 +1,85 @@
-// zip 解压安装：把市场下载的安装包安全地落到 skills/ 或 plugins/ 目录。
-//
-// 独立成模块的原因：这段是"往磁盘写可执行 JS"的入口，安全边界必须集中、可单测。
-// 与 server/community_app.py 的 validate_zip 规则对齐（那里上传时校验一次，
-// 这里安装前再校验一次，不信任任何传输环节）。
+/** zip 解压安装：把市场下载的安装包安全地落到 skills/ 或 plugins/ 目录。
+ *
+ * 独立成模块的原因：这段是"往磁盘写可执行 JS"的入口，安全边界必须集中、可单测。
+ * 与 server/community_app.py 的 validate_zip 规则对齐（那里上传时校验一次，
+ * 这里安装前再校验一次，不信任任何传输环节）。
+ *
+ * 目录名冲突口径（2026-11 统一）：**同 id 拒绝，不同 id 撞目录名也拒绝**。
+ * 历史实现的 `_1/_2` 递增产生了"磁盘两份、注册表一份"——注册表按 manifest.id
+ * 去重只剩一条，先装的那份目录既不在列表里也没人管，卸载时删的是注册表那条，
+ * 原目录变成孤儿；孤儿在下次热重扫时又被加载，等于"卸载反而把它复活了"。
+ * 现在写入方只做独占 mkdir：目录已存在就报错，语义是"绝不覆盖、也不造第二份"。
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import { inflateRawSync } from 'node:zlib';
 import { SKILL_API_VERSION } from './skills/manifest.js';
+import { findModuleIdConflict, ModuleIdConflictError } from './module-id.js';
 
 // 与 module-import.js 的黑名单对齐。漏 com/msi/scr/lnk 四种可执行后缀不构成逃逸
 // （落地层有 relCheck），但两条安装路径的口径应该一致。
 const BANNED_EXT = /\.(exe|dll|bat|cmd|com|msi|scr|ps1|vbs|sh|lnk)$/i;
 const MAX_FILES = 100;
 const MAX_TOTAL = 32 * 1024 * 1024;
-const MAX_DIRECTORY_SUFFIX = 100;
+// 沙箱同名候选上限：与历史实现一致。沙箱里连拉 101 个同名版本不是真实场景，
+// 到上限说明调用方在循环拉取，报错比继续堆目录更有用。
+const MAX_SANDBOX_SUFFIX = 100;
 
-/** 独占创建新扩展目录；写入失败只清理本次拥有的目录，绝不合并现有扩展。 */
+/**
+ * 在已独占创建的目录里写文件；失败只清理本次拥有的目录。
+ * @param {string} dir 已由 mkdir（非 recursive）成功创建的目录
+ * @param {(target: string) => void} writeFiles
+ */
+function writeIntoNewDir(dir, writeFiles) {
+  try { writeFiles(dir); }
+  catch (error) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); }
+    catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], `扩展写入失败且清理 ${dir} 失败：${error.message}；${cleanupError.message}`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * 独占创建一个扩展目录；目录已存在即抛错，绝不合并、也绝不造出第二份副本。
+ *
+ * **只用于安装路径**（unzipToModuleDir 与本地导入 importPath）。安装的语义是
+ * 「这个 id 从此归这一份」，多一份就会产生磁盘两份、注册表一份的孤儿。
+ * 沙箱路径不适用，见 writeSandboxDirectory。
+ *
+ * 写入失败只清理本次拥有的目录（独占 mkdir 保证它一定是本轮出现的）。
+ */
 export function writeModuleDirectory(baseDir, name, writeFiles) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) throw new Error('非法扩展目录名');
   fs.mkdirSync(baseDir, { recursive: true });
-  for (let suffix = 0; suffix <= MAX_DIRECTORY_SUFFIX; suffix++) {
+  const dir = path.join(baseDir, name);
+  try {
+    fs.mkdirSync(dir);
+  } catch (error) {
+    if (error.code === 'EEXIST') {
+      throw new Error(`扩展目录 ${name} 已存在，未覆盖现有扩展（要换版本请先卸载，或走「升级扩展」）`);
+    }
+    throw error;
+  }
+  writeIntoNewDir(dir, writeFiles);
+  return { id: name, dir };
+}
+
+/**
+ * 沙箱专用：同名目录已存在时按 `名_1`、`名_2` … 取下一个空位。
+ *
+ * 为什么沙箱要递增而安装不能：沙箱里的东西**永远不会被加载执行**，同一个扩展
+ * 拉两版做对比（改一版、再拉原版）是 dev_market_pull 的正常用法；而安装路径的
+ * 「一个 id 只能有一份」是注册表的硬约束。两条路径共用一套递增会让孤儿目录
+ * 重新长回来，共用一套拒绝则会挡住正当的开发动作——所以按语义分开。
+ *
+ * @throws {Error} 候选全部占用（说明调用方在循环拉取）
+ */
+function writeSandboxDirectory(baseDir, name, writeFiles) {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(name)) throw new Error('非法扩展目录名');
+  fs.mkdirSync(baseDir, { recursive: true });
+  for (let suffix = 0; suffix <= MAX_SANDBOX_SUFFIX; suffix++) {
     const id = suffix ? `${name}_${suffix}` : name;
     const dir = path.join(baseDir, id);
     try { fs.mkdirSync(dir); }
@@ -27,17 +87,21 @@ export function writeModuleDirectory(baseDir, name, writeFiles) {
       if (error.code === 'EEXIST') continue;
       throw error;
     }
-    try { writeFiles(dir); }
-    catch (error) {
-      try { fs.rmSync(dir, { recursive: true, force: true }); }
-      catch (cleanupError) {
-        throw new AggregateError([error, cleanupError], `扩展写入失败且清理 ${dir} 失败：${error.message}；${cleanupError.message}`);
-      }
-      throw error;
-    }
+    writeIntoNewDir(dir, writeFiles);
     return { id, dir };
   }
-  throw new Error(`扩展目录 ${name} 的同名候选均已占用，未覆盖现有扩展`);
+  throw new Error(`沙箱里 ${name} 的同名候选已占用 ${MAX_SANDBOX_SUFFIX + 1} 个，请先清理 dev-sandbox 目录`);
+}
+
+/**
+ * 落地前的同 id 检查（与锻造台安装、本地导入同一判据，见 src/module-id.js）。
+ * @param {string} manifestId
+ * @param {string} root 应用根（<root>/skills 与 <root>/plugins 就是两份磁盘真源）
+ * @throws {ModuleIdConflictError} id 已被内置模块或已装扩展占用
+ */
+function assertIdFree(manifestId, root) {
+  const existing = findModuleIdConflict(manifestId, { appRoot: root });
+  if (existing) throw new ModuleIdConflictError(existing);
 }
 
 /**
@@ -64,7 +128,7 @@ export function validateZipStructure(buffer) {
  *   ① 清单 JSON 坏了（BOM / 少个逗号），loader 会报，但那时磁盘已经落下垃圾目录
  *   ② apiVersion 比本机新，这是唯一的"真兼容性"硬伤，只能升级应用解决
  *   ③ 清单声明的入口文件不在包里，作者漏打包，装 100 遍也不会好
- * 拦成抛错（market.js installByCode → toast；module-import → errors 数组），
+ * 拦成抛错（unzipToModuleDir / unzipToSandboxDir 的调用方转成界面提示），
  * 磁盘不留残骸，报错一眼能看懂。
  *
  * 口径与 plugin-loader 的 readManifest / normalizeManifest 同源：
@@ -110,22 +174,24 @@ function precheckManifest(manifestData, keptRel) {
 }
 
 /**
- * 解压安装到 <root>/skills/ 或 <root>/plugins/ 下的一个目录。
+ * 解包并定位模块根（**不落盘**）：把 zip 条目剥成"模块目录里应该有的那些文件"。
  *
  * 目录名规则：
  *   - 以清单文件为锚点定位模块根：zip 里找到 plugin.json/skill.json 的那条路径，
  *     其所在目录才是真正的模块根。它上面的所有层级（发布者多套的文件夹、
  *     GitHub 的 repo-main/ 包装层）全部剥掉。嵌套多深剥多深，
  *     模块根永远等于清单所在目录。
- *   - 与本地已有目录冲突时自动加 _1/_2：重装场景下同 id 覆盖会丢用户改动，
- *     而且插件热重载正在 watch 旧目录，覆盖写一半会加载出半截代码。
+ *   - 目录名 = 清单所在目录名（清单在包根时用 preferId）。
  *
- * @returns {Promise<string>} 实际落地的目录名
+ * 拆成独立函数是因为落地有两种语义：安装（写进 skills/ 或 plugins/，必须查 id）
+ * 与沙箱拉取（写进开发沙箱的临时目录，不是安装，同 id 是常态）。
+ *
+ * @returns {{ dirName: string, manifestId: string, kept: Array<{rel: string, data: Buffer}> }}
+ * @throws 结构 / 清单 / 兼容性问题（磁盘不落任何东西）
  */
-export async function unzipToModuleDir(buffer, { root, type, preferId = '' }) {
+function extractModuleFromZip(buffer, { type, preferId = '' }) {
   const entries = validateZipStructure(buffer);
   if (!entries.length) throw new Error('安装包是空的');
-  const baseDir = path.join(root, type === 'plugin' ? 'plugins' : 'skills');
 
   // ── 定位模块根：清单文件（plugin.json / skill.json）所在目录 ──
   // 优先当前 type 对应的清单，找不到再认另一种（装错页的包也能正确归位）。
@@ -155,7 +221,8 @@ export async function unzipToModuleDir(buffer, { root, type, preferId = '' }) {
   // 不在模块根下的条目（仓库根的 README/LICENSE/.gitignore 这类包装层杂物）
   // 直接丢弃，留着反而会在模块目录里堆一层没有的嵌套。
   let dirName = manifestDirName || '';   // 有清单时用清单所在目录名（嵌套多深都是它）
-  let kept = [];   // [{ rel, data }]
+  const kept = [];   // [{ rel, data }]
+  let manifestId = '';
   if (manifestDepth >= 0) {
     const hit = entries.find((e) => {
       for (const want of manifestNames) {
@@ -173,7 +240,8 @@ export async function unzipToModuleDir(buffer, { root, type, preferId = '' }) {
     }
     if (!kept.length) throw new Error('安装包结构异常（模块根目录下没有文件）');
     // ── 兼容性预检（落地前拦，见 precheckManifest 头注释）──
-    precheckManifest(hit.data, new Set(kept.map((k) => k.rel)));
+    // 顺带拿回清单 id：同 id 检查要用，不再重复解析一遍字节。
+    manifestId = precheckManifest(hit.data, new Set(kept.map((k) => k.rel))).id;
   } else {
     // 没有清单 = 不是完整的可安装扩展，直接拒绝，不落地。
     // 剥统一根目录照装的话，落地后 loader 报"缺少 skill.json / plugin.json"，
@@ -185,21 +253,57 @@ export async function unzipToModuleDir(buffer, { root, type, preferId = '' }) {
   if (!dirName) dirName = preferId || 'module';
   // 不合法时一律回退 'module'。回退 preferId 没用：dirName 本来就可能就是
   // 未校验的 preferId，回退等于没回退，还把未校验的值放进了路径拼接。
-  // market.js 的 installByCode 现在也校验 id，这里是第二道防线。
+  // precheckManifest 已经校验过清单 id，这里是第二道防线。
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(dirName)) dirName = 'module';
-  const installed = writeModuleDirectory(baseDir, dirName, (target) => {
-    for (const item of kept) {
-      // 二次防线：拼接结果必须仍在 target 内（解析后 path.relative 检查）
-      const dest = path.join(target, ...item.rel.split('/'));
-      const relCheck = path.relative(target, dest);
-      if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
-        throw new Error(`安装包包含非法路径：${item.rel}`);
-      }
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.writeFileSync(dest, item.data);
+  return { dirName, manifestId, kept };
+}
+
+/** 把解包结果写进一个已独占创建的目录（路径穿越的第二道防线在这里）。 */
+function writeExtracted(target, kept) {
+  for (const item of kept) {
+    // 二次防线：拼接结果必须仍在 target 内（解析后 path.relative 检查）
+    const dest = path.join(target, ...item.rel.split('/'));
+    const relCheck = path.relative(target, dest);
+    if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
+      throw new Error(`安装包包含非法路径：${item.rel}`);
     }
-  });
-  return installed.id;
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, item.data);
+  }
+}
+
+/**
+ * 解压安装到 <root>/skills/ 或 <root>/plugins/ 下的一个目录。
+ *
+ * **不做同名递增**：目录已存在直接拒绝（见 writeModuleDirectory）。同 id 的包在
+ * 落地前就被 ModuleIdConflictError 拦下；不同 id 但撞目录名同样拒绝，因为目录名
+ * 就是用户在主控台里看到的那个操作对象，多一份 `_1` 只会造成"磁盘两份、注册表一份"。
+ *
+ * @returns {Promise<string>} 实际落地的目录名
+ * @throws {ModuleIdConflictError} 该 id 已被内置模块或已装扩展占用（conflict/existing 供界面提示）
+ */
+export async function unzipToModuleDir(buffer, { root, type, preferId = '' }) {
+  const { dirName, manifestId, kept } = extractModuleFromZip(buffer, { type, preferId });
+  // 同 id 检查必须在写盘之前：目录已落下再报冲突，用户面对的是"装了一半"的现场。
+  if (manifestId) assertIdFree(manifestId, root);
+  const baseDir = path.join(root, type === 'plugin' ? 'plugins' : 'skills');
+  return writeModuleDirectory(baseDir, dirName, (target) => writeExtracted(target, kept)).id;
+}
+
+/**
+ * 解压到开发沙箱（**不是安装**）：不查 id、不碰 skills/ 与 plugins/。
+ *
+ * 沙箱里同一扩展被拉两次是常态（改一版再拉一版对比），而且沙箱里的东西永远不会
+ * 被加载执行 —— 用安装口径拒绝它只会挡住正当的开发动作。所以这里**保留同名递增**
+ * （`demo` / `demo_1` / …），与安装路径的「目录已存在即拒绝」是两个语义，
+ * 不能共用同一个写入函数（见 writeSandboxDirectory 的说明）。
+ *
+ * @returns {Promise<string>} 沙箱内的目录名
+ */
+export async function unzipToSandboxDir(buffer, { root, type, preferId = '' }) {
+  const { dirName, kept } = extractModuleFromZip(buffer, { type, preferId });
+  const baseDir = path.join(root, type === 'plugin' ? 'plugins' : 'skills');
+  return writeSandboxDirectory(baseDir, dirName, (target) => writeExtracted(target, kept)).id;
 }
 
 /** 极简 zip 读取器：中央目录定位 + 解压全部文件条目。不支持的特性直接抛错。

@@ -225,17 +225,29 @@ function fallbackLog(level, module, text) {
   } catch { /* 兜底通道自己失败也不许拖累调用方 */ }
 }
 
-/** 关键事件：尽量落盘，两者都失败也不许拖累调用方。 */
+/**
+ * 关键事件：尽量落盘，两者都失败也不许拖累调用方。
+ *
+ * coreLogger 存在时**只走 logger**：它默认 mirrorConsole，自己就会打印到终端，
+ * 这里再 console 一次就是同一行日志两遍（实测连时间戳都没有、字面完全相同）。
+ * console 只在 coreLogger 不可用时作为 fallbackLog 之外的补充出口。
+ */
 function logCritical(module, text) {
-  if (coreLogger) { try { coreLogger.error(module, text); } catch { /* 落盘失败忽略 */ } }
-  else fallbackLog('ERROR', module, text);
+  if (coreLogger) {
+    try { coreLogger.error(module, text); } catch { /* 落盘失败忽略 */ }
+    return;
+  }
+  fallbackLog('ERROR', module, text);
   try { console.error(`[${module}] ${text}`); } catch { /* 连 console 都异常就算了 */ }
 }
 
 /** 关键生命周期事件（非致命，但事后必须查得出来：它到底是被关掉的还是凭空没的）。 */
 function logKey(module, text) {
-  if (coreLogger) { try { coreLogger.info(module, text); } catch { /* 忽略 */ } }
-  else fallbackLog('INFO', module, text);
+  if (coreLogger) {
+    try { coreLogger.info(module, text); } catch { /* 忽略 */ }
+    return;
+  }
+  fallbackLog('INFO', module, text);
   try { console.log(`[${module}] ${text}`); } catch { /* 忽略 */ }
 }
 
@@ -2403,7 +2415,9 @@ app.whenReady().then(async () => {
       // 在 data/logs 里一条线索都没有。改成同时落主日志，事后才查得动。
       log: (...args) => logKey('desktop-pet', args.map((value) => (typeof value === 'string' ? value : String(value))).join(' '))
     });
-    core = createApp({ log: (...args) => console.log(...args), desktopPetHost });
+    // createApp 不再接受自定义 log：核心日志统一走 src/logger.js，它默认把
+    // 每行镜像到 console，Electron 主进程启动时终端照样有输出。
+    core = createApp({ desktopPetHost });
     // 先启动服务拿到真实端口，再开窗口。反过来的话 lastPort 尚未赋值，窗口恒按
     // 3210 加载；若端口被占用顺延到 3211+，首屏必然加载失败。
     const port = await core.start();

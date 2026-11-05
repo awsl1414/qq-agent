@@ -5,6 +5,8 @@
 // 能力仍然保留：别的模块想复用取图逻辑时可以软依赖它。
 import fs from 'node:fs';
 import { runSetuRequest } from './setu.js';
+import { sweepTmp } from './downloader.js';
+import { setLogger } from './log.js';
 import { DEFAULT_SETU_BASE_URL, SETU_NSFW_SORT, SETU_SFW_SORT } from './config.js';
 
 let getConfig = () => ({
@@ -86,6 +88,13 @@ export async function toSendable(image) {
 
 export function setup(api) {
   if (api && typeof api.config === 'function') getConfig = api.config;
+  // 日志出口：核心注入的 api.log/warn/error 会走 logger（落盘 + 分级 + 脱敏）。
+  // 没有注入时保持静默，取图主流程不受影响。
+  setLogger({ info: api?.log, warn: api?.warn, error: api?.error });
+  // 启动时清一次过期临时图。sweepTmp 原本只在 savePayload 里调用，
+  // 意味着「不发图就不清理」——长期闲置的实例会把上次会话残留的临时图
+  // 一直留在磁盘上（实测一次使用可留 6.5MB）。这里补一次，语义与发图时相同。
+  sweepTmp();
   // 走能力取图：本模块自己提供 image.random，工具通过 api.capability 取用，
   // 保证"取图逻辑"只有一份实现（也避免能力因为没有消费方被审计判为孤儿）。
   skillApi = api;

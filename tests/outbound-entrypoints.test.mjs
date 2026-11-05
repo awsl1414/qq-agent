@@ -36,7 +36,7 @@ for (const hook of ['onMessage', 'onRecall']) {
     t.mock.method(globalThis, 'clearTimeout', () => {});
     t.mock.method(globalThis, 'clearInterval', () => {});
     updateConfig({ allowAllWhenEmpty: false, allow: { groups: ['123'], users: [] } });
-    const app = createApp({ log() {} });
+    const app = createApp();
     let sent = 0;
     t.mock.method(app.onebot, 'sendSegments', async () => { sent++; return { message_id: 9 }; });
     const observed = Promise.withResolvers();

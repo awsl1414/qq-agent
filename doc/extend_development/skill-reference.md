@@ -431,6 +431,16 @@ export const providers = {
   里登记它的**目录名**（不是清单 id，因为清单 id 是第三方自己能写的，目录名不是）。
 - 扫描被截断（>500 文件 / >12 层）→ fail-closed 拒绝。
 
+拒载时返回 `{ ok: false, reason, message }`：`reason` 是机器可读原因码
+（`PLUGIN_TRUST_REASON`，目前只有 `capability-scan`，截断与命中高危能力共用），
+`message` 是给人看的完整说明。
+
+**信任按钮的判据只认原因码**：列表接口把 `reason` 原样透出为 `loadErrorReason`，
+`/api/skills/trust` 与 `ui/app/06-settings-render.js` 都按
+`loadErrorReason === 'capability-scan'` 判断，不匹配 `loadError` 的文案。
+新增原因码时三处必须同步（`src/plugin-loader.js` 的常量、
+`src/routes.js` 的 `skillsView()`、前端 `PLUGIN_TRUST_REASON`）。
+
 ⚠️ 改了任何内置模块的文件，必须重算基线，否则该模块会掉进能力扫描被拒加载。
 重算方式见 [skill-system.md 第 6 节](skill-system.md#6-安全边界两层别混淆)。
 
@@ -465,8 +475,11 @@ export const providers = {
 | `入口需导出 setup(api)/register(api) 或 hooks/providers` | 入口没导出任何被认可的成员 |
 | `加载失败：…` | `import()` 抛错（语法错、顶层异常） |
 | `注册失败：…` | `setup`/`register` 抛错 |
-| `模块「x」触碰了高危能力：…` | 第三方插件 import 了高危模块或触碰凭据 |
+| `模块「x」的能力扫描命中：…` | 第三方插件 import 了高危模块或触碰凭据 |
 | `模块「x」的文件太多或嵌套太深…` | 扫描被截断（>500 文件 / >12 层） |
+
+最后两行的卡片上会出现 **`信任并重试`**（判据是 `loadErrorReason === 'capability-scan'`），
+点一次即把目录名写进 `config.trustedPlugins` 并立刻重载。
 
 重载失败时统一追加 **`（已沿用旧版本继续运行）`**，不会把正在工作的扩展弄挂。
 
@@ -496,7 +509,7 @@ export const providers = {
 | `已关闭（点击开启）` | 已加载但未启用 |
 | `已启用但依赖未就绪：…` | `requires` 缺能力，或 `available()` 返回 false |
 | `加载失败` + 红字原因 | 见 13.1 节 |
-| `信任并重试` | 因触碰高危能力被拦，可一键加进 `trustedPlugins` |
+| `信任并重试` | 因能力扫描被拦（`loadErrorReason === 'capability-scan'`），可一键加进 `trustedPlugins` |
 | `已配置但未安装（N）` | `config.skills` 里有残留配置，磁盘上已无目录 |
 
 ---

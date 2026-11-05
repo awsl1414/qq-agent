@@ -522,11 +522,24 @@ async function installFromMarket(kind, id, btn) {
       const head = g.ok
         ? `闸门通过${g.confirm ? `，${g.confirm} 项要你确认` : ''}`
         : `闸门阻断 ${g.blocking || 0} 项`;
+      // 解包时因体积超限被丢掉的条目必须在这里就说出来：跳转后的锻造台页面
+      // 虽然也会提示，但用户当下看到的是"已下载"这个结论，不说就等于谎报完整。
+      // 原因值与 13-doctor.js 的 FORGE_SKIP_SIZE_REASONS 一致（后端 SKIP_REASONS）。
+      const skipped = Array.isArray(r.skipped) ? r.skipped : [];
+      const sizeLost = skipped.filter((s) => typeof s === 'object'
+        && (s.reason === 'single-file-too-large' || s.reason === 'total-too-large'));
+      const lostNote = sizeLost.length
+        ? `；⚠️ 另有 ${sizeLost.length} 个文件因体积超限未解出，这个技能可能无法正常工作`
+        : '';
       marketToast(
-        `「${name}」已下载（${head}）—— 正在打开锻造台并让模型适配本机环境…`,
-        g.ok ? 'ok' : 'warn'
+        r.deduped
+          ? `「${name}」之前已经下载过了 —— 直接用现有草稿（${head}），正在打开锻造台…`
+          : `「${name}」已下载（${head}）${lostNote} —— 正在打开锻造台并让模型适配本机环境…`,
+        g.ok && !sizeLost.length ? 'ok' : 'warn'
       );
       // 置为不可再点：再点一次只会又下一份、又生成一个草稿（同一口令重复入暂存区）。
+      // 后端现在已经按内容摘要去重（同 digest 直接复用现有草稿），这里仍是第一道
+      // 视觉提示：按钮停留在"待确认"能直接说明这条口令已经处理过了。
       // 这不是"已安装"，所以不加 mk-btn-done（那个绿色态的含义是装好了）。
       btn.disabled = true;
       btn.textContent = '待确认';

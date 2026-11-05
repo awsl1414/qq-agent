@@ -1736,6 +1736,21 @@ function renderOnebotSection(c) {
  */
 
 /**
+ * 准入闸拒载原因码（与 src/plugin-loader.js 的 PLUGIN_TRUST_REASON 同一份取值）。
+ *
+ * 界面判断"这张卡能不能点信任"只看它，不匹配 loadError 的文案：
+ * 文案是写给人看的，改一次措辞就会让两端的字符串判据同时失配，
+ * 而失配的表现是「按钮永远不出现」且没有任何报错（历史事故）。
+ * ⚠️ 后端新增原因码时同步这里；漏同步 = 新原因下又变成不可信任。
+ */
+const PLUGIN_TRUST_REASON = Object.freeze({ CAPABILITY_SCAN: 'capability-scan' });
+
+/** 这张卡是否因能力扫描被拦（= 可以「信任并重试」）。卡片、banner、一键信任共用。 */
+function isTrustableSkill(s) {
+  return s && !s.loaded && s.loadErrorReason === PLUGIN_TRUST_REASON.CAPABILITY_SCAN;
+}
+
+/**
  * 拉取技能/插件列表（内存态）。**不含磁盘重扫**，想让新放入的目录
  * 被看到，走 rescanSkills()。
  */
@@ -2698,10 +2713,10 @@ function renderModulePage(kind, target, opts) {
     // 图标按钮的点击会 stopPropagation，不会触发整卡开关。
     const kindLabel = (s.kind || kind) === 'plugin' ? '插件' : '技能';
     const delBtn = `<button class="mcard-del" data-skill-id="${esc(s.id)}" data-skill-name="${esc(s.name)}" data-skill-kind="${esc(s.kind || kind || '')}" title="删除${kindLabel}（从磁盘移除整个文件夹，不可恢复）" aria-label="删除 ${esc(s.name)}">${TRASH_SVG}</button>`;
-    // 「信任并重试」按钮仅在因高危能力被拦时出现。准入闸是为了保护用户，
+    // 「信任并重试」按钮仅在因能力扫描被拦时出现。准入闸是为了保护用户，
     // 但用户自己写的插件常常确实需要 fs，没有这一键就只剩"手改
     // data/config.json"或"把闸门关掉"两个坏选择。不是所有加载失败都能点信任。
-    const trustable = !loadedOk && /触碰了高危能力/.test(String(s.loadError || ''));
+    const trustable = isTrustableSkill(s);
     const trustBtn = trustable
       ? `<button class="mcard-trust" data-skill-id="${esc(s.id)}" data-skill-dir="${esc(s.dir || s.id)}"
            title="我信任这个${kindLabel}，允许它使用本机能力（会记入信任名单）"
@@ -2848,10 +2863,10 @@ function renderModulePage(kind, target, opts) {
           </div>
         </div>`;
 
-  // 一键信任全部 banner：本页存在"因高危能力被拦"的卡时，在筛选条上方挂一条
+  // 一键信任全部 banner：本页存在"因能力扫描被拦"的卡时，在筛选条上方挂一条
   // 提示 + 一颗按钮，省得用户挨个点。compact 模式也照样渲染，那边也会显示这些卡。
-  // 判据与卡片自己渲染"信任并重试"按钮用的同一条，不会错挂或漏挂。
-  const trustableItems = items.filter((s) => !s.loaded && /触碰了高危能力/.test(String(s.loadError || '')));
+  // 判据与卡片自己渲染"信任并重试"按钮用的是同一个 isTrustableSkill()，不会错挂或漏挂。
+  const trustableItems = items.filter(isTrustableSkill);
   const trustAllBanner = trustableItems.length > 0
     ? `<div class="mod-trust-all">
          <span class="mta-text">有 <b>${trustableItems.length}</b> 个${meta.kind === 'skill' ? '技能' : '插件'}因需要本机能力被拦截</span>
@@ -3016,25 +3031,19 @@ function bindModulePageEvents(kind, scopeEl, opts) {
     });
     btn.addEventListener('keydown', (e) => e.stopPropagation());
   });
-  // 信任并重试：只有「因高危能力被拦」的卡片上才有这个钮。
+  // 信任并重试：只有「因能力扫描被拦」的卡片上才有这个钮。
   // 后端会校验它此刻确实处于该状态（不是万能放行口），登记后立刻 reloadSkills，
   // 用户点完就能看到结果，不用手改 data/config.json，也不用把闸门整个关掉。
   // trustPluginInline() 给「卡片点信任」和「一键信任全部」共用。
   // ⚠️ body 必须 JSON.stringify：直接传对象时不同 Electron 版本行为不一致
   //    （有的自动序列化，有的 toString 成 "[object Object]"），后端会回"缺少 id"。
-  // translateTrustError 把后端的"缺少 id / 找不到模块 / 当前不是因高危能力被拦截"
-  //    翻译成用户能看懂的提示，不暴露 JSON 格式规约。
+  // 失败提示直接用后端文案：那几条 400 本来就是写给用户看的中文
+  // （缺 id / 已移除 / 当前不可信任），前端不再按关键词二次翻译 —— 关键词匹配
+  // 在文案改一个字之后就静默失效，最后弹给用户的只剩一句英文堆栈。
   async function trustPluginInline(dir) {
     const r = await api('/api/skills/trust', { method: 'POST', body: JSON.stringify({ id: dir }) });
     if (r.config) state.config = r.config;
     return r;
-  }
-  function translateTrustError(rawMsg) {
-    const m = String(rawMsg || '');
-    if (m.includes('缺少 id')) return '提交格式异常，请刷新页面后重试。';
-    if (m.includes('找不到模块')) return '该插件已被移除，请刷新列表后再试。';
-    if (m.includes('当前不是因高危能力')) return '该插件当前不处于"需信任"状态（可能已被自动恢复）。';
-    return m || '未知错误';
   }
   // 自动适配：把「加载失败 / 熔断中」的模块送去 harness 的「升级扩展」工作台
   // （self-doctor 前端页，extension-forge 供能力）并自动起草适配草稿。
@@ -3101,20 +3110,21 @@ function bindModulePageEvents(kind, scopeEl, opts) {
       } catch (err) {
         btn.disabled = false;
         btn.textContent = old;
-        qaAlert(`信任失败：${translateTrustError(err?.message || err)}`);
+        qaAlert(`信任失败：${err?.message || err}`);
       }
     });
     btn.addEventListener('keydown', (e) => e.stopPropagation());
   });
-  // 一键信任全部：与卡片级「信任并重试」共用 trustPluginInline + translateTrustError。
+  // 一键信任全部：与卡片级「信任并重试」共用 trustPluginInline。
   // ⚠️ 必须用全量 items 算 trustable，不能数 DOM 里的 .mcard-trust 钮：
   //    筛选条停在「生效 / 已关」时被拦的卡根本没渲染出来，钮为 0 颗，
-  //    却仍按 banner 文案提示"已信任 N 个"。判据与 banner、卡片按钮同一条正则。
+  //    却仍按 banner 文案提示"已信任 N 个"。判据与 banner、卡片按钮同一条
+  //    isTrustableSkill()。
   const allTrustBtn = q('#mod-trust-all-btn');
   if (allTrustBtn) {
     allTrustBtn.addEventListener('click', async () => {
       const allItems = (state.skills || []).filter((s) => s.kind === meta.kind || (s.kind == null && meta.kind === 'skill'));
-      const trustable = allItems.filter((s) => !s.loaded && /触碰了高危能力/.test(String(s.loadError || '')));
+      const trustable = allItems.filter(isTrustableSkill);
       if (!trustable.length) return;
       const kindLabel = meta.kind === 'skill' ? '技能' : '插件';
       const ok = await qaConfirm(
@@ -3140,7 +3150,7 @@ function bindModulePageEvents(kind, scopeEl, opts) {
       } catch (err) {
         allTrustBtn.disabled = false;
         allTrustBtn.textContent = '一键信任全部';
-        qaAlert(`信任失败：${translateTrustError(err?.message || err)}`);
+        qaAlert(`信任失败：${err?.message || err}`);
       }
     });
   }

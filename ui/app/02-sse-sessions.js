@@ -166,6 +166,14 @@ function connectSSE() {
       if (state.tab === 'connection') loadConnectionPage({ quiet: true });
     }, 500);
   });
+  // 应用日志实时流：data 是后端 200ms 合并成的一批（数组），不是单条。
+  // 只有日志页需要它，其余页面直接丢弃——否则每 200ms 白做一次 JSON.parse。
+  // 处理函数在 20-logs.js（本文件之后加载，defer 按序执行；这里只在事件到达时
+  // 才解析函数名，所以 typeof 守卫足够，不构成加载顺序依赖）。
+  es.addEventListener('log', (ev) => {
+    if (state.tab !== 'logs') return;
+    if (typeof handleLogSseBatch === 'function') handleLogSseBatch(ev);
+  });
   es.addEventListener('feedback', (ev) => {
     let d = {};
     try { d = JSON.parse(ev.data); } catch { return; }
@@ -353,8 +361,15 @@ function initChatScrollLoader() {
 }
 
 let listPollerVisBound = false;
+// 上一次真正生效的轮询间隔。setInterval 不会重读配置，所以间隔改变时必须重建；
+// 间隔没变就复用原计时器 —— 否则每次保存设置（doSave）都把 15 秒周期清零重来，
+// 用户频繁改设置时轮询相位一直漂移，顶栏数字更新节奏忽快忽慢。
+let listPollerMs = null;
 function startListPoller() {
+  const interval = refreshIntervalMs();
+  if (listPoller && listPollerMs === interval) return;
   if (listPoller) clearInterval(listPoller);
+  listPollerMs = interval;
   listPoller = setInterval(() => {
     // 页面不可见（最小化/被遮挡）时跳过用量页轮询：大数据下 stats 重算
     // 即便有缓存也要几百毫秒，后台一直跑是纯浪费。会话/存档等轻页签不受影响。
@@ -363,12 +378,13 @@ function startListPoller() {
     if (state.tab === 'chats') loadChats({ quiet: true });
     if (state.tab === 'connection') loadConnectionPage({ quiet: true });
     if (state.tab === 'usage' && !skipUsage) loadUsageView();   // 无 force：只更新数值，不重建 DOM
-    if (state.tab === 'settings') refreshStatus();
-  }, refreshIntervalMs());
+    // ⚠️ 这里刻意**不**刷新 /api/status：状态栏由 startStatusPoller（全局、不随页签停）
+    //    专职轮询，设置页再补一路会让实际刷新间隔减半（F7 BUG-1）。
+  }, interval);
   // 从后台切回：立刻刷一次用量（刚才跳过的补上），数字不会"停在过去"。
-  // ⚠️ 只挂一次：startListPoller 在每次「设置页改动保存」时都会被调用来刷新间隔
-  //    （07-settings-events.js 的 doSave），每次都 addEventListener 的话，反复改
-  //    设置会叠出一串 visibilitychange 监听，每次切回前台把 loadUsageView 跑 N 遍。
+  // ⚠️ 只挂一次：间隔变化重建计时器时本函数会再进来，每次都 addEventListener
+  //    的话反复改设置会叠出一串 visibilitychange 监听，每次切回前台把
+  //    loadUsageView 跑 N 遍。
   if (!listPollerVisBound) {
     listPollerVisBound = true;
     document.addEventListener('visibilitychange', () => {

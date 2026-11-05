@@ -117,11 +117,33 @@ test('内置拒载文案先列出真正失配文件，再说明能力扫描和�
   fs.appendFileSync(path.join(dir, 'README.md'), ' ');
   const result = checkPluginTrust(rec.id, path.join(dir, rec.entry));
   assert.equal(result.ok, false);
-  assert.match(result.reason, /^内置模块「mem-layered」的以下文件与随包基线不一致：README\.md（内容指纹不一致）。/);
-  assert.match(result.reason, /仅换行差异，已归一化且不影响校验/);
-  assert.match(result.reason, /能力扫描命中：.+（导入了高危 Node 模块）/);
-  assert.match(result.reason, /仍受宿主账号和操作系统权限约束/);
-  assert.doesNotMatch(result.reason, /获得本机全部权限/);
+  // 机器判据与人类文案分开两个字段：界面/信任接口只看 reason，不看 message。
+  assert.equal(result.reason, 'capability-scan');
+  assert.match(result.message, /^内置模块「mem-layered」的以下文件与随包基线不一致：README\.md（内容指纹不一致）。/);
+  assert.match(result.message, /仅换行差异，已归一化且不影响校验/);
+  assert.match(result.message, /能力扫描命中：.+（导入了高危 Node 模块）/);
+  assert.match(result.message, /仍受宿主账号和操作系统权限约束/);
+  assert.doesNotMatch(result.message, /获得本机全部权限/);
+});
+
+test('能力扫描拒载与扫描截断共用 capability-scan 原因码，可一键信任', () => {
+  const dir = sandbox();
+  write(dir, 'plugin.json', JSON.stringify({ id: 'needs-fs', name: 'needs-fs', version: '1.0.0', entry: 'index.js' }));
+  write(dir, 'index.js', 'import fs from "node:fs";\nexport function setup() {}\n');
+  const scan = checkPluginTrust('needs-fs', path.join(dir, 'index.js'));
+  assert.equal(scan.ok, false);
+  assert.equal(scan.reason, 'capability-scan');
+  assert.match(scan.message, /能力扫描命中/);
+
+  // 扫不完（截断）与扫到高危能力对用户是同一件事：确认可信即可放行。
+  const deep = sandbox();
+  let nested = deep;
+  for (let i = 0; i <= 13; i++) nested = path.join(nested, `d${i}`);
+  write(nested, 'x.js', 'export {};\n');
+  const truncated = checkPluginTrust('too-deep', path.join(deep, 'index.js'));
+  assert.equal(truncated.ok, false);
+  assert.equal(truncated.reason, 'capability-scan');
+  assert.match(truncated.message, /文件太多或嵌套太深/);
 });
 
 test('重算插件及技能基线共用归一化指纹，换行转换不会触发重写', () => {

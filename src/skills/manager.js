@@ -17,6 +17,8 @@ import { SkillRegistry } from './registry.js';
 import { CapabilityRegistry } from './capabilities.js';
 import { SKILL_ERROR, SkillError, skillErrorText } from './errors.js';
 import { isSkillEnabledInConfig, getSkillConfig } from './config.js';
+import { logger } from '../logger.js';
+import { isCoreModuleId } from '../core-modules.js';
 // 运行时熔断状态（tool-guard）：工具连续失败 ≥5 次会熔断该扩展的全部工具。
 // 以前只写 console.error，UI 完全看不到，"启用后到底跑没跑正常"是市场
 // 下载插件的黑盒盲区之一，把它并进 status() 让模块卡片直接显示"已熔断"。
@@ -103,16 +105,11 @@ export const MULTI_PROVIDER_CAPABILITIES = new Set([
 ]);
 
 export class SkillManager {
-  constructor({ log = () => {} } = {}) {
+  constructor() {
     this.registry = new SkillRegistry();
     this.capabilities = new CapabilityRegistry();
-    this.log = log;
     this.hookTimeoutMs = DEFAULT_HOOK_TIMEOUT_MS;
     this.errors = new Map();         // id -> 最近一次错误文案（UI 排障用）
-  }
-
-  setLog(fn) {
-    if (typeof fn === 'function') this.log = fn;
   }
 
   // ── 注册 / 卸载 ──────────────────────────────────────────────────────────
@@ -125,6 +122,16 @@ export class SkillManager {
   register(skill) {
     const id = skill?.manifest?.id;
     if (!id) return { ok: false, id: '', error: '缺少 manifest.id' };
+
+    // 内置模块 id 不可被第三方顶替（安全边界的独立校验，见 .claude/rules/conventions.md §2）。
+    // 安装侧与装载侧都已经拒绝同 id，这里是最后一道：手工把目录拷进来、或将来新增的
+    // 注册路径，只要不是 core 自己，都不能占住内置 id。
+    // 为什么后果这么重：manager.register() 会先 removeOwner(id)（见下），第三方
+    // 条目一旦注册成功，内置模块的全部能力当场被清空（实测 forge.install 提供者 1 → 0），
+    // 而扩展页上看不到任何异常条目。
+    if (isCoreModuleId(id) && skill?.kind !== 'core') {
+      return { ok: false, id, error: '这个 id 属于内置模块，第三方扩展不能占用' };
+    }
 
     // 覆盖注册（热重载）时必须走完整生命周期：**先 deactivate 再 dispose**。
     // 历史上这里只调 dispose（只回收工具），不调 deactivate，
@@ -611,12 +618,17 @@ export class SkillManager {
     if (msg) this.errors.set(String(id), msg);
   }
 
+  /**
+   * 运行期警告。级别在这里是固定的：能被调用到就说明某一步失败了（hook 抛错、
+   * dispose 抛错、前缀稳定区被击穿），不存在"正常但也要记这条"的场景。
+   * 不按文案关键字猜级别——新增调用方不需要额外传参。
+   */
   #warn(id, message, error) {
     // error 可空：护栏一类的"只警告不拦截"场景没有异常对象可附，
     // 早先直接传 null 会让日志尾缀一个裸 "：null"（2026-10-19 修）。
     const detail = error?.message ?? error;
     const text = detail == null ? `[skill:${id}] ${message}` : `[skill:${id}] ${message}：${detail}`;
-    try { this.log(text); } catch { /* 日志失败不影响主流程 */ }
+    logger.warn('skill', text);
     this.recordError(id, error);
   }
 

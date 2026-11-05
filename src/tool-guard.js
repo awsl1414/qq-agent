@@ -1,3 +1,5 @@
+import { logger } from './logger.js';
+
 // 扩展工具的**运行时护栏**（与 forge 闸门互补：闸门管"装进来之前"，这里管"跑起来之后"）。
 //
 // 五道静态闸抓不住运行期行为，扩展最常见的三种翻车：
@@ -12,6 +14,10 @@
 // 熔断：同一扩展（skillId）的**任意工具**连续失败 ≥5 次 → 熔断 5 分钟，期间该扩展
 // 所有工具直接返回说明性错误（模型立刻知道该换路，不再烧轮次）。到期自动半开：
 // 计数清零重新观察，成功一次即复位。状态在内存（重启清零），熔断是止血措施，不是封禁。
+//
+// 日志：熔断与失败计数只写 logger。护栏本身不能依赖日志层（logger 抛错不许影响
+// 计数），但这由 guardLog 的 try/catch 保证 —— 不再各自补一次 console：
+// logger 默认 mirrorConsole，重复调用会让终端上同一条日志出现两行。
 //
 // 已知边界（刻意不做）：
 //   · 同步死循环（while(true){...}）阻塞事件循环时，Promise.race 的超时也排不上队，
@@ -31,6 +37,19 @@ export const TOOL_GUARD = {
 /** skillId -> { fails, openUntil, lastTool } */
 const breakers = new Map();
 
+/**
+ * 熔断事件写业务日志（data/logs/*.log + UI 日志页）。
+ *
+ * 只写 console 时，[guard] 在落盘日志里的行数是 0：熔断真的发生了，用户和排障
+ * 的人都完全无感。所以必须走 logger。
+ *
+ * **不要在这里再调 console.***：logger 默认 mirrorConsole（logger.js 的
+ * `#write` 会镜像到 console，并自带重入保护），再调一次就是同一条日志两行。
+ * 正文也不要自带 `[guard]` 前缀 —— 模块名已经是 guard，镜像时会拼成
+ * `[guard] 正文`，重复写就是 `[guard] [guard] …`，排障时容易误以为失败了两次。
+ * 同步护栏不能依赖日志层（logger 抛错也不能让 recordFail 中断），这条约束由
+ * 下面的 try/catch 保证；它不等于"要自己补一次 console"。
+ */
 function recordFail(skillId, toolId, err) {
   const now = Date.now();
   const st = breakers.get(skillId) || { fails: 0, openUntil: 0, lastTool: '' };
@@ -38,11 +57,18 @@ function recordFail(skillId, toolId, err) {
   st.fails += 1;
   st.lastTool = toolId;
   breakers.set(skillId, st);
-  console.error(`[guard] 扩展工具失败（${skillId} / ${toolId}）连续第 ${st.fails} 次：${err?.message ?? err}`);
+  // 正文不再自带 `[guard]`：logger 的模块名已经是 guard，镜像到 console 时
+  // 会拼成 `[guard] 正文`；自己再写一遍就变成 `[guard] [guard] …`。
+  const msg = `扩展工具失败（${skillId} / ${toolId}）连续第 ${st.fails} 次：${err?.message ?? err}`;
+  guardLog(msg);
   if (st.fails >= TOOL_GUARD.failThreshold && !st.openUntil) {
     st.openUntil = now + TOOL_GUARD.cooldownMs;
-    console.error(`[guard] ⛔ 扩展 ${skillId} 连续失败 ${st.fails} 次，熔断 ${TOOL_GUARD.cooldownMs / 60000} 分钟（到期自动恢复）`);
+    guardLog(`⛔ 扩展 ${skillId} 连续失败 ${st.fails} 次，熔断 ${TOOL_GUARD.cooldownMs / 60000} 分钟（到期自动恢复）`);
   }
+}
+
+function guardLog(text) {
+  try { logger.warn('guard', text); } catch { /* 护栏不能因日志失败而中断 */ }
 }
 
 function recordOk(skillId) {

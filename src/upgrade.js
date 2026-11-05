@@ -411,7 +411,7 @@ export const UPGRADES = [
         parts.push('插件文件按"不删用户数据"原则**原样保留**；如要彻底移除，请手动删除该目录');
       }
       const note = parts.join('；');
-      log(`[upgrade]     ${note}`);
+      log.info(`[upgrade]     ${note}`);
       return { changed, note };
     }
   },
@@ -445,7 +445,7 @@ export const UPGRADES = [
       // 这正是 checkPluginTrust 注释里点名的那类攻击形态（"占掉内置模块的名字"）。
       const shown = orphans.map((x) => x || '(空项)');
       const note = `已清掉 ${orphans.length} 项无主信任：${shown.join('、')}（对应的插件目录已不存在）`;
-      log(`[upgrade]     ${note}`);
+      log.info(`[upgrade]     ${note}`);
       return { changed: ['trustedPlugins'], removed: orphans, note };
     }
   },
@@ -581,10 +581,10 @@ export const UPGRADES = [
           try {
             removePath(from, { roots });
             deleted.push(from);
-            log(`[upgrade]     已删除旧随包 ${from}（正式位置已有 ${to}）`);
+            log.info(`[upgrade]     已删除旧随包 ${from}（正式位置已有 ${to}）`);
           } catch (error) {
             errors.push(`删除 ${from} 失败：${error?.message ?? error}`);
-            log(`[upgrade]     ⚠️ 删除失败 ${from}：${error?.message ?? error}`);
+            log.warn(`[upgrade]     ⚠️ 删除失败 ${from}：${error?.message ?? error}`);
           }
           continue;
         }
@@ -606,7 +606,7 @@ export const UPGRADES = [
         const r = renamePath(from, to, { roots });
         moved.push(r.to);
         if (name === exeName('ffprobe')) movedFfprobe = true;
-        log(`[upgrade]     已搬移 ${r.from} → ${r.to}`);
+        log.info(`[upgrade]     已搬移 ${r.from} → ${r.to}`);
       }
 
       // 旧包目录在整轮动作之后统一收尾，而不是每处理一个目录就 prune 一次：
@@ -632,7 +632,7 @@ export const UPGRADES = [
       // 否则下次排查会以为迁移没跑完。
       if (duplicated.length) {
         for (const d of duplicated) {
-          log(`[upgrade]     同名文件有多个来源，保留 ${d.kept}，忽略 ${d.ignored}（留在原位不删）`);
+          log.warn(`[upgrade]     同名文件有多个来源，保留 ${d.kept}，忽略 ${d.ignored}（留在原位不删）`);
         }
       }
 
@@ -654,7 +654,7 @@ export const UPGRADES = [
       if (deleted.length) {
         const note = `旧随包 ffmpeg 已删除（正式位置 ${path.relative(dataDir, targetDir).replace(/\\/g, '/')} 已有可用的那份）`
           + ffprobeNote({ sourceHadFfprobe, movedFfprobe, targetHasFfprobe: true });
-        log(`[upgrade]     ${note}`);
+        log.info(`[upgrade]     ${note}`);
         return { changed: deleted, note };
       }
 
@@ -708,7 +708,7 @@ export const UPGRADES = [
           if (!destStat.isDirectory() || !dirIsEmpty(dest)) {
             const reason = `目标已存在且非空，跳过（不合并）：${dest}`;
             skipped.push({ name, reason });
-            log(`[upgrade]     ⚠️ ${reason}`);
+            log.warn(`[upgrade]     ⚠️ ${reason}`);
             continue;
           }
           try { fs.rmdirSync(dest); } catch { /* 删不掉就让下面的 rename 去报错 */ }
@@ -727,14 +727,14 @@ export const UPGRADES = [
         try {
           const r = renamePath(src, dest, { roots });
           moved.push(path.relative(dataDir, r.to).replace(/\\/g, '/'));
-          log(`[upgrade]     已搬移 ${r.from} → ${r.to}`);
+          log.info(`[upgrade]     已搬移 ${r.from} → ${r.to}`);
         } catch (error) {
           // 常见原因：便携 QQ 正在运行，Windows 上文件被占用，rename 失败。
           // 不为此新增进程扫描 —— 框架本来就是"失败不阻塞、下次启动重试"，
           // 用户关掉 QQ 后重启应用即可。
           const msg = error?.message ?? String(error);
           failed.push({ name, error: msg });
-          log(`[upgrade]     ⚠️ 搬移失败 ${src}：${msg}（可能因为便携 QQ 正在运行、文件被占用）`);
+          log.warn(`[upgrade]     ⚠️ 搬移失败 ${src}：${msg}（可能因为便携 QQ 正在运行、文件被占用）`);
         }
       }
 
@@ -753,7 +753,7 @@ export const UPGRADES = [
 
       const note = `便携 QQ 运行时目录已搬进数据目录：${moved.join('、')}`
         + `（源目录 ${path.relative(path.resolve(appRoot), legacyRuntime).replace(/\\/g, '/') || 'runtime'} 下已移除）`;
-      log(`[upgrade]     ${note}`);
+      log.info(`[upgrade]     ${note}`);
       return {
         changed: moved,
         note,
@@ -825,7 +825,9 @@ function ffprobeNote({ sourceHadFfprobe, movedFfprobe, targetHasFfprobe }) {
  * @param {string}  [opts.appRoot]    程序根（默认 ROOT = resources/app）
  * @param {string}  [opts.dataDir]    数据根（默认 DATA_DIR）
  * @param {string}  [opts.version]    当前版本（默认从 appRoot/package.json 读）
- * @param {Function}[opts.log]        日志出口
+ * @param {object}  [opts.log]        分级日志对象 {info,warn}（见 logger.js 的 subLogger）。
+ *                                    迁移本身的成功/跳过是 info，单项失败与状态落盘失败是 warn：
+ *                                    它们都不阻塞启动，下次启动会重试。
  * @param {number}  [opts.now]        时间戳（测试注入）
  * @param {Function}[opts.saveConfig] 改配置的方式：(mutator) => void。
  *                                    默认走 config.js 的 updateConfig（原子读-改-写 + 落盘）；
@@ -839,7 +841,7 @@ export function runUpgrades({
   appRoot = ROOT,
   dataDir = DATA_DIR,
   version = readAppVersion(appRoot),
-  log = console.log,
+  log = console,
   now = Date.now(),
   upgrades = UPGRADES,
   saveConfig = (mutator) => { updateConfig(mutator); }
@@ -860,13 +862,13 @@ export function runUpgrades({
       if (r?.record && typeof r.record === 'object') Object.assign(entry, r.record);
       state.applied[up.id] = entry;
       ran.push({ id: up.id, title: up.title, ...(r || {}) });
-      log(`[upgrade] ✅ ${up.title}${r?.note ? ` —— ${r.note}` : ''}`);
+      log.info(`[upgrade] ✅ ${up.title}${r?.note ? ` —— ${r.note}` : ''}`);
     } catch (error) {
       // 不记入 applied → 下次启动重试。也不抛出：迁移是"锦上添花"，
       // 绝不允许它把整个启动流程带下去。
       const msg = error?.message ?? String(error);
       failed.push({ id: up.id, title: up.title, error: msg });
-      log(`[upgrade] ❌ ${up.title} 失败（不影响启动，下次启动会重试）：${msg}`);
+      log.warn(`[upgrade] ❌ ${up.title} 失败（不影响启动，下次启动会重试）：${msg}`);
     }
   }
 
@@ -878,15 +880,15 @@ export function runUpgrades({
     try {
       writeUpgradeState(stateFile, state);
     } catch (error) {
-      log(`[upgrade] ⚠️ 迁移状态落盘失败（下次启动会重跑这些项，幂等，无副作用）：${error?.message ?? error}`);
+      log.warn(`[upgrade] ⚠️ 迁移状态落盘失败（下次启动会重跑这些项，幂等，无副作用）：${error?.message ?? error}`);
     }
   }
 
   if (ran.length || failed.length) {
-    log(`[upgrade] 版本 ${version || '(未知)'}：执行 ${ran.length} 项、失败 ${failed.length} 项、跳过 ${skipped.length} 项`
+    log.info(`[upgrade] 版本 ${version || '(未知)'}：执行 ${ran.length} 项、失败 ${failed.length} 项、跳过 ${skipped.length} 项`
       + `（状态文件 ${path.relative(appRoot, stateFile) || stateFile}）`);
   } else if (versionChanged) {
-    log(`[upgrade] 版本变更为 ${version || '(未知)'}：无待执行的迁移项`);
+    log.info(`[upgrade] 版本变更为 ${version || '(未知)'}：无待执行的迁移项`);
   }
 
   return { ran, skipped, failed, stateFile };

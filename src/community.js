@@ -243,11 +243,17 @@ export async function updateGlobalBlocklist(ids, { mode = 'replace' } = {}) {
   });
 }
 
-export function startCommunitySync(log = console.warn) {
+/**
+ * 启动云端屏蔽名单同步。
+ * @param {{warn:Function}} log 分级日志对象（见 logger.js 的 subLogger）；
+ *   这里只会因失败而写日志，所以只用到 warn。
+ */
+export function startCommunitySync(log = console) {
+  const fail = (e) => log.warn(`[community] 云端屏蔽名单同步失败: ${e?.message ?? e}`);
   getGlobalBlocklist();
-  syncGlobalBlocklist({ pushLocal: true }).catch((e) => log('[community] 云端屏蔽名单同步失败:', e?.message ?? e));
+  syncGlobalBlocklist({ pushLocal: true }).catch(fail);
   const timer = setInterval(() => {
-    syncGlobalBlocklist({ pushLocal: true }).catch((e) => log('[community] 云端屏蔽名单同步失败:', e?.message ?? e));
+    syncGlobalBlocklist({ pushLocal: true }).catch(fail);
   }, 5 * 60 * 1000);
   // unref：定时器不该拖住进程退出（与 price-feed.js 同一处理）。
   // 本模块没有 stopCommunitySync()，若不 unref，脚本/测试场景下进程会一直挂着不退出。

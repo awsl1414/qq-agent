@@ -1146,7 +1146,7 @@ async function applyImportInner(sourceDir, selection = {}, hooks = {}) {
         const checkTrust = hooks.checkPluginTrust || (await import('./plugin-loader.js')).checkPluginTrust;
         // 扫整个扩展目录，避免 entry 放在子目录时遗漏其同级代码。
         const trust = await checkTrust(String(moduleManifest.id || item.dir), path.join(base, 'index.js'));
-        if (!trust?.ok) throw new Error(trust?.reason || '扩展未通过能力扫描');
+        if (!trust?.ok) throw new Error(trust?.message || '扩展未通过能力扫描');
         const draftId = `restore-${randomUUID()}`;
         const draftPath = path.join(DATA_DIR, 'plugin-data', 'extension-forge', 'staging', draftId);
         if (fs.existsSync(draftPath)) throw new Error('暂存草稿已存在，拒绝覆盖');

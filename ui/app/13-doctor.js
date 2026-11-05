@@ -101,6 +101,10 @@ const doctorState = {
     draftId: '',      // 当前草稿
     installing: false,
     installed: null,  // 安装结果
+    // 同 id 冲突的现场（安装被拒时由后端带回 { id, version, dir, relDir }）。
+    // 与 error 分开存：error 是"为什么不行"，conflict 决定要不要渲染
+    // 「去升级 / 去卸载」这两条出路。
+    conflict: null,
     allowConfirm: false, // 用户是否勾选"知悉需确认项，仍安装"
     drafts: [],       // 暂存区里的草稿列表
     error: '',
@@ -114,9 +118,11 @@ const doctorState = {
     reviseNote: '',   // 「继续修改」的补充说明，与 requirement 分开存，防止污染原始需求
     diff: null,       // 适配前后的差异
     gateBefore: null, // 修改/适配前的闸门结论（用来对照"修好了没"）
-    revising: false   // 正在"继续修改"已有草稿（区别于从零起草；只影响等待文案）
+    revising: false,  // 正在"继续修改"已有草稿（区别于从零起草；只影响等待文案）
+    // 这份草稿导入时因体积超限没解出来的文件 [{path,size,reason}]。
+    // 从 /api/forge 的草稿列表带回来（解包响应是一次性的），打开老草稿时也能提示。
+    oversizeLost: []
   },
-
   // ── 升级扩展（extension-forge 提供能力，独立 state 避免与 forge 互相踩）──
   upgrade: {
     list: [],         // 已装扩展 [{kind, dir, id, name, version, description, files}]
@@ -2473,12 +2479,95 @@ async function runFixDelete() {
 // 进程内 Node 模块无法被真沙箱，生成的代码装上去就有完整权限。
 // 闸门是"让确认这个动作有据可依"，真正的防线是这个按钮由人来点。
 
+/**
+ * 轨迹里一条工具调用的参数摘要。
+ *
+ * forge_read_file 的分页参数必须露出来：用户看"模型读了哪些文件"时，
+ * 真正想知道的是"它有没有读到文件后半段"。只显示 path 的话，读到 1–400 行
+ * 和读到 719–918 行在界面上长得一模一样。
+ */
+function forgeTraceArg(t) {
+  const p = t?.args?.path || '';
+  if (t?.tool !== 'forge_read_file') return p;
+  const off = Number(t.args?.offset);
+  const lim = Number(t.args?.limit);
+  if (!Number.isFinite(off) && !Number.isFinite(lim)) return p;
+  // 段末行号要按**分页默认值**算：模型只传 offset 时（很常见），limit 走默认 400，
+  // 写成 "1 起" 就看不出它到底读到了哪一段 —— 而这正是用户要核对的事。
+  const from = Number.isFinite(off) && off > 0 ? off : 1;
+  const span = Number.isFinite(lim) && lim > 0 ? lim : 400;
+  return `${p}（第 ${from}–${from + span - 1} 行）`;
+}
+
+/** 起草/升级轨迹的公共渲染（两条路径同一套展示）。 */
+function renderForgeTrace(trace, summaryText) {
+  if (!trace?.length) return '';
+  return `<details class="forge-trace">
+      <summary>${summaryText}</summary>
+      <div class="forge-trace-body">
+        ${trace.map((t) => `<div class="ft-item">
+          <span class="ft-tool">${esc(String(t.tool).replace(/^forge_/, ''))}</span>
+          <span class="ft-arg">${esc(forgeTraceArg(t))}</span>
+          ${t.isError ? '<span class="ft-err">被拒</span>' : ''}
+        </div>`).join('')}
+      </div>
+    </details>`;
+}
+
 /** 闸门问题等级 → 展示元数据。 */
 const FORGE_LEVEL = {
   block: { icon: '⛔', label: '阻断', cls: 'is-block' },
   confirm: { icon: '⚠️', label: '需确认', cls: 'is-confirm' },
   notice: { icon: '💡', label: '提示', cls: 'is-notice' }
 };
+
+/**
+ * 渲染闸门问题清单（一张卡 = 一条规则）。
+ *
+ * 优先用后端聚合好的 `gate.issueGroups`：同一规则在多个文件命中时只出一张卡，
+ * 卡里列清全部命中位置。为什么不在这里聚合：计数（blocking / confirm / notice）
+ * 与确认票据的 digest 都由后端按**逐条**命中算，界面另算一套聚合口径迟早会漂；
+ * 而且逐条 `issues` 还要回喂给模型做自动修复，不能为了展示把它改掉。
+ *
+ * 两个计数口径要分清：
+ *   · `count` 是**逐条命中数**（真实发生了 N 次），
+ *   · `files.length` 是**互不相同的命中位置数**（同一文件同一行重复命中只算一个）。
+ * 徽标显示 count（"共 N 处"）；files 非空时把位置摊开，files 为空而 count>1 时
+ * 必须把全部 title 逐条列出 —— 否则一行只描述一个对象、又没有 file 的规则
+ * （硬依赖缺失 / 未知 api 成员等）会让后面的命中从界面上消失，用户改完第一条
+ * 重新过闸仍被挡住，无法收敛。
+ *
+ * 兼容：老响应没有 issueGroups（例如后端未重启）时退回逐条渲染，不会空白。
+ */
+function renderForgeIssueList(g) {
+  const groups = Array.isArray(g?.issueGroups) && g.issueGroups.length
+    ? g.issueGroups
+    : (Array.isArray(g?.issues) ? g.issues.map((it) => ({ ...it, files: it.file ? [`${it.file}${it.line ? `:${it.line}` : ''}`] : [], count: 1 })) : []);
+  if (!groups.length) return '';
+  return `<div class="forge-issues">
+      ${groups.map((it) => {
+        const m = FORGE_LEVEL[it.level] || FORGE_LEVEL.notice;
+        const files = Array.isArray(it.files) ? it.files : [];
+        const count = Number(it.count) > 0 ? Number(it.count) : 1;
+        // 无位置可摊，但确实命中多次：只能逐条列 title（每条的 title 各自指名了对象）。
+        const titles = Array.isArray(it.titles) ? it.titles : [];
+        const listOnly = !files.length && count > 1;
+        // 多命中时把位置摊开（这是聚合卡的全部价值：一眼看到"这个问题在哪些文件里"）；
+        // 单命中时沿用原来的紧凑写法，不为一个位置多占一行。
+        const where = listOnly
+          ? `<ul class="fi-files">${(titles.length > 1 ? titles : [it.title]).map((t) => `<li>${esc(t)}</li>`).join('')}</ul>`
+          : files.length > 1
+            ? `<ul class="fi-files">${files.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>`
+            : (files[0] ? `<div class="fi-where">${esc(files[0])}</div>` : '');
+        return `<div class="forge-issue ${m.cls}">
+          <div class="fi-head"><span class="fi-badge">${m.icon} ${m.label}</span>${esc(it.title)}${count > 1 ? `<span class="fi-count">共 ${count} 处</span>` : ''}</div>
+          ${where}
+          ${it.why ? `<div class="fi-why">${esc(it.why)}</div>` : ''}
+          ${count === 1 && it.snippet ? `<pre class="fi-code">${esc(it.snippet)}</pre>` : ''}
+        </div>`;
+      }).join('')}
+    </div>`;
+}
 
 function renderForgeModule() {
   const f = doctorState.forge;
@@ -2512,8 +2601,10 @@ function renderForgeModule() {
            去「下载 → 已安装 → ${esc(kindLabel)}」找到 <code>${esc(it.id || it.dir || '')}</code> 点开启，它才会生效。
          </div>`
       : '';
+    // id 与目录名正常路径上相等（目录名就是清单 id）。不等只可能出现在历史
+    // 数据里（旧版本撞名加过后缀），提示一句以免用户按 id 找不到目录。
     const idLine = it.id && it.id !== it.dir
-      ? `<div class="fd-sub">清单 id 是 <code>${esc(it.id)}</code>（目录名因重名而改为 <code>${esc(it.dir)}</code>）。</div>`
+      ? `<div class="fd-sub">清单 id 是 <code>${esc(it.id)}</code>，但这个扩展的目录名是 <code>${esc(it.dir)}</code>。</div>`
       : '';
     return `
       <div class="forge-done">
@@ -2546,7 +2637,8 @@ function renderForgeModule() {
 
     ${f.mode === 'import' ? renderForgeImportArea() : renderForgeCreateArea()}
 
-    ${f.error ? `<div class="forge-error">⚠️ ${esc(f.error)}</div>` : ''}
+    ${f.conflict ? '' : (f.error ? `<div class="forge-error">⚠️ ${esc(f.error)}</div>` : '')}
+    ${renderForgeConflict()}
     ${f.drafting ? `<div class="forge-wait">${f.revising ? '🔧 正在修改草稿…模型会在原草稿上修，改完自动重跑闸门。' : '⚒️ 正在起草…模型会先把文件写进暂存区，完成后自动过闸门。'}</div>` : ''}
     ${f.importing ? `<div class="forge-wait">📦 正在解包…内容会落到暂存区（不会被执行）。</div>` : ''}
     ${f.adapting ? `<div class="forge-wait">🔧 正在适配…模型会读草稿和诊断，改完自动重跑闸门。</div>` : ''}
@@ -2603,25 +2695,84 @@ function renderForgeImportArea() {
     </div>`;
 }
 
+/**
+ * 解包跳过项的一句话描述。
+ *
+ * 后端给的是结构化的 { path, size, reason }（原因不再拼在字符串里），
+ * 这里翻译成人话。未知 reason 原样显示 —— 新后端加原因时界面不会变成空白。
+ */
+const FORGE_SKIP_REASON = {
+  'single-file-too-large': '单文件超过上限',
+  'total-too-large': '累计体积超过上限',
+  'outside-module-root': '不在扩展根目录下',
+  'directory-entry': '目录条目',
+  'packaging-junk': '系统打包垃圾',
+  'path-rejected': '路径不允许',
+  'write-failed': '写盘失败'
+};
+
+/** 体积类原因（与 forge-tools.js 的 SKIP_REASONS.FILE_TOO_LARGE / TOTAL_TOO_LARGE 同步：这些意味着包不完整）。 */
+const FORGE_SKIP_SIZE_REASONS = new Set(['single-file-too-large', 'total-too-large']);
+
+/** 体积单位：跳过项要能一眼看出"1.5MB"这种量级，而不是一串字节数。 */
+function forgeBytes(n) {
+  const b = Number(n) || 0;
+  if (b >= 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)}MB`;
+  if (b >= 1024) return `${Math.round(b / 1024)}KB`;
+  return `${b}B`;
+}
+
+/** 一条跳过项的展示文本（兼容旧后端：那时 skipped 是纯字符串）。 */
+function forgeSkipText(s) {
+  if (typeof s === 'string') return s;
+  const reason = FORGE_SKIP_REASON[s?.reason] || s?.reason || '';
+  const size = s?.size ? `，${forgeBytes(s.size)}` : '';
+  const detail = s?.detail ? `：${s.detail}` : '';
+  return `${s?.path || '(未知条目)'}（${reason}${size}${detail}）`;
+}
+
+/**
+ * 体积超限提示。
+ *
+ * 实测事故：1.5MB 的 lib/dict.json 被静默丢弃，响应仍是 ok:true，界面只在一个
+ * 默认折叠的 details 里留了一行 —— 用户装完才发现功能缺失，没有任何线索。
+ * 体积超限不是打包垃圾：它意味着**这个包少了解包出来的内容**，很可能跑不起来，
+ * 所以必须醒目地放在文件清单上方，而不是折叠在角落里。
+ */
+function renderForgeSkipped(im) {
+  const skipped = Array.isArray(im?.skipped) ? im.skipped : [];
+  if (!skipped.length) return '';
+  const sizeHits = skipped.filter((s) => typeof s === 'object' && FORGE_SKIP_SIZE_REASONS.has(s.reason));
+  const otherHits = skipped.filter((s) => !sizeHits.includes(s));
+
+  const sizeWarn = sizeHits.length ? `
+    <div class="forge-skipped-warn" role="alert">
+      <div class="fsw-title">⚠️ 有 ${sizeHits.length} 个文件因体积超限未解出</div>
+      <div class="fsw-list">${sizeHits.map((s) => `<div class="fsk-row">${esc(forgeSkipText(s))}</div>`).join('')}</div>
+      <div class="fsw-note">这些文件不在草稿里，<b>这个技能可能无法正常工作</b> —— 需要它们的话请让作者拆分大文件后重新打包。</div>
+    </div>` : '';
+
+  const otherBlock = otherHits.length ? `
+    <details class="forge-skipped">
+      <summary>ℹ️ 另有 ${otherHits.length} 个条目被跳过（未落盘）</summary>
+      <div class="fs-body">${otherHits.map((s) => `<div class="fsk-row">${esc(forgeSkipText(s))}</div>`).join('')}</div>
+    </details>` : '';
+
+  return `${sizeWarn}${otherBlock}`;
+}
+
 /** 导入结果：文件清单 + 跳过的条目 + 闸门结论（在 renderForgeResult 里复用闸门展示）。 */
 function renderForgeImported() {
   const f = doctorState.forge;
   if (!f.imported) return '';
   const im = f.imported;
-  const skipped = (im.skipped || []);
   return `
     <div class="forge-imported">
       <div class="fi-title">📦 已解包：<b>${esc(im.zipName || '(未命名)')}</b>
         <span class="fi-count">${(im.files || []).length} 个文件</span>
       </div>
+      ${renderForgeSkipped(im)}
       <div class="fi-note">内容在暂存区，<b>尚未安装</b>。下面是这个包的原样清单与闸门结论。</div>
-      ${skipped.length ? `
-        <details class="forge-skipped">
-          <summary>⚠️ ${skipped.length} 个条目被跳过（未落盘）</summary>
-          <div class="fs-body">
-            ${skipped.map((s) => `<div class="fsk-row">${esc(s)}</div>`).join('')}
-          </div>
-        </details>` : ''}
       ${f.gate && f.gate.ok && !f.gate.confirm ? '' : `
         <div class="fi-adapt">
           <input type="text" id="forge-adapt-note" class="fi-adapt-input"
@@ -2717,17 +2868,13 @@ function renderForgeResult() {
       <div class="fs-title">📋 起草计划（模型动笔前定的方向）</div>
       <div class="fs-body">${doctorMiniMd(f.plan)}</div>
     </div>` : '';
-  const issues = (g.issues || []).length ? `
-    <div class="forge-issues">
-      ${g.issues.map((it) => {
-        const m = FORGE_LEVEL[it.level] || FORGE_LEVEL.notice;
-        return `<div class="forge-issue ${m.cls}">
-          <div class="fi-head"><span class="fi-badge">${m.icon} ${m.label}</span>${esc(it.title)}</div>
-          ${it.why ? `<div class="fi-why">${esc(it.why)}</div>` : ''}
-          ${it.snippet ? `<pre class="fi-code">${esc(it.snippet)}</pre>` : ''}
-        </div>`;
-      }).join('')}
-    </div>` : '';
+  const issues = renderForgeIssueList(g);
+
+  // 解包残缺提示（体积超限）：记录来自草稿列表（解包响应是一次性的），
+  // 打开老草稿时同样要出现 —— 少了文件的包装上多半跑不起来。
+  const oversizeHtml = (f.oversizeLost || []).length
+    ? renderForgeSkipped({ skipped: f.oversizeLost })
+    : '';
 
   // 清单摘要
   const man = g.manifest || {};
@@ -2754,17 +2901,7 @@ function renderForgeResult() {
     </details>` : '';
 
   // 起草轨迹
-  const traceHtml = f.trace.length ? `
-    <details class="forge-trace">
-      <summary>⚒️ 起草过程：模型写了 ${f.trace.length} 次</summary>
-      <div class="forge-trace-body">
-        ${f.trace.map((t) => `<div class="ft-item">
-          <span class="ft-tool">${esc(String(t.tool).replace(/^forge_/, ''))}</span>
-          <span class="ft-arg">${esc(t.args?.path || '')}</span>
-          ${t.isError ? '<span class="ft-err">被拒</span>' : ''}
-        </div>`).join('')}
-      </div>
-    </details>` : '';
+  const traceHtml = renderForgeTrace(f.trace, `⚒️ 起草过程：模型写了 ${f.trace.length} 次`);
 
   // 安装区
   const canInstall = g.ok === true;
@@ -2790,11 +2927,32 @@ function renderForgeResult() {
       绑定当前这份代码；这期间代码若有任何改动，票据自动失效，需要你重新核对。
     </div>` : ''}`;
 
-  return `${verdict}${planHtml}${issues}${meta}${codeHtml}${traceHtml}${f.summary ? `
+  return `${verdict}${oversizeHtml}${planHtml}${issues}${meta}${codeHtml}${traceHtml}${f.summary ? `
     <div class="forge-summary">
       <div class="fs-title">模型说明</div>
       <div class="fs-body">${doctorMiniMd(f.summary)}</div>
     </div>` : ''}${installHtml}`;
+}
+
+/** 同 id 冲突：说清现状 + 两条出路（升级 / 卸载）。 */
+function renderForgeConflict() {
+  const c = doctorState.forge.conflict;
+  if (!c?.id) return '';
+  const loc = c.relDir || c.dir || c.id;
+  // 复用 .forge-error 外壳与已有的 .fd-sub / .fd-actions 排版类：
+  // 本页样式集中在 ui/style.css，不为一个提示框另立新类。
+  return `
+    <div class="forge-error">
+      <div><b>已经装过一个同名扩展：</b><code>${esc(c.id)}</code>${c.version ? ` v${esc(c.version)}` : ''}</div>
+      <div class="fd-sub">
+        它在 <code>${esc(loc)}</code>，这次<b>没有落盘</b>（不会产生第二份副本）。
+        <br />想换成新版：用「升级扩展」，它会先备份原版再覆盖，出问题能回滚。
+        <br />想重装成干净的一份：先去「下载 → 已安装」卸载它，再回来装。
+      </div>
+      <div class="fd-actions">
+        <button class="btn btn-small" id="forge-conflict-upgrade-btn">去升级扩展</button>
+      </div>
+    </div>`;
 }
 
 /** 暂存区里已有的草稿（往往是上次没装完的）。 */
@@ -2816,6 +2974,7 @@ function renderForgeDraftsList() {
             <span class="fd-state ${d.ok ? 'is-ok' : 'is-bad'}">
               ${d.ok ? (d.confirm ? `待确认 ${d.confirm} 项` : '已过闸 · 待安装') : `阻断 ${d.blocking}`}
             </span>
+            ${(d.skippedOversize || []).length ? `<span class="fd-state is-bad" title="${esc((d.skippedOversize || []).map((s) => s.path).join('、'))}">缺 ${d.skippedOversize.length} 个文件</span>` : ''}
             <button class="btn btn-small" data-forge-open="${esc(d.draftId)}">查看</button>
             <button class="btn btn-small" data-forge-drop-draft="${esc(d.draftId)}">删除</button>
           </div>`).join('')}
@@ -2903,11 +3062,15 @@ function renderUpgradeDraft() {
         ${d.version ? `<span class="fd-kind">当前 v${esc(d.version)}</span>` : ''}
       </div>
       <div class="fi-note">已复制进暂存区（<code>${esc(d.draftId)}</code>）。${d.source === 'zip' ? '这是导入的升级包，改动对比见下。' : '下面的修改不会影响正在运行的扩展 —— 确认后才会覆盖。'}</div>
-      ${(d.skipped || []).length ? `
+      ${d.source === 'zip'
+        // 升级包走的是同一套解包（skipped 带原因），体积超限同样要醒目提示：
+        // 少了文件的升级包覆盖上去，等于把已装扩展改坏。
+        ? renderForgeSkipped(d)
+        : ((d.skipped || []).length ? `
         <details class="forge-skipped">
           <summary>⚠️ ${d.skipped.length} 个白名单外文件未复制（安装时也不允许）</summary>
-          <div class="fs-body">${d.skipped.map((s) => `<div class="fsk-row">${esc(s)}</div>`).join('')}</div>
-        </details>` : ''}
+          <div class="fs-body">${d.skipped.map((s) => `<div class="fsk-row">${esc(typeof s === 'string' ? s : (s?.path || ''))}</div>`).join('')}</div>
+        </details>` : '')}
 
       ${d.source === 'chat' && !u.result ? `
         <div class="forge-input" style="margin-top:10px">
@@ -2955,17 +3118,7 @@ function renderUpgradeResult() {
     </div>`;
   }
 
-  const issues = (g.issues || []).length ? `
-    <div class="forge-issues">
-      ${(g.issues || []).map((it) => {
-        const m = FORGE_LEVEL[it.level] || FORGE_LEVEL.notice;
-        return `<div class="forge-issue ${m.cls}">
-          <div class="fi-head"><span class="fi-badge">${m.icon} ${m.label}</span>${esc(it.title)}</div>
-          ${it.why ? `<div class="fi-why">${esc(it.why)}</div>` : ''}
-          ${it.snippet ? `<pre class="fi-code">${esc(it.snippet)}</pre>` : ''}
-        </div>`;
-      }).join('')}
-    </div>` : '';
+  const issues = renderForgeIssueList(g);
 
   // "更新了什么"，升级场景下最重要的透明度保障
   const diff = u.result.diff;
@@ -2995,17 +3148,7 @@ function renderUpgradeResult() {
         <div class="fs-title">模型说明</div>
         <div class="fs-body">${doctorMiniMd(u.result.summary)}</div>
       </div>` : ''}
-    ${(u.result.trace || []).length ? `
-      <details class="forge-trace">
-        <summary>⬆️ 升级过程：模型改了 ${u.result.trace.length} 次</summary>
-        <div class="forge-trace-body">
-          ${u.result.trace.map((t) => `<div class="ft-item">
-            <span class="ft-tool">${esc(String(t.tool).replace(/^forge_/, ''))}</span>
-            <span class="ft-arg">${esc(t.args?.path || '')}</span>
-            ${t.isError ? '<span class="ft-err">被拒</span>' : ''}
-          </div>`).join('')}
-        </div>
-      </details>` : ''}
+    ${renderForgeTrace(u.result.trace, `⬆️ 升级过程：模型改了 ${(u.result.trace || []).length} 次`)}
     <div class="forge-install">
       ${needCheck && canUpgrade ? `
         <label class="forge-confirm-check">
@@ -3195,7 +3338,7 @@ async function runUpgradeZip(file) {
       method: 'POST', body: JSON.stringify({ draftId: imp.draftId }), timeoutMs: 30000
     });
     u.importing = false;
-    u.draft = { draftId: imp.draftId, kind: target.kind, dir: target.dir, id: target.id, name: target.name, version: target.version, source: 'zip' };
+    u.draft = { draftId: imp.draftId, kind: target.kind, dir: target.dir, id: target.id, name: target.name, version: target.version, source: 'zip', skipped: imp.skipped || [] };
     u.result = { summary: `导入包：${imp.zipName || '(未命名)'}，${(imp.files || []).length} 个文件。下面的对比是它相对已装版本的差异。`, trace: [], gate: gd.gate || null, diff: cmp?.ok ? cmp : null };
     u.installConfirm = false;
   } catch (e) {
@@ -3311,7 +3454,7 @@ function bindForgeEvents(box) {
   $('#forge-again-btn')?.addEventListener('click', () => {
     const f = doctorState.forge;
     Object.assign(f, {
-      installed: null, gate: null, gateBefore: null, files: [], trace: [],
+      installed: null, conflict: null, gate: null, gateBefore: null, files: [], trace: [],
       summary: '', draftId: '', error: '', allowConfirm: false,
       imported: null, diff: null
     });
@@ -3370,6 +3513,7 @@ function bindForgeEvents(box) {
 
   $('#forge-install-btn')?.addEventListener('click', () => runForgeInstall());
   $('#forge-discard-btn')?.addEventListener('click', () => discardForgeDraft(doctorState.forge.draftId));
+  $('#forge-conflict-upgrade-btn')?.addEventListener('click', () => switchDoctorSub('upgrade'));
 
   $$('[data-forge-drop-draft]', box).forEach((el) => {
     el.addEventListener('click', () => discardForgeDraft(el.getAttribute('data-forge-drop-draft')));
@@ -3435,7 +3579,7 @@ async function runForgeDraft() {
   if (!revise) f.requirement = req;   // 修改轮不动原始需求，输入框里装的是补充说明
   f.drafting = true; f.revising = revise; f.error = ''; f.gate = null; f.files = []; f.trace = [];
   f.summary = ''; f.installed = null; f.allowConfirm = false; f.autoFix = 0; f.plan = '';
-  f.imported = null; f.diff = null;
+  f.conflict = null; f.imported = null; f.diff = null;
   f.gateBefore = revise ? prevGate : null;   // 修改轮保留"改前"结论，结果区给"改前→改后"对照
   renderDoctorPage();
 
@@ -3515,6 +3659,12 @@ async function runForgeInstall() {
     if (d.ok) {
       f.installed = d;
       await loadForgeStatus();
+    } else if (d.conflict) {
+      // 同 id 已装：这不是"安装失败"，是"这里已经有一个同名扩展"。
+      // 笼统报一句错误会让人反复重试（结果每次都一样），必须说清现状与两条出路。
+      f.conflict = d.existing || {};
+      f.error = d.error || '同名扩展已安装';
+      if (d.gate) f.gate = d.gate;
     } else {
       f.error = d.error || '安装失败';
       if (d.gate) f.gate = d.gate;
@@ -3526,10 +3676,30 @@ async function runForgeInstall() {
   renderDoctorPage();
 }
 
-/** 丢弃草稿。 */
+/**
+ * 丢弃草稿。
+ *
+ * 必须二次确认（对齐 runFixDelete 的 qaConfirm 用法）：丢掉的草稿内容与快照
+ * 一并删除，市场来源的还会连原始包一起删 —— 反悔只能重新下载，而口令未必还在
+ * 手上。市场来源与非市场来源的后果不同，提示语分开写，让人知道自己在删什么。
+ */
 async function discardForgeDraft(draftId) {
   if (!draftId) return;
   const f = doctorState.forge;
+  // 来源以草稿列表里的 source 为准（后端 _meta 里的 origin 字段，由市场下载时写入）。
+  // 列表可能还没加载过（刚点开页面就点删除），那种情况按"未安装草稿"处理：
+  // 提示语更保守，不会让人误以为只是删了个下载缓存。
+  const fromMarket = (f.drafts || []).some((d) => d.draftId === draftId && d.source === 'market');
+  const ok = await qaConfirm({
+    title: fromMarket ? '删除市场来源的草稿' : '丢弃草稿',
+    danger: true,
+    confirmText: fromMarket ? '删除' : '丢弃',
+    cancelText: '取消',
+    message: fromMarket
+      ? '删除市场来源的草稿？原始包会一起删除，只能重新下载。'
+      : '丢弃这个草稿？草稿内容会删除，需要时得重新下载。'
+  });
+  if (!ok) return;
   try {
     await api('/api/forge/discard', {
       method: 'POST', body: JSON.stringify({ draftId }), timeoutMs: 15000
@@ -3538,7 +3708,7 @@ async function discardForgeDraft(draftId) {
   if (f.draftId === draftId) {
     Object.assign(f, {
       draftId: '', gate: null, gateBefore: null, files: [], trace: [],
-      summary: '', allowConfirm: false, imported: null, diff: null
+      summary: '', allowConfirm: false, imported: null, diff: null, conflict: null
     });
   }
   await loadForgeStatus();
@@ -3556,7 +3726,7 @@ async function runForgeImport(file) {
   f.importing = true; f.error = '';
   f.imported = null; f.diff = null; f.gateBefore = null;
   f.gate = null; f.files = []; f.trace = []; f.summary = '';
-  f.installed = null; f.allowConfirm = false;
+  f.installed = null; f.conflict = null; f.allowConfirm = false;
   renderDoctorPage();
 
   try {
@@ -3671,8 +3841,11 @@ async function runForgeAdapt(noteOverride = null) {
 /** 打开一个已有草稿：读代码 + 重跑闸门。 */
 async function openForgeDraft(draftId) {
   const f = doctorState.forge;
-  f.draftId = draftId; f.error = ''; f.installed = null; f.allowConfirm = false;
-  f.imported = null; f.diff = null; f.gateBefore = null;
+  f.draftId = draftId; f.error = ''; f.installed = null; f.conflict = null; f.allowConfirm = false;
+  f.imported = null; f.diff = null; f.gateBefore = null; f.oversizeLost = [];
+  // 草稿列表可能还没加载过（刚切到这一页就点开老草稿）：先取一次，
+  // 否则"这份包当初少解出哪些文件"的记录会取不到。
+  if (!Array.isArray(f.drafts) || !f.drafts.length) await loadForgeStatus();
   renderDoctorPage();
   try {
     const [rd, gd] = await Promise.all([
@@ -3688,6 +3861,10 @@ async function openForgeDraft(draftId) {
     f.gate = gd.gate || null;
     f.summary = '';
     f.trace = [];
+    // 解包残缺记录只在导入那一刻的响应里，重新打开草稿时从草稿列表（/api/forge）
+    // 里取回：少了文件的包事后也得能提醒，否则隔天回来只看到"已过闸 · 待安装"。
+    const row = (f.drafts || []).find((d) => d.draftId === draftId);
+    f.oversizeLost = Array.isArray(row?.skippedOversize) ? row.skippedOversize : [];
   } catch (e) {
     if (f.draftId !== draftId) return;
     f.error = e?.message || '打开草稿失败';

@@ -39,6 +39,15 @@ const SESSION_KEEP = 400;     // 会话页：内存里最多保留多少条（�
 const CHAT_MSG_PAGE = 500;    // 存档页：首次加载条数
 const CHAT_MSG_MORE = 200;    // 存档页：每次滚动追加
 
+/* 日志级别：全前端只此一份，按下限（低 → 高）排列。
+   消费方：
+     · 03-connection.js —— 「写进文件的详细程度」下拉（决定落盘级别）；
+     · 20-logs.js       —— 日志页的级别多选（决定显示哪些级别）。
+   两份各写一份时必然漂移：连接页能选 debug、日志页却没有 debug 勾选框，
+   `logsMemoryQuery` 永远只传 info,warn,error。常量放在本文件（最先加载）是因为
+   03 早于 20 执行，顶层 const 必须在那之前已初始化。 */
+const LOG_LEVELS = ['debug', 'info', 'warn', 'error'];
+
 // ── 峰谷时段预设 ──────────────────────────────────────────────────────────
 // 内置作息模板（一键填充时段+档位）+ 一份用户自定义（custom）。
 // sliderPos 口径：0~100（10=仅艾特，100=全响应），与峰谷设置页输入框一致。
@@ -1269,6 +1278,9 @@ function switchTab(name) {
   // 已安装的人设页（左栏「下载 → 已安装 → 人设」）
   if (name === 'personas') loadPersonasPage();
   if (name === 'harness') loadHarnessPage();
+  // 日志页（工具 → 日志）：完整日志 / 磁盘历史 / 实时流。
+  // typeof 守卫与壁纸、桌宠同口径——脚本没装时这里不能抛。
+  if (name === 'logs' && typeof loadLogsPage === 'function') loadLogsPage();
   if (name === 'connection') loadConnectionPage();
   if (name === 'settings') {
     // loadSettings 首行 await api('/api/config') 失败即 reject，不 catch 会留下

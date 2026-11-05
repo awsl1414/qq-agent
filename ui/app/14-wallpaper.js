@@ -498,6 +498,8 @@ function wpSetFrameAlpha(v) {
 function wpRenderBackground() {
   const html = document.documentElement;
   // 旧层全清再铺（视频元素重建，避免换壁纸时残留旧画面）
+  // 视频元素随之消失，看门狗必须先停，否则无视频时仍每 3 秒空转（F7 BUG-3）。
+  wpStopVideoWatchdog();
   $$('.wp-bg-el').forEach((el) => el.remove());
   wpSyncVeil();
   const cfg = wpCfgLoad();
@@ -556,6 +558,7 @@ function wpRenderBackground() {
     }, { once: true });
     document.body.appendChild(v);
     wpEnsureVideoPlaying();
+    wpStartVideoWatchdog();
   } else {
     const d = document.createElement('div');
     d.className = 'wp-bg-el';
@@ -574,7 +577,22 @@ function wpRenderBackground() {
 //      静默吞掉就永远停在 paused（实测 play→playing→pause 连发，时间轴冻结）。
 // 策略：可见就确保在播：带重试的 play() + canplay 事件补播 + 3 秒一次的
 // 轻量看门狗（无视频/隐藏/本就暂停条件不满足时立即返回，零成本）。
+//
+// 看门狗**按需启停**：只在页面上存在 #wp-bg-video 时运行（wpRenderBackground
+// 创建 <video> 后启动、重铺/移除壁纸前停止）。常驻 setInterval 在无壁纸时是
+// 纯空转，而且没有任何生命周期管理（F7 BUG-3）。不在回调里加 if 早退来"省"——
+// 那仍然占着定时器，只是提前返回。
 let wpPlayRetry = 0;
+let wpVideoTimer = null;
+function wpStartVideoWatchdog() {
+  if (wpVideoTimer) return;
+  wpVideoTimer = setInterval(wpEnsureVideoPlaying, 3000);
+}
+function wpStopVideoWatchdog() {
+  if (!wpVideoTimer) return;
+  clearInterval(wpVideoTimer);
+  wpVideoTimer = null;
+}
 function wpEnsureVideoPlaying() {
   const v = document.getElementById('wp-bg-video');
   if (!v || document.hidden || v.paused === false || v.ended) return;
@@ -588,7 +606,6 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) v.pause();          // 切走/最小化：省一路解码
   else { wpPlayRetry = 0; wpEnsureVideoPlaying(); }
 });
-setInterval(wpEnsureVideoPlaying, 3000);
 
 // ── 与后端同步（机器人换壁纸 → 控制台实时跟随）─────────────────────────
 // 控制台本地 localStorage 是主状态；每次保存顺路 POST 给后端一份镜像，

@@ -2,6 +2,8 @@
 // 依赖：config.js（常量）、safe-fetch.js、downloader.js（fetchWithProxyFallback, sleep）、filters.js（过滤函数）
 import { safeFetch, safeFetchBinary } from '../../src/safe-fetch.js';
 import { fetchWithProxyFallback, sleep } from './downloader.js';
+// 日志出口（setup 时由 index.js 注入核心 logger）
+import { log, warn } from './log.js';
 import {
   buildSearchWord, isMultiPersonIllust, isMaleCharacterIllust, isHorrorIllust,
   isR18Illust, isR15Illust, isR0Only, hasQualityTag, illustScore, isMultiCharacterIllust
@@ -65,7 +67,7 @@ export async function fetchPixivSearch(cfg, word, page, order) {
   const cached = SEARCH_CACHE.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.data;
 
-  console.log(`[setu] fetchPixivSearch 开始: word=${word} page=${page} order=${order} instances=${instances.length} proxyUrl=${proxyUrl}`);
+  log(`fetchPixivSearch 开始: word=${word} page=${page} order=${order} instances=${instances.length} proxyUrl=${proxyUrl}`);
   const backoffs = [5000, 15000, 30000];
   for (let attempt = 0; attempt < backoffs.length; attempt++) {
     for (const instBase of instances) {
@@ -75,27 +77,27 @@ export async function fetchPixivSearch(cfg, word, page, order) {
         u.searchParams.set('page', String(page));
         if (order && order !== 'default') u.searchParams.set('order', order);
         const url = u.toString();
-        console.log(`[setu] fetchPixivSearch 请求: ${url.slice(0, 100)}`);
+        log(`fetchPixivSearch 请求: ${url.slice(0, 100)}`);
         const bin = await fetchWithProxyFallback(
           (u, p) => safeFetchBinary(u, PIXIV_SEARCH_MAX_BYTES, { timeoutMs, headers: PIXIV_HEADERS, proxy: p }),
           url,
           proxyUrl
         );
-        console.log(`[setu] fetchPixivSearch 响应: ${bin.buffer.length} bytes`);
+        log(`fetchPixivSearch 响应: ${bin.buffer.length} bytes`);
         const data = JSON.parse(bin.buffer.toString('utf8'));
         searchCacheCleanup();
         SEARCH_CACHE.set(cacheKey, { data, expiresAt: Date.now() + SEARCH_CACHE_TTL_MS });
         return data;
       } catch (error) {
         const msg = String(error?.message ?? error);
-        console.warn(`[setu] fetchPixivSearch 失败: ${msg}`);
+        warn(`fetchPixivSearch 失败: ${msg}`);
         // 可轮换/重试的故障 = 限流 429/403/5xx + 网络类失败 + 非法响应（HTML 错误页会让 JSON.parse
         // 抛 "Unexpected token"）。只认 HTTP 状态码的话，主实例网络抖动一次就会放弃所有备用实例与退避。
         if (!/429|403|500|502|503|timeout|timed out|超时|ECONN|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|fetch failed|socket hang up|非 JSON|Unterminated|Unexpected/i.test(msg)) throw error;
       }
     }
     if (attempt < backoffs.length - 1) {
-      console.warn(`[setu] PXVE ${instances.length} 个实例全部失败（限速/网络），${backoffs[attempt]/1000}s 后重试 (${attempt+1}/${backoffs.length})`);
+      warn(`PXVE ${instances.length} 个实例全部失败（限速/网络），${backoffs[attempt]/1000}s 后重试 (${attempt+1}/${backoffs.length})`);
       await sleep(backoffs[attempt]);
     }
   }
@@ -148,14 +150,14 @@ export async function pixivAutocomplete(cfg, query) {
     } catch (error) {
       const msg = String(error?.message ?? error);
       if (/429/.test(msg)) {
-        console.warn(`[setu] 补全接口限速 HTTP 429，${backoffs[attempt]/1000}s 后重试 (${attempt+1}/${backoffs.length})`);
+        warn(`补全接口限速 HTTP 429，${backoffs[attempt]/1000}s 后重试 (${attempt+1}/${backoffs.length})`);
         await sleep(backoffs[attempt]);
         continue;
       }
       return null;
     }
   }
-  console.warn(`[setu] 补全接口限速，${backoffs.length} 次重试后仍为 HTTP 429`);
+  warn(`补全接口限速，${backoffs.length} 次重试后仍为 HTTP 429`);
   return null;
 }
 
@@ -257,13 +259,13 @@ export async function fetchBooruPage(cfg, tags, limit, offset, soloOnly, femaleO
       try {
         d = await fetchPixivSearch(cfg, searchWord, page);
         usedFallback = true;
-        console.log(`[setu] 「${searchWord}」page=${page}：order=${sortOrder} 失败，去掉 order 重试成功`);
+        log(`「${searchWord}」page=${page}：order=${sortOrder} 失败，去掉 order 重试成功`);
       } catch (error2) {
-        console.warn(`[setu] Pixiv 搜索失败「${searchWord}」page=${page}: ${error?.message ?? error}`);
+        warn(`Pixiv 搜索失败「${searchWord}」page=${page}: ${error?.message ?? error}`);
         return [];
       }
     } else {
-      console.warn(`[setu] Pixiv 搜索失败「${searchWord}」page=${page}: ${error?.message ?? error}`);
+      warn(`Pixiv 搜索失败「${searchWord}」page=${page}: ${error?.message ?? error}`);
       return [];
     }
   }
@@ -274,12 +276,12 @@ export async function fetchBooruPage(cfg, tags, limit, offset, soloOnly, femaleO
         if (Array.isArray(retry.illusts) && retry.illusts.length) {
           d = retry;
           usedFallback = true;
-          console.log(`[setu] 「${searchWord}」page=${page}：order=${sortOrder} 返回 0 条，去掉 order 重试成功`);
+          log(`「${searchWord}」page=${page}：order=${sortOrder} 返回 0 条，去掉 order 重试成功`);
         } else {
-          console.log(`[setu] 「${searchWord}」page=${page}：order=${sortOrder} 返回 0 条，去掉 order 重试也 0 条`);
+          log(`「${searchWord}」page=${page}：order=${sortOrder} 返回 0 条，去掉 order 重试也 0 条`);
         }
       } catch {
-        console.log(`[setu] 「${searchWord}」page=${page}：order=${sortOrder} 返回 0 条，去掉 order 重试失败`);
+        log(`「${searchWord}」page=${page}：order=${sortOrder} 返回 0 条，去掉 order 重试失败`);
       }
     }
     if ((!Array.isArray(d.illusts) || !d.illusts.length) && soloOnly) {
@@ -289,12 +291,12 @@ export async function fetchBooruPage(cfg, tags, limit, offset, soloOnly, femaleO
         if (Array.isArray(retry.illusts) && retry.illusts.length) {
           d = retry;
           usedFallback = true;
-          console.log(`[setu] 「${searchWord}」page=${page}：solo 返回 0 条，去掉 solo 重试成功（客户端过滤兜底）`);
+          log(`「${searchWord}」page=${page}：solo 返回 0 条，去掉 solo 重试成功（客户端过滤兜底）`);
         } else {
-          console.log(`[setu] 「${searchWord}」page=${page}：solo 返回 0 条，去掉 solo 重试也 0 条`);
+          log(`「${searchWord}」page=${page}：solo 返回 0 条，去掉 solo 重试也 0 条`);
         }
       } catch {
-        console.log(`[setu] 「${searchWord}」page=${page}：solo 返回 0 条，去掉 solo 重试失败`);
+        log(`「${searchWord}」page=${page}：solo 返回 0 条，去掉 solo 重试失败`);
       }
     }
   }
@@ -314,19 +316,19 @@ export async function fetchBooruPage(cfg, tags, limit, offset, soloOnly, femaleO
       illusts = illusts.filter((il) => !isR15Illust(il));
       const afterR15 = illusts.length;
       if (rawCount > 0) {
-        console.log(`[setu] 搜索「${searchWord}」page=${page}: 原始=${rawCount} → solo后=${afterSolo} → female后=${afterFemale} → horror后=${afterHorror} → r18后=${afterR18} → r15后=${afterR15}`);
+        log(`搜索「${searchWord}」page=${page}: 原始=${rawCount} → solo后=${afterSolo} → female后=${afterFemale} → horror后=${afterHorror} → r18后=${afterR18} → r15后=${afterR15}`);
       }
     } else if (rawCount > 0) {
-      console.log(`[setu] 搜索「${searchWord}」page=${page}: 原始=${rawCount} → solo后=${afterSolo} → female后=${afterFemale} → horror后=${afterHorror} → r18后=${afterR18}`);
+      log(`搜索「${searchWord}」page=${page}: 原始=${rawCount} → solo后=${afterSolo} → female后=${afterFemale} → horror后=${afterHorror} → r18后=${afterR18}`);
     }
   } else if (rawCount > 0) {
-    console.log(`[setu] 搜索「${searchWord}」page=${page}: 原始=${rawCount} → solo后=${afterSolo} → female后=${afterFemale} → horror后=${afterHorror}`);
+    log(`搜索「${searchWord}」page=${page}: 原始=${rawCount} → solo后=${afterSolo} → female后=${afterFemale} → horror后=${afterHorror}`);
   }
   if (cfg.booru?.onlyR0) {
     illusts = illusts.filter((il) => isR0Only(il));
     const afterR0 = illusts.length;
     if (rawCount > 0) {
-      console.log(`[setu] 搜索「${searchWord}」page=${page}: R-0白名单后=${afterR0}`);
+      log(`搜索「${searchWord}」page=${page}: R-0白名单后=${afterR0}`);
     }
   }
   const blockedTags = Array.isArray(cfg.booru?.blockedTags) ? cfg.booru.blockedTags : [];
@@ -339,7 +341,7 @@ export async function fetchBooruPage(cfg, tags, limit, offset, soloOnly, femaleO
     });
     const afterBlocked = illusts.length;
     if (rawCount > 0) {
-      console.log(`[setu] 搜索「${searchWord}」page=${page}: 自定义屏蔽标签后=${afterBlocked}`);
+      log(`搜索「${searchWord}」page=${page}: 自定义屏蔽标签后=${afterBlocked}`);
     }
   }
   const qualityTags = String(cfg.booru?.qualityTags || '').trim();
@@ -347,14 +349,14 @@ export async function fetchBooruPage(cfg, tags, limit, offset, soloOnly, femaleO
     illusts = illusts.filter((il) => hasQualityTag(il, qualityTags));
     const afterQuality = illusts.length;
     if (rawCount > 0) {
-      console.log(`[setu] 搜索「${searchWord}」page=${page}: 质量标签后=${afterQuality}`);
+      log(`搜索「${searchWord}」page=${page}: 质量标签后=${afterQuality}`);
     }
   }
   if (singleCharacterOnly) {
     illusts = illusts.filter((il) => !isMultiCharacterIllust(il));
     const afterSingleChar = illusts.length;
     if (rawCount > 0) {
-      console.log(`[setu] 搜索「${searchWord}」page=${page}: 单角色过滤后=${afterSingleChar}`);
+      log(`搜索「${searchWord}」page=${page}: 单角色过滤后=${afterSingleChar}`);
     }
   }
   if (cfg.booru?.preferQuality !== false) {
@@ -408,7 +410,7 @@ export async function fetchBooruCandidates(cfg, source, tags, want, soloOnly, fe
     const fresh0 = cached0.urls.filter((u) => !source.isRecent(u));
     if (fresh0.length >= need) return fresh0;
     if (fresh0.length > 0) {
-      console.log(`[setu] 「${tags}」原始缓存仅 ${fresh0.length} 条新鲜 URL（需 ${need}），补充搜索...`);
+      log(`「${tags}」原始缓存仅 ${fresh0.length} 条新鲜 URL（需 ${need}），补充搜索...`);
     }
   }
 
@@ -447,7 +449,7 @@ export async function fetchBooruCandidates(cfg, source, tags, want, soloOnly, fe
     if (cached && Date.now() - cached.ts < BOORU_SEARCH_CACHE_TTL) {
       const fresh = cached.urls.filter((u) => !source.isRecent(u));
       if (fresh.length > 0) {
-        console.log(`[setu] 「${tags}」去重耗尽（已有${collected.length}条），附加标签「${word}」缓存命中 ${fresh.length} 条新鲜 URL`);
+        log(`「${tags}」去重耗尽（已有${collected.length}条），附加标签「${word}」缓存命中 ${fresh.length} 条新鲜 URL`);
         // 缓存分支也要与已收集去重：不同搜索词的图高度重叠，重复 URL 会被下载两次，
         // 极端情况同一张图连发（searchWithWord 分支内部有去重，这条分支此前漏了）。
         for (const u of fresh) if (!collected.includes(u)) collected.push(u);
@@ -458,7 +460,7 @@ export async function fetchBooruCandidates(cfg, source, tags, want, soloOnly, fe
     if (more.length > 0) {
       booruSearchCacheCleanup();
       searchCache.set(cacheKey, { urls: more, ts: Date.now() });
-      console.log(`[setu] 「${tags}」去重耗尽（已有${collected.length}条），附加标签「${word}」搜到 ${more.length} 条新鲜 URL`);
+      log(`「${tags}」去重耗尽（已有${collected.length}条），附加标签「${word}」搜到 ${more.length} 条新鲜 URL`);
       for (const u of more) if (!collected.includes(u)) collected.push(u);
     }
   }

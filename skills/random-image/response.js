@@ -11,6 +11,9 @@
 // 明确不实现、也确认无真实来源的结构（任务书旧笔记里列的，实测找不到出处）：
 //   { data: [url] }、{ images: [url] } —— 找不到任何真实接口返回它们，
 //   不为凑数保留分支。真遇到新接口时，下面的 warn 会打印顶层键名，据此再加。
+//
+// 日志走 ./log.js 的入口（setup 时由 index.js 注入核心 logger 落盘）。
+import { warn } from './log.js';
 
 /** 只保留非空字符串。 */
 function pickUrlStrings(list) {
@@ -55,7 +58,7 @@ function pickFromDataItems(items) {
  */
 export function extractImageUrls(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
-    console.warn(`[setu] 取图接口响应不是对象（${Array.isArray(data) ? '数组' : typeof data}）`);
+    warn(`取图接口响应不是对象（${Array.isArray(data) ? '数组' : typeof data}）`);
     return [];
   }
   // 命中已知字段就按该字段的语义返回，哪怕结果为空：lolicon 对未知 tag 会返回
@@ -64,6 +67,6 @@ export function extractImageUrls(data) {
   if (Array.isArray(data.pics)) return pickUrlStrings(data.pics);      // anosu / jitsu
   if (Array.isArray(data.data)) return pickFromDataItems(data.data);   // lolicon v1 / v2
   const keys = Object.keys(data).join(', ') || '(无)';
-  console.warn(`[setu] 取图接口响应里没有可识别的图片字段，顶层键：${keys}`);
+  warn(`取图接口响应里没有可识别的图片字段，顶层键：${keys}`);
   return [];
 }

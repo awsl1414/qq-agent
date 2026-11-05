@@ -123,7 +123,7 @@ test('两个出口一致：GET /api/sessions/:id 与 SSE session-update 的 sent
   t.mock.method(globalThis, 'clearInterval', () => {});
 
   const { createApp } = await import('../src/app.js');
-  const app = createApp({ log() {} });
+  const app = createApp();
   try {
     app.sessions.current.set(sessionId, session);
 

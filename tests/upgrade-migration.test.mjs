@@ -61,7 +61,8 @@ function runOnly(ids, opts) {
   return runUpgrades({ ...opts, upgrades: UPGRADES.filter((u) => ids.includes(u.id)) });
 }
 
-const silent = () => {};
+// runUpgrades 现在接收分级日志对象（见 src/logger.js 的 subLogger）：级别由调用点给出。
+const silent = { debug() {}, info() {}, warn() {}, error() {} };
 const ffmpegExe = exeName('ffmpeg');
 const ffprobeExe = exeName('ffprobe');
 
@@ -410,7 +411,7 @@ test('单文件形态没有 ffprobe：如实记录日志，不假装搬了', () 
   const logs = [];
   const r = runOnly(['retire-bundled-ffmpeg'], {
     appRoot, dataDir, version: '9.9.9.9', now: 17, saveConfig: () => {},
-    log: (m) => logs.push(m)
+    log: { info: (m) => logs.push(m), warn: (m) => logs.push(m) }
   });
   assert.match(r.ran[0].note, /没有 ffprobe/);
   assert.equal(fs.existsSync(path.join(managedDir(dataDir), ffprobeExe)), false);

@@ -138,6 +138,11 @@ function appVersion() {
   } catch { return ''; }
 }
 
+/**
+ * 上报一次用量快照。
+ * @param {{warn:Function}} log 分级日志对象（见 logger.js 的 subLogger）；
+ *   这里只会因失败而写日志，所以只用到 warn。
+ */
 export async function report(log) {
   // 关闭状态下不读任何文件、不发任何请求（loadTotals 在老数据上可能同步重扫会话）
   const cfg = telemetryConfig();
@@ -166,16 +171,16 @@ export async function report(log) {
       }),
       signal: AbortSignal.timeout(8000)
     });
-    if (!res.ok) log(`[遥测] 上报返回 HTTP ${res.status}（不影响使用）`);
+    if (!res.ok) log.warn(`[遥测] 上报返回 HTTP ${res.status}（不影响使用）`);
   } catch (e) {
-    log(`[遥测] 上报失败（不影响使用）: ${e?.message ?? e}`);
+    log.warn(`[遥测] 上报失败（不影响使用）: ${e?.message ?? e}`);
   }
 }
 
 let firstTimer = null;
 let loopTimer = null;
 
-export function startTelemetryLoop(log = console.log) {
+export function startTelemetryLoop(log = console) {
   // 未启用就不装定时器。不是"装了定时器再早退"：那样 report() 仍会被周期性唤醒，
   // 每次都要读配置判一遍。这里在入口处一次性决定。默认关闭是常态，不写日志免得刷屏。
   if (!telemetryEnabled()) return;

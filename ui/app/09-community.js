@@ -1080,7 +1080,8 @@ function openInstallCodeModal() {
           staged++;
           if (!firstStaged) firstStaged = res.draftId || '';
           const g = res.gate || {};
-          notes.push(`${res.name || r.entry?.name || r.code} 已下载到锻造台（${g.ok ? '闸门通过' : `闸门阻断 ${g.blocking || 0} 项`}），待你确认`);
+          notes.push(`${res.name || r.entry?.name || r.code} 已${res.deduped ? '在锻造台（内容相同的草稿，未重复下载）' : '下载到锻造台'}`
+            + `（${g.ok ? '闸门通过' : `闸门阻断 ${g.blocking || 0} 项`}），待你确认`);
           continue;
         }
         installed++;

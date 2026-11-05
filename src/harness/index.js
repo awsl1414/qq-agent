@@ -18,6 +18,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSkillApi } from '../plugin-loader.js';
 import { SKILL_API_VERSION } from '../skills/manifest.js';
+// 内置模块 id 名单的唯一真源（安装 / 导入 / 装载三条链路共用，见该文件头注释）。
+import { CORE_MODULES, isCoreModuleId } from '../core-modules.js';
 // 数据目录唯一真源。注入给模块的 dataRoot 不能写成 `QQ_AGENT_DATA_DIR || '.'`：
 // 该 env 只有 electron/main.js 会设，headless 下会变成进程 cwd。
 import { DATA_DIR } from '../config.js';
@@ -46,6 +48,16 @@ const MODULES = [
   { key: 'dev', id: 'dev-orders', mod: dev, permissions: [], toolIds: [] },
   { key: 'wallpaper', id: 'wallpaper', mod: wallpaper, dir: 'wallpaper', permissions: [], toolIds: [] }
 ];
+
+// 这张表必须与 src/core-modules.js 一致：那份名单是安装 / 导入 / 装载三条链路
+// 判定"这个 id 属于内置模块"的唯一依据，漏一个就会出现"内置模块的 id 挡不住
+// 第三方占用"。不一致属编程错误，启动即炸（测试 tests/core-module-id-protection.test.mjs 也守着）。
+for (const m of MODULES) {
+  if (!isCoreModuleId(m.id)) throw new Error(`src/core-modules.js 缺少内置模块 ${m.id}（harness/index.js 的 MODULES 与它必须一致）`);
+  const relDir = CORE_MODULES[m.id];
+  const expected = `src/${m.dir || `harness/${m.key}`}`;
+  if (relDir !== expected) throw new Error(`src/core-modules.js 里 ${m.id} 的目录是 ${relDir}，harness/index.js 注册的是 ${expected}`);
+}
 
 /** 读模块自带的 plugin.json 作为元数据（名称/版本/能力/默认设置）。读不到不致命。 */
 function readMeta(module) {
@@ -88,10 +100,13 @@ function buildManifest(module, meta) {
  * 模块里的定时器、store 加载、沙箱初始化都不是可重入的，跑两遍会双份副作用。
  * 后续调用只重新登记 skill 对象（若注册表被清空能恢复），不重跑 setup。
  *
+ * @param {object} args
+ * @param {object} args.log 分级日志对象 { info, error }（见 logger.js 的 subLogger）。
+ *   单个模块注册失败是 error：内置模块装不上意味着对应功能整块不可用。
  * @returns {{ok:boolean, modules:Array<{id:string,ok:boolean,error?:string}>}}
  */
 let bootstrapped = false;
-export function registerHarness({ skillManager, log = console.log } = {}) {
+export function registerHarness({ skillManager, log = console } = {}) {
   if (!skillManager) throw new Error('registerHarness 需要 skillManager');
   const results = [];
 
@@ -121,7 +136,7 @@ export function registerHarness({ skillManager, log = console.log } = {}) {
         manifest,
         kind: 'core',
         source: 'core',
-        relDir: `src/${module.dir || `harness/${module.key}`}`,
+        relDir: CORE_MODULES[module.id],
         // 工具归属：重扫后新 skill 对象也要带上，否则孤儿清扫会删掉它们
         toolIds: module.toolIds,
         providers: mod.providers || {},
@@ -140,16 +155,16 @@ export function registerHarness({ skillManager, log = console.log } = {}) {
       // setup 则只在首次执行（模块内的 store 加载 / 沙箱初始化不可重入）。
       if (typeof mod.activate === 'function') mod.activate({ reason: bootstrapped ? 'core-rescan' : 'core-boot' });
       results.push({ id: module.id, ok: true });
-      if (!bootstrapped) log(`[harness] ✅ ${manifest.name}（${module.id} ${manifest.version}，${manifest.capabilities.length} 项能力）`);
+      if (!bootstrapped) log.info(`[harness] ✅ ${manifest.name}（${module.id} ${manifest.version}，${manifest.capabilities.length} 项能力）`);
     } catch (error) {
       const msg = String(error?.message ?? error);
       results.push({ id: module.id, ok: false, error: msg });
-      log(`[harness] ❌ ${module.id}：${msg}`);
+      log.error(`[harness] ❌ ${module.id}：${msg}`);
     }
   }
 
   const ok = results.every((r) => r.ok);
-  if (!bootstrapped) log(`[harness] 内置工具链注册完成：${results.filter((r) => r.ok).length}/${results.length}`);
+  if (!bootstrapped) log.info(`[harness] 内置工具链注册完成：${results.filter((r) => r.ok).length}/${results.length}`);
   bootstrapped = true;
   return { ok, modules: results };
 }

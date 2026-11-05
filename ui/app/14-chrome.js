@@ -33,7 +33,7 @@
     // 萌新点「工具」绝大多数是去看机器人连上没有、该怎么装协议端，
     // harness（自检 + 对话审查）是进阶排查工具，所以连接在前。
     // 桌宠与另两项同为"机器人跑不跑得起来 / 长什么样"的杂务，放在这里。
-    { key: 'ops',      label: '工具', home: 'connection', subs: ['connection', 'harness', 'desktop-pet'] },
+    { key: 'ops',      label: '工具', home: 'connection', subs: ['connection', 'harness', 'logs', 'desktop-pet'] },
     // 壁纸页（内置壁纸模块 src/wallpaper）是独立一级入口。
     // settings 组的左栏渲染被 syncChrome 关掉了（设置页用自己那份 #settings-sidebar），
     // 所以写在 settings 的 subs 里左栏永远画不出「壁纸」，整页等于没有入口。
@@ -50,6 +50,9 @@
     // 英文 harness 对小白等于没有指引，页内多模块由子页签自己呈现，
     // 入口名只负责"看病查问题"。hover 说明走 navItemHtml 里给 harness 加的 title。
     harness: '自检', connection: '连接', settings: '设置',
+    // 完整日志（按级别 / 模块 / 关键字筛，能翻磁盘历史）独立成一页；
+    // 连接页那个「应用日志」面板只留最近 200 条，是排障动线的第一站。
+    logs: '日志',
     'desktop-pet': '桌宠'
   };
   var SUB_ICON = {
@@ -70,6 +73,9 @@
     // 改成「人形 + 右侧三条列表线」，左边是"这一个人"，右边是"一串"。
     personas: 'M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 19c.8-2.8 3.2-4.4 6-4.4s5.2 1.6 6 4.4M17 7h4M17 11h4M17 15h4',
     harness: 'M12 3v4M12 17v4M3 12h4M17 12h4M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6',
+    // 日志：一页纸 + 三条文本行。与「存档」的三横线区别在左上的折角，
+    // 一眼能认出「这是一份文件」，不会被当成列表。
+    logs: 'M6 3h8l4 4v14H6z M14 3v4h4 M9 12h6M9 15h6M9 18h3',
     // 壁纸（内置壁纸模块 src/wallpaper）：相框 + 里面一座山。
     wallpaper: 'M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z M7.5 10.2a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2z M3 16.5l4.8-4.3a1.6 1.6 0 0 1 2.1 0L15 17M13.2 14.6l2.6-2.3a1.6 1.6 0 0 1 2.1 0L21 15.5',
     // 桌宠（desktop-pet 插件）：与 index.html 顶栏那枚「猫头」同一套路径。
@@ -1206,8 +1212,8 @@
         }
       }
       if (connected) {
-        // 粘性提示：refreshStatus 的重渲染会用 launchMsg 重建副标题（syncIdentity），
-        // 否则「✓ 已连接」一闪就被会话名盖掉
+        // 粘性提示：身份区由 3 秒定时器按 launchMsg 重建副标题，
+        // 先写 dataset 再立刻刷一次，避免「✓ 已连接」一闪就被会话名盖掉
         btn.dataset.launchMsg = '✓ 已连接，机器人运行中 —— 再点一次进入会话';
         setSub(btn.dataset.launchMsg);
         try { if (typeof refreshStatus === 'function') refreshStatus(); } catch (e) { /* ignore */ }
@@ -1815,7 +1821,10 @@
 
   /* ══════════ 身份区同步 ══════════
      真机的连接状态由 01-boot.js 的 refreshStatus() 写进 #onebot-dot / #onebot-label，
-     这里只做「搬运」：包装 refreshStatus，让它跑完后再镜像一次，不新增轮询。 */
+     这里只做「搬运」。
+     ⚠️ 触发契约：**只有下面那个 3 秒定时器**（外加 switchTab / 头像刷新按钮这类
+     显式调用的即时同步）。不要再包 refreshStatus 让它在每轮之后补一次 —— 那会与
+     定时器叠加成 1/3 + 1/15 ≈ 2.5 秒一跳的重复路径（F7 BUG-2），改一处漏一处。 */
   // R80（BUG-14）：写前比较缓存。旧逻辑每次 refreshStatus（本地配置 15s 一轮）
   // 都无条件写 innerHTML / 重设 img.src，值没变也整块重建 DOM；头像更惨：
   // src 重设 = 重新走一次 CDN 加载，表现为头像周期性闪烁/闪白。
@@ -1834,8 +1843,7 @@
     // 后端持续无响应时（01-boot.js 的 statusFailStreak 判定），state.status 是过期数据，
     // 身份卡再写"在线 · 已连接 OneBot"就是撒谎，而用户根本看不出后端已经挂了。
     // 副标题改口径 + 圆点转灰；名字保留（是旧值，但比抹掉更认得出是谁）。
-    // syncIdentity 由 wrapRefreshStatus 的 .then 每次触发（refreshStatus 内部吞错、
-    // promise 恒 resolve），所以 stale 置位后的下一轮轮询就会走到这里。
+    // 3 秒定时器保证 stale 置位后最迟 3 秒就会走到这里。
     var stale = !!(typeof state !== 'undefined' && state.statusStale);
 
     // 昵称与头像都跟随「当前登录 QQ」（照原型 syncIdentity 的语义）：
@@ -1909,16 +1917,6 @@
       }
     }
     if (sub && launchVal !== null) sub.textContent = launchVal;
-  }
-
-  function wrapRefreshStatus() {
-    if (typeof refreshStatus !== 'function') return;
-    var raw = refreshStatus;
-    refreshStatus = function () {
-      var p = raw.apply(this, arguments);
-      try { Promise.resolve(p).then(syncIdentity, syncIdentity); } catch (e) { syncIdentity(); }
-      return p;
-    };
   }
 
   /* ══════════ 主同步（switchTab 之后调用）══════════ */
@@ -2002,10 +2000,10 @@
     };
   }
 
-  wrapRefreshStatus();
-
   // 首屏同步：DOM 就绪即可（脚本是 defer，元素已解析完）。
   syncChrome((typeof state !== 'undefined' && state.tab) || 'sessions');
+  // 身份区的**唯一**周期触发（见上方「身份区同步」注释）。3 秒是有意偏快：
+  // 它靠 lastIdent 签名短路，值没变时只做比较、不写 DOM。
   setInterval(syncIdentity, 3000);
   // 首屏后补一次：此时 status 可能已由 11-init 拉到
   setTimeout(syncIdentity, 1500);
