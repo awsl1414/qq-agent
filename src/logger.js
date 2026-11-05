@@ -511,11 +511,6 @@ class Logger {
     return () => this.listeners.delete(fn);
   }
 
-  /** 内存里最近的日志（UI 首次加载用）。 */
-  recent(limit = 200) {
-    return this.memory.slice(-Math.max(1, Number(limit) || 200));
-  }
-
   #write(level, module, args) {
     /* 重入防护：onLog 监听器里如果再调 logger.*（例如把日志转发回 logger），
        会形成 #write → 监听器 → #write 的无限递归，每条递归都给文本包一层
