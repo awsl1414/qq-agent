@@ -8,11 +8,13 @@ import { runSetuRequest } from './setu.js';
 import { sweepTmp } from './downloader.js';
 import { setLogger } from './log.js';
 import { DEFAULT_SETU_BASE_URL, SETU_NSFW_SORT, SETU_SFW_SORT } from './config.js';
+// 内容分级是全局策略，内置技能直接读核心配置（与 skills/schedule 同一先例）。
+// 全项目只有 src/content-rating.js 定义档位与派生规则，这里不再自己判断。
+import { currentContentRating, ratingRule } from '../../src/content-rating.js';
 
 let getConfig = () => ({
   maxCount: 3,
   maxImageBytes: 4 * 1024 * 1024,
-  safeMode: true,
   source: 'auto',
   // 与 skill.json 的 settings.apiBaseUrl 保持一致（JSON 引不到 JS 常量）
   apiBaseUrl: DEFAULT_SETU_BASE_URL
@@ -36,12 +38,16 @@ function resolveApiBaseUrl(raw) {
 /**
  * 把技能配置归一成运行期 cfg 形状（纯函数，可单测）。
  * api 对象（baseUrl / sort / 超时）只在这里构造一次，其余模块只读不拼。
- * @param {object} raw  getSkillConfig() 的浅合并结果（扁平键表）
+ *
+ * 内容分级来自全局策略（security.contentRating），不是技能私有配置：
+ * 这里只把它折算成运行期需要的两个派生值，判断规则一律走 ratingRule()。
+ *
+ * @param {object} raw    getSkillConfig() 的浅合并结果（扁平键表）
+ * @param {string} rating 全局内容分级档位（默认读当前配置）
  */
-export function normalizeConfig(raw = {}) {
+export function normalizeConfig(raw = {}, rating = currentContentRating()) {
   const maxCount = Math.min(10, Math.max(1, Math.trunc(Number(raw.maxCount) || 3)));
   const maxImageBytes = Math.min(4 * 1024 * 1024, Math.max(1, Math.trunc(Number(raw.maxImageBytes) || 4 * 1024 * 1024)));
-  const safeMode = raw.safeMode !== false;
   const source = ['auto', 'pixiv', 'local'].includes(raw.source) ? raw.source : 'auto';
   // 其余 api.* 键（超时等）仍是 programmatic 覆盖位；baseUrl 只认扁平键（见 resolveApiBaseUrl）
   const rawApi = raw.api || {};
@@ -52,12 +58,18 @@ export function normalizeConfig(raw = {}) {
     sfwSort: rawApi.sfwSort || SETU_SFW_SORT
   };
   const booru = raw.booru || {};
+  // 「色图」请求本身是否放行 = 策略是否放行 R-18（只有 all 档）。逐图分级过滤在
+  // pixiv.js 用同一张表执行，这里只是给「用户点名要色图」这一层做前置判断。
+  const nsfwAllowed = !ratingRule(rating).blockR18;
   return {
     enabled: true,
     api,
+    contentRating: rating,
     booru: { ...booru, enabled: source !== 'local' && booru.enabled !== false },
-    send: { ...(raw.send || {}), count: maxCount, maxImageBytes, nsfwAllowed: !safeMode, sfwAllowed: true },
-    nsfwFilter: { ...(raw.nsfwFilter || {}), enabled: safeMode },
+    send: { ...(raw.send || {}), count: maxCount, maxImageBytes, nsfwAllowed, sfwAllowed: true },
+    // 分会话色图白名单是「哪些会话能收色图」这条独立轴，只在用户显式开启时生效。
+    // 旧版由 safeMode 推导，那个推导从未真正生效（safeMode=true 时 nsfw 请求本就被全局关掉）。
+    nsfwFilter: { ...(raw.nsfwFilter || {}), enabled: raw.nsfwFilter?.enabled === true },
     chatFilter: raw.chatFilter
   };
 }
@@ -131,7 +143,9 @@ export function setup(api) {
           const dataUrl = await toSendable(image);
           if (!dataUrl) { errors.push('图片读取失败'); continue; }
           try {
-            await ctx.sender.sendImage(ctx.chatKey, { dataUrl }, { note: args?.keyword || '' });
+            // rating 是这张图的分级声明（搜索阶段从 Pixiv 元数据得出）：
+            // 交给核心的统一闸门，超过全局内容分级策略会被拒发。
+            await ctx.sender.sendImage(ctx.chatKey, { dataUrl }, { note: args?.keyword || '', rating: image?.rating });
             sent += 1;
             // 预览地址由核心签发（不要在扩展里拼 URL）。image.file 是下载器写进
             // setu-tmp 的绝对路径；base64 模式下没有本地文件，src 为空 → 文字徽标。
@@ -166,6 +180,8 @@ export function setup(api) {
  * 而 toSendable 只读 image.file / image.payload，于是 src 恒为空 →
  * 「图片读取失败」。取图成功却发不出去，用户看到的就是这个报错。
  * 两边共用同一组键，不再各自起名。
+ *
+ * rating 原样透出：调用方发图时要把它作为分级声明交给核心闸门。
  */
 export function buildProviderResult(result) {
   if (result?.outcome !== 'ok') {
@@ -173,7 +189,7 @@ export function buildProviderResult(result) {
   }
   return {
     ok: true,
-    images: (result.images || []).map((image) => ({ file: image.file, payload: image.payload }))
+    images: (result.images || []).map((image) => ({ file: image.file, payload: image.payload, rating: image.rating }))
   };
 }
 

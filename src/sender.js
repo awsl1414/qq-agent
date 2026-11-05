@@ -5,6 +5,7 @@
 // - 发出的每一条记进 ChatStore（self=true，供下一次运行当"自己的发言"）
 import fs from 'node:fs';
 import { getConfig, DEFAULT_CONFIG, isChatAllowed } from './config.js';
+import { currentContentRating, exceedsPolicy, DECLARED_RATINGS } from './content-rating.js';
 import { sleep, randInt, createSendChain, formatClockTime } from './util.js';
 import { mdToPlain, splitForQQ, unwrapStrayBrackets } from './md-to-plain.js';
 import { logger } from './logger.js';
@@ -393,13 +394,41 @@ export class SendQueue {
    *   - 留档：不留档的话，下一次运行不知道自己发过图，可能重复发
    *
    * @param {object} img { url } 或 { dataUrl }（二选一）
-   * @param {object} options { note, replyToMessageId, atUserId }
+   * @param {object} options { note, replyToMessageId, atUserId, rating }
    */
   sendImage(chatKey, img, options = {}) {
     const [kind, id] = String(chatKey).split(':');
     const chain = this.#chain(chatKey);
     const url = String(img?.url ?? '').trim();
     const dataUrl = String(img?.dataUrl ?? '').trim();
+    // ── 内容分级闸门 ────────────────────────────────────────────────────
+    // 这里是**所有图片出站**的唯一收口：内置 send_image 工具与各扩展的
+    // ctx.sender.sendImage 都走它，所以全局策略（security.contentRating）
+    // 在这里执行一次，第三方扩展也不必各自实现一套。
+    //
+    // 调用方按自己掌握的分级声明 options.rating（'safe' | 'r15' | 'r18'）；
+    // 声明值超过当前策略就拒绝发送。派生规则只在 src/content-rating.js 定义。
+    //
+    // ⚠️ 未声明（undefined / null）一律放行，这是刻意的取舍：core 没有图像分类器，
+    // 无法从任意 URL 判定分级。若把「未声明」当成最高级拒绝，会打断 image-generate
+    // （AI 生图没有分级概念）等大量正常路径。闸门只对愿意声明的调用方生效——但这
+    // 已经把策略变成了可执行的事实，而不是每个技能各自为政的私账。
+    const declared = options.rating;
+    if (declared !== undefined && declared !== null) {
+      if (!DECLARED_RATINGS.includes(declared)) {
+        return Promise.reject(new Error(
+          `未知的内容分级声明：${JSON.stringify(declared)}（只接受 ${DECLARED_RATINGS.join(' / ')}）`
+        ));
+      }
+      const policy = currentContentRating();
+      if (exceedsPolicy(declared, policy)) {
+        return Promise.reject(new Error(
+          `图片被内容分级拦截：这张图声明为 ${declared}，当前分级策略为 ${policy}。`
+          + '如需调整，请到 设置 → 聊天与权限 → 内容分级（先点「📨 发送与限速」）。'
+        ));
+      }
+    }
+
     // ── 本地文件路径优先 ────────────────────────────────────────────────
     // 原来只会传 `url` 或 `dataUrl`。而 `dataUrl` 是 base64 内联进 HTTP body 的：
     // 一张 1.9MB 的图 → base64 后 2.5MB 要 POST 给协议端，协议端再解码、再上传腾讯，

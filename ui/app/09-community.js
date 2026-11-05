@@ -10,6 +10,18 @@
 */
 const COMMUNITY_API = 'https://kondius.cn/qq-agent/api';
 
+/**
+ * 内容分级档位（写 security.contentRating）。值必须与 src/content-rating.js 的
+ * CONTENT_RATINGS 一致；这里只负责显示文案，判断规则全部在后端。
+ * 顺序即从严到宽，默认 strict。
+ */
+const CONTENT_RATING_OPTIONS = [
+  ['all', '全部放行'],
+  ['r18', '只拦 R-18'],
+  ['strict', '拦 R-18 + R-15（默认）'],
+  ['r0', '仅 R-0']
+];
+
 /** 统一的提示小模态框（替代 alert，原生对话框与 UI 风格割裂）。 */
 function showNoticeModal(title, text) {
   const overlay = modelModalShell({
@@ -88,6 +100,22 @@ function openSendConfigModal() {
         与「工具与技能」里那两个工具的开关不是一回事：后者只决定模型能不能看见工具，
         真正放行执行的是这里。关掉时两个工具都会直接拒绝执行。
       </div>
+      <div class="field" style="max-width:340px">
+        <label for="sc-contentrating">内容分级</label>
+        <select id="sc-contentrating">
+          ${CONTENT_RATING_OPTIONS.map(([v, label]) => {
+            const cur = c.security?.contentRating ?? 'strict';
+            return `<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>${esc(label)}</option>`;
+          }).join('')}
+        </select>
+      </div>
+      <div class="hint" style="margin:-2px 0 12px">
+        发出去的图按这一档过滤：<b>全部放行</b>不拦；<b>只拦 R-18</b> 放过 R-15；
+        <b>拦 R-18 + R-15（默认）</b> 只放 R-0；<b>仅 R-0</b> 最严。
+        注意 Pixiv 的 sanity_level≥2 就算 R-15，绝大多数图都在这一档，
+        所以默认档位会滤掉几乎所有二次元图，需要更多内容就往宽调。
+        这是<b>全局设置</b>，对所有技能（含第三方扩展）生效，不是某个技能自己的开关。
+      </div>
       <div class="field-row">
         <div class="field"><label>相邻消息最小间隔（毫秒）</label><input type="number" id="sc-mingap" min="200" value="${esc(c.send?.minGapMs ?? 1000)}" /></div>
         <div class="field"><label>最大间隔（毫秒）</label><input type="number" id="sc-maxgap" min="500" value="${esc(c.send?.maxGapMs ?? 3000)}" /></div>
@@ -137,7 +165,12 @@ function openSendConfigModal() {
         // requirePreview / maxPerRun / maxBytesMB 等阈值不会被打回默认值。
         imageSend: {
           enabled: overlay.querySelector('#sc-imagesend')?.checked === true
-        }
+        },
+        // 内容分级与 imageSend 并列（同一 security 命名空间，deepMerge 不会冲掉对方）
+        contentRating: (() => {
+          const v = overlay.querySelector('#sc-contentrating')?.value;
+          return CONTENT_RATING_OPTIONS.some(([opt]) => opt === v) ? v : 'strict';
+        })()
       }
     };
     try {

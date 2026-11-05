@@ -457,6 +457,31 @@ export const providers = {
 
 见 8.3 节。
 
+### 12.4 内容分级：发图时声明 `rating`
+
+出站图片的内容分级是**全局策略**（`config.security.contentRating`），由核心在
+`SendQueue.sendImage()` 统一执行。档位与派生规则只在 `src/content-rating.js` 定义，
+扩展不要自己判断 R-18 / R-15。
+
+扩展如果要发送可能含成人内容的图片，应当：
+
+1. 读 `security.contentRating`（内置扩展可直接 `import` `src/config.js`；
+   第三方扩展通过 `send_image` 的 `rating` 参数，或按当前策略自行收敛取图范围）。
+2. 调用 `ctx.sender.sendImage(chatKey, img, { rating })` 时声明分级，
+   `rating` 取 `'safe'` / `'r15'` / `'r18'`（`safe` = R-0）。声明值超过当前策略会被拒发，
+   错误文案指向「设置 → 聊天与权限 → 内容分级」。
+3. **未声明（`undefined`）一律放行**：核心没有图像分类器，无法从任意 URL 判定分级，
+   把未声明当成最高级拒绝会打断 `image-generate`（AI 生图没有分级概念）等正常路径。
+   所以不要依赖核心替你拦——想让策略生效，就自己声明。
+
+```js
+// 内置技能：知道每张图的分级，就声明它
+await ctx.sender.sendImage(ctx.chatKey, { file: localPath }, { rating: 'r15' });
+
+// AI 生图等没有分级概念的来源：不传 rating（放行）
+await ctx.sender.sendImage(ctx.chatKey, { file: generatedPath });
+```
+
 ---
 
 ## 13. 失败对照表
