@@ -74,9 +74,9 @@ test('4 种 cfg × 2 种 status：ready 与各 key 的结论', () => {
       assert.equal(ready, expected.baseUrl && expected.model && expected.allow && expected.onebot,
         `${statusName} / ${name} → ready`);
       // checks 的 key 集合与顺序是消费方（体检卡按 key 取结论）依赖的稳定契约
-      assert.deepEqual(Array.from(checks, (c) => c.key), ['baseUrl', 'model', 'allow', 'onebot']);
+      assert.deepEqual(Array.from(checks, (c) => c.key), ['baseUrl', 'model', 'onebot', 'allow']);
       assert.deepEqual(Array.from(checks, (c) => !!c.ok),
-        [expected.baseUrl, expected.model, expected.allow, expected.onebot],
+        [expected.baseUrl, expected.model, expected.onebot, expected.allow],
         `${statusName} / ${name} → checks.ok`);
     }
   }

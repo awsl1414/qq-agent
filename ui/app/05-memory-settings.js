@@ -880,7 +880,7 @@ function renderPersonaPicker(c) {
 
 function renderHealthCard() {
   const { ready, checks } = assessReadiness(state.config, state.status);
-  const rows = checks.map((c, idx) => {
+  const rows = checks.map((c) => {
     let extra = '';
     if (!c.ok) {
       if (c.fix === 'connection-tab') {
@@ -897,7 +897,7 @@ function renderHealthCard() {
       <span>${c.ok ? '✓' : '✗'}</span>
       <span class="h-label">${esc(c.label)}${extra}</span>
     </div>`;
-  }).join('');
+  });
   const testRow = `
     <div class="h-item ${'mute'}">
       <span>·</span>
@@ -906,13 +906,18 @@ function renderHealthCard() {
         <span id="test-api-result" class="muted"></span>
       </span>
     </div>`;
+  // 「API 连通性」是「模型已选择」这一项的验证手段，紧跟其后：配完地址和模型，
+  // 下一步自然就是点「测试一下」，不该先看两条红叉。模型行不存在时（配置加载失败
+  // 只有一条 config）退回末尾，不改变那张卡的原样。
+  const modelIdx = checks.findIndex((c) => c.key === 'model');
+  const insertAt = modelIdx >= 0 ? modelIdx + 1 : rows.length;
+  const body = rows.slice(0, insertAt).join('') + testRow + rows.slice(insertAt).join('');
   // id 是稳定锚点：自动保存完成后 06-settings-render.js 的 refreshHealthCard()
   // 靠它单独重建这一张卡，不整页重渲染（会吹掉用户正在输入的框）。
   return `
     <div class="health-card ${ready ? 'all-ok' : ''}" id="health-card">
       <div class="h-title">${ready ? '✅ 一切就绪，机器人运行中' : '🧭 完成下面缺失项就能跑起来'}</div>
-      ${rows}
-      ${testRow}
+      ${body}
     </div>`;
 }
 

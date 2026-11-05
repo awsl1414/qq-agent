@@ -1207,8 +1207,6 @@ function assessReadiness(cfg, status) {
     label: modelOk ? `模型已选择：${cfg.api.model}` : '还没有选择模型（填好地址后点「获取列表」或手动添加）',
     fix: modelOk ? null : 'settings-api'
   });
-  const allowOk = (cfg.allow?.groups?.length || cfg.allow?.private?.length || cfg.allowAllWhenEmpty);
-  checks.push({ key: 'allow', ok: !!allowOk, label: allowOk ? `白名单：${(cfg.allow.groups || []).length} 个群 / ${(cfg.allow.private || []).length} 个好友` : '还没有配置白名单（必填）', fix: allowOk ? null : 'settings-allow' });
   // status 在启动早期为空：state.status 初值是 null，而设置页可能在首次 /api/status
   // 返回前就被渲染（loadSettings → renderSettings → 页头体检）。归一化后按
   // "状态未知"表述，既不因 `status.onebot.diagnosis` 抛错，也不误报"机器人没连上"。
@@ -1222,6 +1220,12 @@ function assessReadiness(cfg, status) {
       : (status ? (ob.diagnosis || '机器人没连上 —— 请到「连接」页看看') : '正在读取机器人连接状态…'),
     fix: obOk ? null : 'connection-tab'
   });
+  // 白名单排在协议端之后：勾选白名单的群 / 好友列表由 OneBot 提供，
+  // 协议端没连上时选择器直接报错打不开（ui/app/10-feedback.js 的群 / 好友拉取
+  // 失败即 return，没有手动输入兜底）。依赖关系决定顺序，与新手引导
+  // （模型 → QQ → 白名单）和侧栏就绪小标保持一致。
+  const allowOk = (cfg.allow?.groups?.length || cfg.allow?.private?.length || cfg.allowAllWhenEmpty);
+  checks.push({ key: 'allow', ok: !!allowOk, label: allowOk ? `白名单：${(cfg.allow.groups || []).length} 个群 / ${(cfg.allow.private || []).length} 个好友` : '还没有配置白名单（必填）', fix: allowOk ? null : 'settings-allow' });
   return { ready: !!(urlOk && modelOk && allowOk && obOk), checks };
 }
 
