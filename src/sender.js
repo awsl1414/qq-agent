@@ -5,7 +5,7 @@
 // - 发出的每一条记进 ChatStore（self=true，供下一次运行当"自己的发言"）
 import fs from 'node:fs';
 import { getConfig, DEFAULT_CONFIG, isChatAllowed } from './config.js';
-import { currentContentRating, exceedsPolicy, DECLARED_RATINGS } from './content-rating.js';
+import { ratingRejection } from './content-rating.js';
 import { sleep, randInt, createSendChain, formatClockTime } from './util.js';
 import { mdToPlain, splitForQQ, unwrapStrayBrackets } from './md-to-plain.js';
 import { logger } from './logger.js';
@@ -402,31 +402,21 @@ export class SendQueue {
     const url = String(img?.url ?? '').trim();
     const dataUrl = String(img?.dataUrl ?? '').trim();
     // ── 内容分级闸门 ────────────────────────────────────────────────────
-    // 这里是**所有图片出站**的唯一收口：内置 send_image 工具与各扩展的
-    // ctx.sender.sendImage 都走它，所以全局策略（security.contentRating）
-    // 在这里执行一次，第三方扩展也不必各自实现一套。
+    // 这里执行一次全局策略（security.contentRating），内置 send_image 工具与各扩展的
+    // ctx.sender.sendImage 都走它；sendMedia（第三方出图主要路径）对带 rating 的
+    // 图片段执行同一道闸，见下方。派生规则只在 src/content-rating.js 定义。
     //
     // 调用方按自己掌握的分级声明 options.rating（'safe' | 'r15' | 'r18'）；
-    // 声明值超过当前策略就拒绝发送。派生规则只在 src/content-rating.js 定义。
+    // 声明值超过当前策略就拒绝发送。
     //
     // ⚠️ 未声明（undefined / null）一律放行，这是刻意的取舍：core 没有图像分类器，
     // 无法从任意 URL 判定分级。若把「未声明」当成最高级拒绝，会打断 image-generate
-    // （AI 生图没有分级概念）等大量正常路径。闸门只对愿意声明的调用方生效——但这
-    // 已经把策略变成了可执行的事实，而不是每个技能各自为政的私账。
+    // （AI 生图没有分级概念）等大量正常路径。表情、壁纸、网图直链等出口同样不经过
+    // 本闸——策略只对愿意声明的调用方生效，文案与文档都按这个口径描述。
     const declared = options.rating;
     if (declared !== undefined && declared !== null) {
-      if (!DECLARED_RATINGS.includes(declared)) {
-        return Promise.reject(new Error(
-          `未知的内容分级声明：${JSON.stringify(declared)}（只接受 ${DECLARED_RATINGS.join(' / ')}）`
-        ));
-      }
-      const policy = currentContentRating();
-      if (exceedsPolicy(declared, policy)) {
-        return Promise.reject(new Error(
-          `图片被内容分级拦截：这张图声明为 ${declared}，当前分级策略为 ${policy}。`
-          + '如需调整，请到 设置 → 聊天与权限 → 内容分级（先点「📨 发送与限速」）。'
-        ));
-      }
+      const rejection = ratingRejection(declared);
+      if (rejection) return Promise.reject(new Error(rejection));
     }
 
     // ── 本地文件路径优先 ────────────────────────────────────────────────
@@ -516,14 +506,32 @@ export class SendQueue {
    * 表现为"媒体把文字配额吃光后突然发不出话"和"下一次运行忘了自己发过，重复发"。
    * 所以 provider 拿到的依赖里应该带 `sender`，用 ctx 传进来的这个对象发送。
    *
+   * 内容分级：图片段可带段级 `rating`（`{ type:'image', data:{...}, rating:'r18' }`），
+   * 或由 `options.rating` 声明整批；与 sendImage 共用同一道闸和同一份派生规则。
+   * 不带 rating 的段（视频、普通图片）不声明分级，按放行处理。
+   *
    * @param {Array} segments OneBot 段数组，如 [{type:'video',data:{file:'/x.mp4'}}]
-   * @param {object} options { label, dedupeKey, replyToMessageId, atUserId }
+   * @param {object} options { label, dedupeKey, replyToMessageId, atUserId, rating }
    */
   sendMedia(chatKey, segments, options = {}) {
     const [kind, id] = String(chatKey).split(':');
     if (kind !== 'group' && kind !== 'private') return Promise.reject(new Error(`非法会话 key：${chatKey}`));
-    const segs = (Array.isArray(segments) ? segments : []).filter((s) => s && s.type);
+    // rating 是发送侧的声明，只由本方法读取；不能把它当未知字段透传给 OneBot 段。
+    const declaredRatings = [];
+    const segs = [];
+    for (const s of Array.isArray(segments) ? segments : []) {
+      if (!s || !s.type) continue;
+      if (s.type === 'image' && s.rating !== undefined && s.rating !== null) declaredRatings.push(s.rating);
+      const { rating: _rating, ...rest } = s;
+      segs.push(rest);
+    }
+    if (options.rating !== undefined && options.rating !== null) declaredRatings.push(options.rating);
     if (!segs.length) return Promise.reject(new Error('媒体段为空'));
+    // 与 sendImage 同一道闸：任一声明超过当前策略即整批拒绝，派生规则只走 content-rating.js。
+    for (const declared of declaredRatings) {
+      const rejection = ratingRejection(declared);
+      if (rejection) return Promise.reject(new Error(rejection));
+    }
     const label = String(options.label || '[媒体]');
     // 去重键优先用本地文件路径（同一份文件重复发说明是重试/重复触发）
     const dedupeKey = String(options.dedupeKey

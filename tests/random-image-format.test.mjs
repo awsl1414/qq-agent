@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { extractImageUrls } from '../skills/random-image/response.js';
 import { normalizeConfig, buildProviderResult } from '../skills/random-image/index.js';
-import { buildPicUrl } from '../skills/random-image/setu.js';
+import { buildPicUrl, resolveNsfw } from '../skills/random-image/setu.js';
 import { setLogger } from '../skills/random-image/log.js';
 import { DEFAULT_SETU_BASE_URL } from '../skills/random-image/config.js';
 
@@ -134,10 +134,32 @@ test('normalizeConfig：sort 默认值与内容分级派生', () => {
   assert.equal(normalizeConfig({}, 'all').send.nsfwAllowed, true);
   assert.equal(normalizeConfig({}, 'r18').send.nsfwAllowed, false);
   assert.equal(normalizeConfig({}, 'r0').send.nsfwAllowed, false);
+});
 
-  // 分会话色图白名单只认显式开启（旧版由 safeMode 推导，那个推导从未真正生效）
-  assert.equal(normalizeConfig({}, 'strict').nsfwFilter.enabled, false);
-  assert.equal(normalizeConfig({ nsfwFilter: { enabled: true } }, 'all').nsfwFilter.enabled, true);
+test('normalizeConfig：分会话色图白名单由全局档位派生（rating !== all）', () => {
+  // 旧版由 safeMode 推导：safeMode=true → 开启分会话限制。现在由档位派生，
+  // 除 all（不做分会话限制，等同旧 safeMode=false）外一律开启。
+  for (const rating of ['strict', 'r18', 'r0']) {
+    assert.equal(normalizeConfig({}, rating).nsfwFilter.enabled, true, `${rating} 应开启分会话白名单`);
+  }
+  assert.equal(normalizeConfig({}, 'all').nsfwFilter.enabled, false);
+  // 用户旧配置里的显式值不能反过来覆盖派生关系（否则两条语义又会分叉）
+  assert.equal(normalizeConfig({ nsfwFilter: { enabled: false } }, 'strict').nsfwFilter.enabled, true);
+});
+
+test('resolveNsfw：strict 下群聊色图降级成无色图，all 下直接放行', () => {
+  // 这是派生的实际后果：默认档位下群里要涩图仍会发一张无色图（旧 safeMode=true 行为），
+  // 不是静默跳过。锁住它，避免以后又把 nsfwFilter 改回「显式才开」。
+  const strict = normalizeConfig({}, 'strict');
+  assert.deepEqual(
+    resolveNsfw('group:9', 'nsfw', { nsfwFilter: strict.nsfwFilter, send: strict.send }),
+    { category: 'sfw', reject: null }
+  );
+  const all = normalizeConfig({}, 'all');
+  assert.deepEqual(
+    resolveNsfw('group:9', 'nsfw', { nsfwFilter: all.nsfwFilter, send: all.send }),
+    { category: 'nsfw', reject: null }
+  );
 });
 
 // ── provider → 发送层的字段契约 ─────────────────────────────────────────

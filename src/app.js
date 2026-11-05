@@ -227,7 +227,6 @@ export function createApp({ desktopPetHost = null } = {}) {
   // ── 便携 QQ 进程管理 ──
   // 便携 QQ 与用户日常 QQ 完全隔离：独立安装目录 + 独立 user-data-dir。
   // 绝不 taskkill QQ.exe 全名，只杀路径匹配 runtime/qq-portable 的进程。
-  const qqPortableLogs = [];
   let qqPortableProc = null;
   let qqPortableLaunching = false;   // 便携 QQ 启动互斥标记（防连点「启动 QQ」并发拉起）
 
@@ -251,8 +250,6 @@ export function createApp({ desktopPetHost = null } = {}) {
   function pushQqLog(text, stream = 'stdout') {
     const line = { at: Date.now(), stream, text: String(text ?? '').replace(/\r?\n$/, '') };
     if (!line.text) return;
-    qqPortableLogs.push(line);
-    if (qqPortableLogs.length > 500) qqPortableLogs.splice(0, qqPortableLogs.length - 500);
     emit('qq-portable-log', line);
   }
 
@@ -1713,7 +1710,7 @@ export function createApp({ desktopPetHost = null } = {}) {
     localVersion, compareSemver,
     sanitizeConfig, keyEndpointAllowed, sanitizeProvider,
     readBody, authorize,
-    qqPortableStatus, qqPortableLogs, launchPortableQQ, stopPortableQQ,
+    qqPortableStatus, launchPortableQQ, stopPortableQQ,
     showPortableQQ, setupPortableQQFromLocal,
     visionScan, isPortOpen,
     buildUsageStats, buildUsageBreakdown,

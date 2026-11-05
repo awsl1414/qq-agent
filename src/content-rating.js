@@ -79,3 +79,20 @@ export function exceedsPolicy(declared, policy) {
     default: return false;
   }
 }
+
+/**
+ * 声明值能否按当前策略发出：可以返回 null，否则返回调用方直接抛出的错误文案。
+ *
+ * 发送侧的所有出口（sendImage、sendMedia 的图片段）共用这一处，避免
+ * 「未知声明」与「超过策略」两套文案各自漂移。派生判断仍然只走 exceedsPolicy()。
+ */
+export function ratingRejection(declared, policy = currentContentRating()) {
+  if (!DECLARED_RATINGS.includes(declared)) {
+    return `未知的内容分级声明：${JSON.stringify(declared)}（只接受 ${DECLARED_RATINGS.join(' / ')}）`;
+  }
+  if (exceedsPolicy(declared, policy)) {
+    return `图片被内容分级拦截：这张图声明为 ${declared}，当前分级策略为 ${policy}。`
+      + '如需调整，请到 设置 → 聊天与权限 → 内容分级（先点「📨 发送与限速」）。';
+  }
+  return null;
+}

@@ -19,7 +19,7 @@ const CONTENT_RATING_OPTIONS = [
   ['all', '全部放行'],
   ['r18', '只拦 R-18'],
   ['strict', '拦 R-18 + R-15（默认）'],
-  ['r0', '仅 R-0']
+  ['r0', '仅 R-0（分类缺失也拦）']
 ];
 
 /** 统一的提示小模态框（替代 alert，原生对话框与 UI 风格割裂）。 */
@@ -111,10 +111,11 @@ function openSendConfigModal() {
       </div>
       <div class="hint" style="margin:-2px 0 12px">
         发出去的图按这一档过滤：<b>全部放行</b>不拦；<b>只拦 R-18</b> 放过 R-15；
-        <b>拦 R-18 + R-15（默认）</b> 只放 R-0；<b>仅 R-0</b> 最严。
-        注意 Pixiv 的 sanity_level≥2 就算 R-15，绝大多数图都在这一档，
+        <b>拦 R-18 + R-15（默认）</b> 不拦分类缺失的图；<b>仅 R-0（分类缺失也拦）</b> 只保留
+        分类明确为 R-0 的图。注意 Pixiv 的 sanity_level≥2 就算 R-15，绝大多数图都在这一档，
         所以默认档位会滤掉几乎所有二次元图，需要更多内容就往宽调。
-        这是<b>全局设置</b>，对所有技能（含第三方扩展）生效，不是某个技能自己的开关。
+        这档过滤<b>只对声明了分级的来源生效</b> —— 目前是二次元随机图的 Pixiv 关键词路径；
+        AI 生图、网图直链、表情包等没有分级信息的内容不受此限制。
       </div>
       <div class="field-row">
         <div class="field"><label>相邻消息最小间隔（毫秒）</label><input type="number" id="sc-mingap" min="200" value="${esc(c.send?.minGapMs ?? 1000)}" /></div>

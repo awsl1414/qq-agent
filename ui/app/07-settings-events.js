@@ -1349,12 +1349,20 @@ function bindSettingsEvents(c) {
       ssRenderPanel();
     };
     // 搜索目标可能是异步渲染出来的（连接页先发两个请求再落 DOM），
-    // 固定 setTimeout 在慢一点的后端上会扑空，所以轮询到出现为止（上限 2s）。
+    // 固定 setTimeout 在慢一点的后端上会扑空，所以轮询到出现为止（100ms × 20 = 2s 上限；
+    // 后端更慢就放弃高亮——用户已经切到目标页，仍可自己找，不会卡住）。
     const highlightWhenReady = (targetId, tries = 20) => {
       const el = document.getElementById(targetId);
       if (!el) {
         if (tries > 0) setTimeout(() => highlightWhenReady(targetId, tries - 1), 100);
         return;
+      }
+      // 目标可能落在折叠的 <details> 里（连接页「端点设置」默认收起）：先展开祖先折叠区，
+      // 否则高亮 / 焦点 / scrollIntoView 全作用在不可见元素上，用户什么都看不到。
+      // `.open = true` 会触发 toggle 事件，03-connection.js 的监听据此同步 connAdvOpen，
+      // 下次重渲染时仍保持展开。
+      for (let d = el.closest('details'); d; d = d.parentElement?.closest('details')) {
+        if (!d.open) d.open = true;
       }
       el.style.boxShadow = '0 0 0 3px var(--accent)';
       try { el.focus({ preventScroll: true }); } catch { /* 非聚焦元素忽略 */ }

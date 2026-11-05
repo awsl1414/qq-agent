@@ -171,7 +171,7 @@ export function createRoutes(deps) {
     // 注意：这里刻意不取 authorize。鉴权在 app.js 统一执行，留一个没用到的
     // 解构会误导后来者以为某条路由漏鉴权。
     readBody,
-    qqPortableStatus, qqPortableLogs, launchPortableQQ, stopPortableQQ,
+    qqPortableStatus, launchPortableQQ, stopPortableQQ,
     showPortableQQ, setupPortableQQFromLocal,
     visionScan,
     buildUsageStats, buildUsageBreakdown,
@@ -2816,10 +2816,6 @@ export function createRoutes(deps) {
           return json(res, 500, { ok: false, error: String(error?.message ?? error) });
         }
       }
-    },
-    {
-      method: 'GET', pattern: '/api/qq-portable/logs',
-      handler: async ({ res, json }) => json(res, 200, { logs: qqPortableLogs.slice(-200) })
     },
     {
       // 唤起便携 QQ 主窗口
