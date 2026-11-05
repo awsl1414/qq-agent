@@ -684,7 +684,7 @@
       // diagnosis：routes.js 未连接时会给出四种人话原因之一，
       // 「连接」页的诊断行与 OneBot 卡都读它。预览默认已连接（空串）。
       onebot: (() => { const on = pvOnline(); return { connected: on, everConnected: on, diagnosis: on ? '' : '等待协议端上报连接', self: { nickname: '洛西Bot', user_id: 2846117254 } }; })(),
-      // ⚠️ 这几项必须给全：设置页「连接 QQ」与连接页都会读 ready/running/pid/dir/source，
+      // ⚠️ 这几项必须给全：连接页的「启动机器人用的 QQ」区会读 ready/running/pid/dir/source，
       //    少给一项就会渲染出自相矛盾的画面（比如"运行中"却又提示"请先运行 pnpm run setup"）。
       // ready 的语义是"有能启动的 QQ"，所以 local 形态也是 ready:true，
       // 靠 source 字段区分文案，靠 portableInstalled 判断独立副本装没装。

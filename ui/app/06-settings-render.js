@@ -20,12 +20,14 @@ function visionVerdictOf(providerId, model) {
 // 模型选择控件的 id 是 #cfg-model-pick / #cfg-model（记忆页是 #cfg-mem-model-pick）。
 // 将来若要一个"点击外部/Esc 收起目录"的通用行为，在 modelModalShell 里统一实现。
 
-/** 侧栏「配置就绪」三枚小标的结论（以及菜单橙点的依据）。
+/** 侧栏「配置就绪」三枚小标的结论（模型 / 白名单两项同时也是菜单橙点的依据）。
  *
  *  口径直接取 assessReadiness() 按 key 的结论，不在这里另抄一份判断式：
  *  抄一份的下场是改了体检口径（如"地址 + 模型算一项"）侧栏不跟，两处说法打架。
  *  侧栏把 baseUrl + model 合并显示成「模型」一项，所以两项都 ok 才算 ok。
- *  键名与 data-rs-goto / 菜单 data-section 对齐（api / onebot / allow）。 */
+ *  键名与菜单 data-section 对齐（api / allow）。「QQ」小标在设置页已没有对应分区
+ *  （连接页是唯一入口），所以它自带 data-rs-goto="connection" 与
+ *  data-rs-ready="onebot"：跳转目标与就绪结论是两个概念，不能混成一个字段。 */
 function settingsSidebarReady() {
   const flags = readinessByKey(state.config, state.status);
   return {
@@ -64,7 +66,9 @@ function renderSettingsSidebar() {
   const s = state.status;
   const sidebar = $('#settings-sidebar');
   if (!sidebar) return;
-  // 分区按"用户脑子里的任务"划分，顺序是「填模型 → 连 QQ → 选群 → 调性格」。
+  // 分区按"用户脑子里的任务"划分，顺序是「填模型 → 选群 → 调性格」。
+  // 「连接 QQ」不在这里：连接页是唯一入口（状态 / 协议端指引 / 端点 / 启动 QQ 都在那），
+  // 设置页只保留侧栏那枚「QQ」就绪小标（点击跳连接页，见下方 data-rs-goto="connection"）。
   // 合并页 = 两个渲染函数直接字符串拼接，敢拼的前提是两两表单的元素 id 无交集，
   // 不会出现 getElementById 取错元素。
   // ⚠️ 被并掉的 id（search / memory / chat）不再出现在菜单里，但 saveConfig
@@ -74,7 +78,6 @@ function renderSettingsSidebar() {
   //    hc-fix-btn 的 data-target、各分区 h3 的锚点（settings-api 等）全靠它。
   const menu = [
     ['api', '连接模型', 'M4 7h16M4 12h10M4 17h7'],
-    ['onebot', '连接 QQ', 'M5 12h14M12 5l7 7-7 7'],
     ['allow', '聊天与权限', 'M4 5h16v11H8l-4 4z'],
     ['persona', '性格与记忆', 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M5 20a7 7 0 0 1 14 0'],
     ['tools', '能力与工具', 'M14 6l4 4-8 8H6v-4z'],
@@ -145,10 +148,10 @@ function renderSettingsSidebar() {
       <div class="rs-row muted">${state.paused ? '⏸ 已暂停' : (s?.orchestrator?.model ? `模型：${esc(s.orchestrator.model)}` : '模型：未设置')}</div>
       <div class="rs-ready" role="group" aria-label="配置就绪情况">
         ${[
-          { k: 'api', t: '模型', ok: readyModel },
-          { k: 'onebot', t: 'QQ', ok: readyQq },
-          { k: 'allow', t: '白名单', ok: readyAllow }
-        ].map((x) => `<button type="button" class="rs-chip ${x.ok ? 'ok' : 'bad'}" data-rs-goto="${x.k}" title="${esc(settingsChipTitle(x.k, x.ok))}"><span class="rs-dot"></span>${x.t}</button>`).join('')}
+          { k: 'api', r: 'api', t: '模型', ok: readyModel },
+          { k: 'connection', r: 'onebot', t: 'QQ', ok: readyQq },
+          { k: 'allow', r: 'allow', t: '白名单', ok: readyAllow }
+        ].map((x) => `<button type="button" class="rs-chip ${x.ok ? 'ok' : 'bad'}" data-rs-goto="${x.k}" data-rs-ready="${x.r}" title="${esc(settingsChipTitle(x.r, x.ok))}"><span class="rs-dot"></span>${x.t}</button>`).join('')}
       </div>
     </div>
     <div class="settings-menu">
@@ -232,11 +235,14 @@ function renderSettingsSidebar() {
       }
     });
   });
-  // 就绪小标：点击跳到对应分区。走真实菜单项的 click，复用它的 flush + 入场动画 +
-  // 重渲染，不另写一套切换逻辑（避免两条路径行为漂移）。
+  // 就绪小标：点击跳到对应位置。设置分区走真实菜单项的 click，复用它的 flush +
+  // 入场动画 + 重渲染，不另写一套切换逻辑（避免两条路径行为漂移）。
+  // 「QQ」小标在设置页已没有对应分区，直接切到「工具 → 连接」页
+  // （switchTab 离开设置页时会自己 flush 挂起的自动保存）。
   sidebar.querySelectorAll('[data-rs-goto]').forEach((chip) => {
     chip.addEventListener('click', () => {
       const sec = chip.dataset.rsGoto;
+      if (sec === 'connection') { switchTab('connection'); return; }
       const item = sidebar.querySelector(`.settings-menu-item[data-section="${sec}"]`);
       if (item && sec !== state.settingsSection) item.click();
     });
@@ -295,7 +301,8 @@ function refreshSettingsReadiness() {
   if (!sidebar) return;
   const ready = settingsSidebarReady();
   sidebar.querySelectorAll('[data-rs-goto]').forEach((chip) => {
-    const id = chip.dataset.rsGoto;
+    // 就绪结论取 data-rs-ready（「QQ」小标是 onebot，跳转目标却是 connection）。
+    const id = chip.dataset.rsReady || chip.dataset.rsGoto;
     const ok = !!ready[id];
     chip.classList.toggle('ok', ok);
     chip.classList.toggle('bad', !ok);
@@ -529,8 +536,7 @@ function renderSettingsSection(c) {
     api: () => renderApiSection(c) + renderSearchSection(c) + renderModelCostSection(c),
     persona: () => renderPersonaSection(c) + renderMemorySettingsSection(c),
     allow: () => renderAllowSection(c) + renderChatSection(c),
-    desktop: () => renderOnebotSection(c) + renderDesktopSection(c),   // 兼容别名 → 旧 state 恢复
-    onebot: () => renderOnebotSection(c),
+    desktop: () => renderDesktopSection(c),   // 兼容别名 → 旧 state 恢复
     app: () => renderDesktopSection(c),
     tools: () => renderToolsSection(c),
     backup: () => renderBackupSection(),
@@ -620,13 +626,17 @@ function refreshHealthCard() {
    写法约定：
      · keys  = 用户可能输入的说法（含口语 / 拼音首字母 / 开发者术语），全小写比对；
      · target = 跳到分区后高亮的元素 id（可空 = 只切分区）；
-     · 一条可以同时命中多个分区（如「令牌」→ onebot）。
+     · view  = 可空。填了表示目标不在设置页，而是另一个页签（如 'connection'）：
+               ssGoto 会直接切过去并高亮 target，不再动 state.settingsSection；
+     · 一条可以同时命中多个分区（如「令牌」→ 连接页）。
    匹配：输入串的任一字串作为子串出现在 key 里，或 key 包含输入串。
    结果排序按分区优先级权重 w。 */
 const SETTINGS_SEARCH_INDEX = [
   { keys: ['密钥', 'api key', 'apikey', 'key', 'sk-', '接口地址', 'base url', 'baseurl', '模型', '提供商', '服务商', '地址', 'moxing', 'miyue'], label: '模型设置', desc: '选服务商与模型；地址、密钥在「管理服务商」', section: 'api', target: 'open-model-config-btn', w: 10 },
   { keys: ['群', '白名单', '好友', '允许', '谁能', '群号', 'qq号', 'qun', 'baimingdan'], label: '谁能找它（白名单）', desc: '勾选允许的群和好友', section: 'allow', target: 'pick-groups-btn', w: 10 },
-  { keys: ['qq', '连接', 'onebot', '启动', '登录', 'snowluma', '令牌', 'token', '连接密码', '一键', 'lianjie', 'qidong'], label: '连接 QQ', desc: '一键启动、连接地址与令牌', section: 'onebot', target: 'quick-start-btn', w: 9 },
+  // 「连接 QQ」不再是一个设置分区（连接页是唯一入口），这条用 view 直跳连接页，
+  // target 落在端点输入框上：搜「令牌」的人要改的正是那里。
+  { keys: ['qq', '连接', 'onebot', '启动', '登录', 'snowluma', '令牌', 'token', '连接密码', '一键', 'lianjie', 'qidong'], label: '连接 QQ', desc: '一键启动 QQ、协议端指引与端点令牌', view: 'connection', target: 'conn-wsurl', w: 9 },
   { keys: ['积极度', '活跃', '档位', '回话', '回复', '限速', '发送', '间隔', '峰谷', '高峰', '省钱', '安静', 'jijidu', 'huifu'], label: '回复积极度 · 发送与限速', desc: '什么时候接话、说多快、高峰时段更安静', section: 'allow', target: 'open-active-config-btn', w: 8 },
   { keys: ['人设', '性格', '记忆', '提示词', 'prompt', '语气', '人格', 'renge', 'jiyi'], label: '性格与记忆', desc: '机器人是谁、记不记得事', section: 'persona', w: 7 },
   { keys: ['工具', '技能', '插件', '网图', '搜图', '搜索', '能力', 'gongju', 'jineng'], label: '能力与工具', desc: '允许机器人用哪些工具', section: 'tools', w: 7 },
@@ -1678,56 +1688,6 @@ function renderDesktopSection(c) {
         <span class="hint" id="update-hint" style="margin:0"></span>
       </div>
       ${updateDisabled ? '<div class="hint">在线更新检查未启用：请手动下载新版本覆盖安装，用户数据保存在 data/ 目录不会丢。</div>' : ''}</div>`;
-}
-
-function renderOnebotSection(c) {
-  /* 「连接 QQ」分区只剩两件事：
-       ① 启动机器人的 QQ（一键启动只启动 QQ；协议端由用户自装、自启）；
-       ② 连接地址与令牌（协议端默认 3001/3000，改了才需要动）。
-     renderSettings 是同步渲染，QQ 运行态是异步接口，所以这里先渲染占位
-     （disabled 按钮 + "正在读取"），bindSettingsEvents 里的 qbRefresh() 拉到状态后
-     只更新这块的文字与按钮态，不重建表单（绑定不丢）。 */
-  const proto = c.protocol || {};
-  return `
-    <h3 id="settings-onebot">连接 QQ（启动与登录）</h3>
-    <div class="hint" style="margin-bottom:10px">「一键启动」只负责启动机器人用的 QQ。协议端（SnowLuma 或 NapCat）由你自己安装、自己启动 —— 两者默认端口一致，装好就能连上。连接状态与排查在「工具 → 连接」页。</div>
-    <div class="sl-quickbar" id="settings-quickbar">
-      <span class="sl-quickbar-text" id="quick-start-text">正在读取 QQ 状态…</span>
-      <button class="btn btn-small btn-primary" id="quick-start-btn" disabled>…</button>
-      <span id="quick-start-hint" class="sl-hint"></span>
-    </div>
-
-    <h3 style="margin-top:22px">QQ 来源</h3>
-    <div class="hint" id="qq-source-intro" style="margin-bottom:10px">推荐直接用你电脑里已装的 QQ（检测到就自动用它，无需任何安装步骤）。下面的「装独立副本」是给想要彻底隔离的人准备的「可选项」，不装也完全能用。</div>
-    <div class="field">
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <button class="btn btn-small" id="qq-portable-start-btn" title="启动应用自带的便携版 QQ（装了独立副本才有意义）" style="display:none">单独启动便携 QQ</button>
-        <button class="btn btn-small" id="qq-install-btn" title="复制一份独立的 QQ 副本（1~2GB，需几分钟），和你自己的 QQ 完全分开；需要先把 QQ 完全退出" style="display:none">装独立副本（可选）</button>
-        <span id="qq-portable-state" class="hint" style="margin:0">正在读取 QQ 状态…</span>
-      </div>
-      <div class="hint" id="qq-portable-hint" style="margin-top:6px"></div>
-    </div>
-
-    <h3 style="margin-top:22px">连接</h3>
-    <div class="field-row">
-      <div class="field"><label>WebSocket 地址（收消息）</label><input type="text" id="cfg-wsurl" value="${esc(proto.wsUrl || '')}" />
-        <div class="hint" style="margin-top:4px">协议端的 OneBot v11 正向 WS，默认 ws://127.0.0.1:3001。</div></div>
-      <div class="field"><label>HTTP 地址（发消息）</label><input type="text" id="cfg-httpurl" value="${esc(proto.httpUrl || '')}" />
-        <div class="hint" style="margin-top:4px">协议端的 OneBot HTTP 接口，默认 http://127.0.0.1:3000。</div></div>
-      <div class="field"><label>WebSocket 令牌</label>
-        <div style="display:flex;gap:8px">
-          <input type="password" id="cfg-obtoken" value="${esc(proto.hasAccessToken ? '******' : '')}" placeholder="协议端没设令牌就留空" autocomplete="new-password" style="flex:1" />
-          <button class="btn btn-small" id="cfg-obtoken-toggle" type="button">显示</button>
-        </div>
-        <div class="hint" style="margin-top:4px">连接密码，防止别的程序连你的机器人。要和协议端里填的一致。</div></div>
-      <div class="field"><label>HTTP 令牌（与 WS 不同时才填）</label>
-        <div style="display:flex;gap:8px">
-          <input type="password" id="cfg-obhttptoken" value="${esc(proto.hasHttpAccessToken ? '******' : '')}" placeholder="留空 = 与 WS 令牌相同" autocomplete="new-password" style="flex:1" />
-          <button class="btn btn-small" id="cfg-obhttptoken-toggle" type="button">显示</button>
-        </div>
-        <div class="hint" style="margin-top:4px">同上；两个令牌相同就填一样的。</div></div>
-    </div>
-    <div class="hint">改完保存后会自动用新地址重连，不用重启。换了端口、加了令牌、或者双开（端口带偏移）时才需要动这里。</div>`;
 }
 
 /**
@@ -3362,7 +3322,7 @@ function renderToolsSection(c) {
  * 页面结构：状态条 → 安装指引（按平台） → 未安装时的说明 → 下载/进度 → 下载源 → 手动路径。
  * 状态是异步拉的（GET /api/ffmpeg/status），首帧先渲染占位，
  * bindSettingsEvents 里的 ffmpegRefresh() 拉到后只更新这块文字与按钮态，
- * 不重建表单（与「连接 QQ」的 qbRefresh 同一套做法）。
+ * 不重建表单（与连接页的 connQbRefresh 同一套做法）。
  *
  * 平台差异：macOS 没有可靠的免编译二进制，给 brew 命令；Linux 首选发行版包管理器，
  * 下载只是兜底。这些数据都来自 /api/ffmpeg/status 的 installGuide / canAutoInstall，

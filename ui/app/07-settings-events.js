@@ -1072,9 +1072,7 @@ function bindSettingsEvents(c) {
     ['cfg-bocha-key-toggle', 'cfg-bocha-key'],
     ['cfg-baidu-key-toggle', 'cfg-baidu-key'],
     ['cfg-metaso-key-toggle', 'cfg-metaso-key'],
-    ['cfg-custom-sp-key-toggle', 'cfg-custom-sp-key'],
-    ['cfg-obtoken-toggle', 'cfg-obtoken'],
-    ['cfg-obhttptoken-toggle', 'cfg-obhttptoken']
+    ['cfg-custom-sp-key-toggle', 'cfg-custom-sp-key']
   ];
   for (const [btnId, inputId] of pwdToggles) {
     const btn = $(`#${btnId}`);
@@ -1195,12 +1193,6 @@ function bindSettingsEvents(c) {
       // 环境变量提供的 Key：配置里没存（apiKey 空）但 env 有，显示时直接亮出
       // env 值（运行时优先级是 cfg > env，用户"看一眼"应该覆盖两种来源）。
       return String(r.apiKey || '');
-    }
-    // OneBot 令牌：与搜索 Key 同样的"显示明文"专用端点
-    if (inputId === 'cfg-obtoken' || inputId === 'cfg-obhttptoken') {
-      const which = inputId === 'cfg-obtoken' ? 'ws' : 'http';
-      const r = await api(`/api/onebot-token?which=${encodeURIComponent(which)}`);
-      return String(r.token || '');
     }
     return '';
   }
@@ -1346,6 +1338,19 @@ function bindSettingsEvents(c) {
       ssActive = 0;
       ssRenderPanel();
     };
+    // 搜索目标可能是异步渲染出来的（连接页先发两个请求再落 DOM），
+    // 固定 setTimeout 在慢一点的后端上会扑空，所以轮询到出现为止（上限 2s）。
+    const highlightWhenReady = (targetId, tries = 20) => {
+      const el = document.getElementById(targetId);
+      if (!el) {
+        if (tries > 0) setTimeout(() => highlightWhenReady(targetId, tries - 1), 100);
+        return;
+      }
+      el.style.boxShadow = '0 0 0 3px var(--accent)';
+      try { el.focus({ preventScroll: true }); } catch { /* 非聚焦元素忽略 */ }
+      el.scrollIntoView({ block: 'nearest' });
+      setTimeout(() => { el.style.boxShadow = ''; }, 2000);
+    };
     const ssGoto = (i) => {
       const it = ssResults[i];
       if (!it) return;
@@ -1353,19 +1358,17 @@ function bindSettingsEvents(c) {
       ssInput.value = '';
       ssInput.blur();
       flushSettingsSaves();
+      // view：目标不在设置页，直接切页签（连接页是「连接 QQ」的唯一入口）。
+      if (it.view) {
+        switchTab(it.view);
+        if (it.target) highlightWhenReady(it.target);
+        return;
+      }
       state.settingsSection = it.section;
       renderSettingsSidebar();
       renderSettings();
-      if (it.target) {
-        setTimeout(() => {
-          const el = document.getElementById(it.target);
-          if (!el) return;
-          el.style.boxShadow = '0 0 0 3px var(--accent)';
-          try { el.focus({ preventScroll: true }); } catch { /* 非聚焦元素忽略 */ }
-          el.scrollIntoView({ block: 'nearest' });
-          setTimeout(() => { el.style.boxShadow = ''; }, 2000);
-        }, 120);
-      }
+      // 设置页是同步重建的，等一帧让布局落定再高亮（与改造前的 120ms 一致）。
+      if (it.target) setTimeout(() => highlightWhenReady(it.target), 120);
     };
     ssInput.addEventListener('input', ssSearch);
     ssInput.addEventListener('keydown', (e) => {
@@ -1536,247 +1539,6 @@ function bindSettingsEvents(c) {
     checkUpdateBtn.disabled = false;
   });
 
-  // ── OneBot 区块事件 ──
-  /* ── 一键启动 + 便携版管理 ──
-     协议端解耦后，「一键启动」只剩启动 QQ 这一步，SnowLuma / NapCat 由用户自己装、
-     自己启动，本软件不碰。
-     状态模型：renderSettings 同步渲染、运行态是异步接口，所以 qbRefresh() 先拉
-     /api/status + /api/qq-portable/status 存进 qb，再 qbPaint() 只改 quickbar 与
-     「QQ 来源」块的文字/按钮态，不重建表单。 */
-  if ($('#quick-start-btn')) {
-    const qb = { qqReady: false, qqRunning: false, protoUp: false, source: 'none', portableInstalled: false, portableSupported: true, connected: false };
-
-    const qbPaint = () => {
-      const text = $('#quick-start-text');
-      const btn = $('#quick-start-btn');
-      if (!btn) return;
-      btn.disabled = !!qb.connected;
-      // 已连接是终态：保留一个可见的锚点，但必须禁用，别让人以为还要再点什么。
-      // ⚠️ 这一位由 qbRefresh 从 /api/status 读回来，三步链成功时也置位，
-      //    否则成功后的 qbRefresh 会立刻把「已连接 ✓」覆盖回启动态文案。
-      if (qb.connected) {
-        if (text) text.textContent = '机器人已连接，正常工作中 —— 状态与日志见「工具 → 连接」页';
-        btn.textContent = '已连接 ✓';
-        btn.disabled = true;
-      } else if (!qb.portableSupported) {
-        // 一键启动依赖 QQNT（只有 Windows 版）。非 Windows 上藏掉按钮，
-        // 只留一句"自己登录 QQ + 自己起协议端"，否则用户点下去只会看到 spawn 失败。
-        if (text) text.textContent = '这台机器上「一键启动 QQ」不可用（便携 QQ 仅 Windows）—— 请自行登录 QQ 并启动协议端（SnowLuma 或 NapCat）';
-        btn.textContent = '不可用';
-        btn.disabled = true;
-      } else if (!qb.qqReady) {
-        if (text) text.textContent = '没找到可用的 QQ —— 装好新版 QQ（QQNT，官网下载即可）后点右边重新检测';
-        btn.textContent = '重新检测 QQ';
-      } else if (!qb.qqRunning) {
-        if (text) text.textContent = qb.source === 'local'
-          ? '已用上你电脑里的 QQ —— 点一下直接启动，机器人会另开一个窗口登录'
-          : '点一下启动机器人用的 QQ（更推荐用你电脑里已装的 QQ）';
-        btn.textContent = '启动机器人的 QQ';
-      } else if (!qb.protoUp) {
-        if (text) text.textContent = 'QQ 已启动，但协议端没在运行 —— SnowLuma / NapCat 需要你自己启动';
-        btn.textContent = '重新检查';
-      } else {
-        if (text) text.textContent = '协议端在运行 —— 正在等机器人上线…';
-        btn.textContent = '等待连接…';
-      }
-      // 「QQ 来源」块：按状态显隐按钮 + 一句话现状
-      const stateEl = $('#qq-portable-state');
-      const pStart = $('#qq-portable-start-btn');
-      const pInstall = $('#qq-install-btn');
-      const intro = $('#qq-source-intro');
-      if (!qb.portableSupported) {
-        // 便携 QQ 依赖 QQNT，只有 Windows 版。mac/Linux 上「装独立副本」永远
-        // 只会得到「没找到本机安装的 QQ」—— 那条路在这里不可达，不是"还没装"。
-        // 藏掉两个按钮，把这句话说清楚，免得用户反复点。
-        if (intro) intro.textContent = '便携 QQ（含「装独立副本」）仅 Windows 可用 —— QQNT 没有 macOS / Linux 版。当前平台请用外部 OneBot 协议端（如 NapCat / LLOneBot）配合你已登录的 QQ。';
-        if (stateEl) stateEl.textContent = '便携 QQ 仅 Windows 可用';
-        if (pStart) pStart.style.display = 'none';
-        if (pInstall) pInstall.style.display = 'none';
-        return;
-      }
-      if (stateEl) stateEl.textContent = !qb.portableInstalled
-        ? (qb.source === 'none' ? '未检测到 QQ，也没装独立副本 —— 先装一个新版 QQ（QQNT）'
-          : '未装独立副本 —— 当前直接用你电脑里已装的 QQ ✓')
-        : (qb.qqRunning ? `独立副本 QQ 运行中（pid ${qb.pid ?? '—'}）` : '已装独立副本，未运行');
-      if (pStart) pStart.style.display = qb.portableInstalled ? '' : 'none';
-      if (pInstall) pInstall.style.display = qb.portableInstalled ? 'none' : '';
-    };
-
-    const qbRefresh = async () => {
-      try {
-        const [st, q] = await Promise.all([
-          api('/api/status').catch(() => null),
-          api('/api/qq-portable/status').catch(() => null)
-        ]);
-        if (!st) {
-          const stateEl = $('#qq-portable-state');
-          if (stateEl) stateEl.textContent = '状态读取失败（后端没有应答）';
-          return;
-        }
-        const qq = q || st.qqPortable || {};
-        qb.qqReady = !!qq.ready;
-        qb.qqRunning = !!qq.running;
-        qb.pid = qq.pid ?? null;
-        qb.source = qq.source || (qb.qqReady ? 'portable' : 'none');
-        qb.portableInstalled = qq.portableInstalled !== undefined ? !!qq.portableInstalled : (qb.source === 'portable');
-        // supported 缺省按 true：后端字段未就位时保持 Windows 的现有行为，
-        // 不能因为读不到就突然把安装入口藏掉（与 ffmpeg 的 canAutoInstall 同口径）。
-        qb.portableSupported = qq.supported !== false;
-        qb.protoUp = !!st.protocol?.portOpen;
-        qb.connected = !!st.onebot?.connected;
-        qbPaint();
-      } catch { /* 拉不到就保持占位文案，不打断设置页 */ }
-    };
-
-    // 「一键启动」：启动链参数别改，14-chrome.js 的「开始对话」按钮按同一套节奏走。
-    const quickStartBtn = $('#quick-start-btn');
-    quickStartBtn.addEventListener('click', async () => {
-      const btn = quickStartBtn;
-      const hint = $('#quick-start-hint');
-      btn.disabled = true;
-      if (hint) hint.textContent = '';
-      try {
-        // 步骤 0：没检测到 QQ → 重新检测（force=1 跳过 30s 探测缓存）
-        if (!qb.qqReady) {
-          if (hint) hint.textContent = '正在重新检测…';
-          const r = await api('/api/qq-portable/status?force=1');
-          if (r?.ready) {
-            if (hint) hint.textContent = '✓ 检测到 QQ，可以启动了';
-            qb.qqReady = true;
-            qb.source = r.source || (qb.source === 'none' ? 'local' : qb.source);
-            qbPaint();
-          } else {
-            if (hint) hint.textContent = '还是没检测到 —— 确认装的是新版 QQ（QQNT），装完再点一次';
-            btn.disabled = false;
-          }
-          return;
-        }
-        // 步骤 1：启动 QQ（local / portable 都走同一接口，后端按 source 分流）
-        if (!qb.qqRunning) {
-          btn.textContent = '启动 QQ 中…';
-          if (hint) hint.textContent = 'QQ 启动中 —— 它不会自动弹窗，稍候到任务栏/托盘把窗口调出来登录/扫码';
-          const r = await api('/api/qq-portable/launch', { method: 'POST', body: '{}' });
-          if (!r.ok && !r.alreadyRunning) {
-            if (hint) hint.textContent = `QQ 启动失败：${r.error}`;
-            qbPaint();
-            return;
-          }
-          qb.qqRunning = true;
-          // 等 3 秒让 QQ 完全启动
-          await new Promise((r2) => setTimeout(r2, 3000));
-        }
-        // 步骤 2：协议端不由本软件启动。没在跑就明确告诉用户去哪儿装 / 怎么启动，
-        // 在这里干等 5 分钟只会让人以为程序坏了。
-        const st2 = await api('/api/status').catch(() => null);
-        if (!st2?.protocol?.portOpen) {
-          qb.protoUp = false;
-          if (hint) hint.textContent = 'QQ 已启动，但协议端没在运行 —— 到「工具 → 连接」页按指引启动 SnowLuma 或 NapCat（本软件不再自带协议端）';
-          qbPaint();
-          return;
-        }
-        qb.protoUp = true;
-        // 步骤 3：等待 OneBot 连接
-        // ⚠️ 最多等 5 分钟。只等 30 秒就报"连接超时"的话，用户很可能还没扫码登录
-        //    （首次登录本来就要一两分钟），看到超时以为失败又点一次，越点越乱。
-        //    等待期间每隔十几秒把"正在等什么、你现在该做什么"写清楚。
-        btn.textContent = '等待机器人上线…';
-        const WAIT_STEP_MS = 2000;
-        const WAIT_MAX_MS = 5 * 60 * 1000;
-        for (let waited = 0; waited < WAIT_MAX_MS; waited += WAIT_STEP_MS) {
-          // 用户切走页签/分区后按钮已不在 DOM，循环仍在每 2 秒打一次 /api/status
-          // （最多 5 分钟）。这里直接收尾，不再空转。
-          if (!btn.isConnected) return;
-          await new Promise((r2) => setTimeout(r2, WAIT_STEP_MS));
-          const s = await api('/api/status').catch(() => null);
-          if (s?.onebot?.connected) {
-            if (hint) hint.textContent = '✅ 已连接！机器人开始工作';
-            // ⚠️ 走 qbPaint() 落终态，别手写 btn.textContent：紧随其后的
-            //    qbRefresh() 会重画一次，手写的字样会被覆盖。
-            qb.connected = true;
-            qbPaint();
-            qbRefresh();
-            return;
-          }
-          // 每 ~16 秒刷新一次提示（别每秒改字，看着像在闪）
-          if (hint && waited % 16000 < WAIT_STEP_MS) {
-            const secs = Math.round(waited / 1000);
-            hint.textContent = secs < 20
-              ? '正在等机器人上线 —— 如果 QQ 还没登录，到 QQ 窗口里扫码登录'
-              : `还在等（已 ${secs} 秒）—— 登录完 QQ 后会自动连上，不用再点这个按钮；状态见「工具 → 连接」页`;
-          }
-        }
-        if (hint) {
-          hint.textContent = '等了 5 分钟还没连上 —— 到「工具 → 连接」页看状态：'
-            + '最常见是机器人 QQ 还没登录，或协议端的端口/令牌与这里不一致。';
-        }
-        qbPaint();
-      } catch (e) {
-        if (hint) hint.textContent = `启动失败：${e.message}`;
-        qbPaint();
-      }
-    });
-
-    // 「单独启动便携 QQ」（仅装了独立副本时显示）
-    const pStartBtn = $('#qq-portable-start-btn');
-    if (pStartBtn) pStartBtn.addEventListener('click', async () => {
-      const btn = pStartBtn;
-      const hint = $('#qq-portable-hint');
-      btn.disabled = true;
-      if (hint) hint.textContent = '';
-      try {
-        const r = await api('/api/qq-portable/launch', { method: 'POST', body: '{}' });
-        if (hint) hint.textContent = r.alreadyRunning
-          ? '便携 QQ 已在运行 ✓'
-          : (r.ok ? '已启动 —— QQ 不会自动弹窗，到任务栏/托盘把窗口调出来登录' : `启动失败：${r.error}`);
-      } catch (e) {
-        if (hint) hint.textContent = `启动失败：${e.message}`;
-      }
-      qbRefresh();
-    });
-
-    // 「装独立副本（可选）」：从本机 QQ 复制一份（1~2GB，分钟级），带进度轮询。
-    // ⚠️ 判断"装没装完"要看 portableInstalled / setup.ok，不能看 ready：
-    //    本机有 QQ 时 ready 本来就是 true，用它会一进来就误判"装好了"。
-    const pInstallBtn = $('#qq-install-btn');
-    if (pInstallBtn) pInstallBtn.addEventListener('click', async () => {
-      const btn = pInstallBtn;
-      const hint = $('#qq-portable-hint');
-      btn.disabled = true;
-      btn.textContent = '安装中…';
-      if (hint) hint.textContent = '正在从你电脑里的 QQ 复制一份 —— 请先完全退出 QQ（包括托盘图标）';
-      try {
-        const r0 = await api('/api/qq-portable/setup', { method: 'POST', body: '{}' });
-        if (!r0.ok && !r0.alreadyInstalled) {
-          if (hint) hint.textContent = r0.error || '安装失败';
-        } else if (r0.alreadyInstalled) {
-          if (hint) hint.textContent = '独立副本已装好 ✓';
-        } else {
-          // 后端已开始复制 → 每秒看一眼进度（上限 30 分钟）
-          for (let i = 0; i < 1800; i++) {
-            // 同启动链：切走后按钮脱离 DOM，别让这个每秒一次的进度轮询继续空转。
-            if (!btn.isConnected) break;
-            await new Promise((r) => setTimeout(r, 1000));
-            const s = await api('/api/status');
-            const setup = s.qqPortable?.setup;
-            if (setup?.running) {
-              if (hint) hint.textContent = `复制中 ${setup.done}/${setup.total}（${setup.step}）…预计几分钟`;
-              continue;
-            }
-            if (setup?.error) { if (hint) hint.textContent = setup.error; break; }
-            if (setup?.ok || s.qqPortable?.portableInstalled) { if (hint) hint.textContent = '✓ 独立副本装好了'; break; }
-          }
-        }
-      } catch (e) {
-        if (hint) hint.textContent = `安装失败：${e.message}`;
-      }
-      btn.disabled = false;
-      btn.textContent = '装独立副本（可选）';
-      qbRefresh();
-    });
-
-    qbRefresh();
-  }
-
   // ── 预览演示模式开关（「界面与应用」页 · 界面区块）──
   // 它不是配置项（不写进 config）：只切换 URL 的 #preview 哈希然后重载整个界面，
   // 00-preview.js 在启动时读这个哈希决定是否拦截 fetch 提供模拟数据。
@@ -1795,7 +1557,7 @@ function bindSettingsEvents(c) {
   //   ② 下载：起任务 → 每秒轮询进度 → 完成后刷新状态
   //   ③ 手动路径验证 + 删除已下载的那份
   // 状态是异步拉的，首帧只渲染占位；ffmpegRefresh() 拉到后只改文字与按钮态，
-  // 不重建表单（与上面「连接 QQ」的 qbRefresh 同一套做法，避免绑定丢失）。
+  // 不重建表单（与连接页 connQbRefresh 同一套做法，避免绑定丢失）。
   const ffmpegDownloadBtn = $('#ffmpeg-download-btn');
   if (ffmpegDownloadBtn) {
     const statusText = $('#ffmpeg-status-text');
@@ -1827,7 +1589,7 @@ function bindSettingsEvents(c) {
     // 平台适配：installGuide / canAutoInstall 只有 /api/ffmpeg/status 才有，
     // 06 的渲染函数是同步纯函数拿不到，所以安装指引区首帧是空占位（hidden），
     // 由 paint() 注入；平台相关的文案与 macOS 要隐藏的下载区块也在 paint() 里修正。
-    // paint 只改文字与显隐、不重建表单（与 qbRefresh 同一约束），
+    // paint 只改文字与显隐、不重建表单（与 connQbRefresh 同一约束），
     // 所以每块内容都先确认存在再写。
     const installGuideHtml = (g) => {
       if (!g || g.kind !== 'command') return '';

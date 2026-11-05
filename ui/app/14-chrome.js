@@ -1135,7 +1135,7 @@
   // 「开始对话」：机器人未运行时，这个按钮是 PCL 隐喻里的「启动游戏」：
   // 拉起机器人用的 QQ（协议端由用户自己装、自己启动），进度写在副标题上，
   // 而不是直接跳会话界面。已连接时才保持旧行为（进全屏会话页并选中第一个）。
-  // 启动节奏与设置页 quick-start-btn 保持一致。
+  // 启动节奏与连接页 quick-start-btn 保持一致。
   $('#launch-btn') && $('#launch-btn').addEventListener('click', async function () {
     var btn = this;
     if (btn.dataset.starting === '1') return;   // 启动中防重复点击
@@ -1169,7 +1169,7 @@
     }
     // ready=false = 便携副本没装且本机也没检测到 QQ，此时"去点一键安装"的指引
     // 必然失败（没源可复制），改成让人去装 QQ / 重新检测。
-    if (!qqReady) { setSub('没找到可用的 QQ：先装一个新版 QQ（QQNT），然后到 设置 → 连接 QQ 重试'); return; }
+    if (!qqReady) { setSub('没找到可用的 QQ：先装一个新版 QQ（QQNT），然后到「工具 → 连接」页重试'); return; }
 
     btn.dataset.starting = '1';
     btn.classList.add('is-starting');
@@ -1197,7 +1197,7 @@
       // 旧实现只等 30 秒就报「连接超时」，而这段时间用户很可能还没扫码登录
       // （首次登录本来就要一两分钟），小白看到"超时"就以为失败，回去再点一次。
       // 现在最多等 5 分钟，每 ~16 秒把"在等什么、现在该做什么"写清楚。
-      // 与设置页 quick-start-btn 的等待节奏保持一致（两处是同一套启动链）。
+      // 与连接页 quick-start-btn 的等待节奏保持一致（两处是同一套启动链）。
       var WAIT_STEP = 2000;
       var WAIT_MAX = 5 * 60 * 1000;
       var connected = false;
