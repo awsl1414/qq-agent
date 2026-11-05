@@ -728,20 +728,9 @@
     };
   }
 
-  // ── 日志模拟：连接页的「应用日志」面板 ──
+  // ── 日志模拟：工具 → 日志（连接页那个「应用日志」面板已移除） ──
   // 协议端的日志归它自己的控制台，这里只有应用日志。
   let pvLogLevel = 'info';
-  const clock = (agoMs) => new Date(Date.now() - agoMs).toLocaleTimeString('zh-CN', { hour12: false });
-
-  function mockQqLogs() {
-    const lines = [
-      '[QQ] 便携版内核启动（pid 18244）',
-      '[QQ] 用户目录：runtime/QQ/userdata',
-      '[QQ] 登录态已复用，跳过扫码',
-      '[QQ] 协议端适配层加载完成'
-    ];
-    return lines.map((text, i) => ({ at: Date.now() - (lines.length - i) * 6800, stream: 'stdout', text }));
-  }
 
   function mockAppLogs() {
     const rows = [
@@ -831,7 +820,6 @@
           const which = new URL(u, 'http://preview.local').searchParams.get('which');
           return Promise.resolve(jsonRes({ token: which === 'http' ? '' : 'pv-demo-token' }));
         }
-        if (u.startsWith('/api/qq-portable/logs')) return Promise.resolve(jsonRes({ logs: mockQqLogs() }));
         // 「重新检测 QQ」会带 ?force=1 打这个接口，不接住就落到 realFetch，
         // 预览没有真后端会 404，按钮报"检测失败"。
         if (u.startsWith('/api/qq-portable/status')) return Promise.resolve(jsonRes(mockStatus().qqPortable));
