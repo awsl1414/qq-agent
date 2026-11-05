@@ -98,6 +98,16 @@
 .dp-field select { height: 34px; padding: 0 10px; }
 .dp-field input:not([type=checkbox]):not([type=range]) { height: 34px; padding: 0 12px; }
 .dp-field textarea { resize: vertical; min-height: 84px; line-height: 1.65; }
+/* 下拉由 00-core.js 的 enhanceOneSelect 换成自绘控件：原生 <select> 被
+   display:none，真正可见的是 .sel-head 按钮，上面那套声明一条都落不到它身上。
+   不补这一段，同一张面板里 .field 的下拉是凹的、.dp-field 的下拉是凸的。
+   ⚠️ 用 :where() 压到 (0,1,0)：本文件在 style.css 之后加载，写成 (0,2,0)
+      会把全局 .sel-head:hover / .sel.open .sel-head 的强调描边一起盖掉。 */
+:where(.dp-field) .sel-head {
+  height: 34px; padding: 0 12px;
+  background: var(--inset-bg); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); font-size: 12.5px;
+}
 .dp-field :focus-visible { outline: none; box-shadow: var(--inset-edge), 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
 .dp-field output { color: var(--accent-hi); font-variant-numeric: tabular-nums; }
 

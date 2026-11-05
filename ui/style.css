@@ -1954,6 +1954,27 @@ tr.chat-del-selected td { background: color-mix(in srgb, var(--red) 10%, transpa
   padding: 0 12px;
 }
 .field select { height: 34px; padding: 0 10px; }
+/* 自绘下拉（.sel，见 00-core.js enhanceOneSelect）在表单里必须与输入框同族。
+   根因：原生 <select> 被 display:none 藏掉，真正可见的是 .sel > .sel-head 按钮，
+   而它走的是全局「下拉触发条」规则 —— 凸起底、淡描边、padding 撑高，于是同一个
+   .field 里并排的「下拉 vs 输入框」看起来是两种控件。
+   ⚠️ 作用域只到 .field 内：工具栏 / 日志页 / 市场筛选里的 .sel 是「按钮」语义，
+      凸起 + 淡描边 + 按内容撑宽才是对的，改全局会连带破坏那边。
+   ⚠️ 高度与 .field input 一样锁死 34px：内容框随字体渲染漂移是"缩放后不齐"的根因。
+   ⚠️ 展开后的 .sel-menu 已 portal 到 body（浮层），不受这些规则影响，保持凸起。 */
+.field .sel-head {
+  height: 34px;
+  padding: 0 12px;
+  background: var(--inset-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+/* 原生 select 在 .field 里是 width:100% 的块级控件（见上面的共用规则），
+   自绘触发器也得占满整行，否则同一个 .field 里下拉 180px、输入框占满全宽。
+   只认直接子元素：按钮行里的下拉（取景 / 小窗尺寸）本就按内容宽摆放，
+   跟着撑满会被挤到下一行。 */
+.field > .sel { display: block; width: 100%; min-width: 0; }
 /* 输入框同一行里的按钮（显示/打开文件夹等）：与输入框等高，不再一个高一个矮 */
 .field .btn-small {
   height: 34px;
@@ -7684,8 +7705,6 @@ code, .mono { font-family: var(--mono); }
   padding: 6px 10px; border-radius: var(--radius);
   background: color-mix(in srgb, var(--fg-mute) 10%, transparent);
 }
-/* 引导卡里的输入框略高一点：新人第一屏的主武器，好点 */
-.set-guide input[type="text"], .set-guide input[type="password"] { padding: 8px 10px; font-size: 13px; }
 
 /* ── 16.5 危险区 ──
    「外观与数据 → 数据管理」里，破坏性操作与「打开文件夹」这类安全操作原先
@@ -8250,6 +8269,12 @@ code, .mono { font-family: var(--mono); }
 .mk-select[data-mk-cat-select] { min-width: 210px; }
 .mk-select[data-mk-status-select] { min-width: 150px; }
 .mk-select[data-mk-sort-select] { min-width: 175px; }
+/* 上面这套声明写的是**原生** select，而 00-core.js 的 enhanceOneSelect 会把它
+   display:none 藏起来、换成 .sel 触发条 —— 真正可见的是 .sel-head，它沿用全局
+   「下拉按钮」皮肤，描边是 --line(7%)，比同排的 .mk-search input（--line-str）
+   淡一档，一眼能看出是两种控件。这里只补描边色，其余（背景/圆角/字号）本就同源。
+   ⚠️ 用 :where() 压到 (0,1,0)，把 hover / 展开态的强调描边留给全局 .sel-head 规则。 */
+:where(.mk-fld) .sel-head { border-color: var(--line-str); }
 
 /* ── 主体：筛选结果列表（分类已收进上方「分类」下拉，不再占左栏） ── */
 .mk-body { flex: 1; min-height: 0; display: flex; }
@@ -9507,9 +9532,25 @@ input.mig-input:focus-visible,
 .logs-ctl { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
 .logs-ctl-t { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
 .logs-ctl .sel { min-width: 132px; }
+/* 工具栏里的自绘下拉要和同排的搜索框、旁边的按钮/胶囊是一族：
+   搜索框 30px / 12.5px / --line-str 描边，下拉若沿用全局 .sel-head 的
+   7px 内边距就会高出 3.5px、描边淡到看不见，同一行里像两种控件。
+   ⚠️ 只覆盖工具栏这一组；表单里的下拉由 .field .sel-head 负责，两者语义不同。
+   ⚠️ 用 :where() 把选择器特异性压到 (0,1,0)：这里只管"静息态长什么样"，
+      hover / 展开态的强调描边仍归全局 .sel-head:hover / .sel.open .sel-head，
+      否则本页规则写在后面会把它们一起盖掉。 */
+:where(.logs-ctl, .logs-store-lv) .sel-head {
+  height: 30px;
+  padding: 0 10px;
+  border-color: var(--line-str);
+  font-size: 12.5px;
+}
 
 .logs-search { display: flex; align-items: center; gap: var(--space-xs); flex: 1 1 200px; min-width: 0; }
-.logs-search input {
+/* ⚠️ 必须带 [type]：全局重置 `button, input:not([type=checkbox]):not([type=radio])`
+   的 border 长手特异性 (0,2,1)，压过 .logs-search input (0,1,1)，会把这里的
+   1px 描边整条吃掉（实测 border-width 归零），搜索框就成了无描边色块。 */
+.logs-search input[type='search'] {
   flex: 1; min-width: 0; height: 30px;
   padding: 0 10px;
   border: 1px solid var(--line-str); border-radius: var(--radius-sm);
