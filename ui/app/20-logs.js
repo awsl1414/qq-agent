@@ -15,6 +15,11 @@
    ③ SSE event: log         服务端 200ms 合并成一批（data 是数组）。本地只留
                             最近 200 条、丢弃溢出，并按 200ms 节流插入 DOM。
 
+ 模块下拉另有一路 GET /api/logs/modules：它回答的是「这一天、这批级别下有哪些
+ 模块」，因此**不接受** module / q，与上面两段列表取数的筛选条件无关。选项来自
+ 已加载数据时，选一个模块就会让其余模块从下拉里消失；服务端按文件算一次才
+ 能让选项与条数在任何筛选组合下保持同一口径。
+
  ── 分页为什么用「重叠一秒 + 重数去重」──
  磁盘接口的行时间戳只精确到秒（文件行只有 HH:MM:SS），`before` 的语义是
  「ts 严格更早」。若直接把「已显示的最旧一条」当游标，服务端按条数切页时
@@ -82,9 +87,14 @@ const logsState = {
      { text, count } —— count 是同一文案累计出现次数。 */
   notice: null,
   dates: [],               // 可选日期（新到旧）
-  moduleCounts: new Map(), // 模块/模块族 → 条数，驱动模块下拉
+  /* 模块分布快照：`module → 条数`，来自 GET /api/logs/modules。
+     它由服务端按「这一天 + 当前级别」算一次，**与当前选中的模块、搜索关键字
+     无关**（理由见 logsLoadModuleStats）。记忆的是哪一份快照：切换日期或级别
+     时 keys 不匹配就重取。 */
+  moduleCounts: new Map(),
+  moduleStatsKey: '',      // 快照对应的「日期|级别」标识，空串 = 还没有快照
+  moduleStatsNote: '',     // 快照自身的不完整/失败说明，显示在模块下拉的 title 上
   seen: new Map(),         // 重数去重表：行键 → 已显示条数（见 logsRowKey）
-  mute: false,             // 程序化改 <select> 时抑制 change 回调
   seq: 0,                  // 请求序号：切筛选/切日期后丢弃过期响应
   live: [],                // 实时日志待插入缓冲
   liveInserted: 0,         // 由实时流插入、仍在列表里的行数（封顶 LOG_LIVE_MAX）
@@ -148,6 +158,9 @@ function logsFamily(mod) {
 /** 一条日志是否命中当前筛选。磁盘页与实时流共用（内存页由服务端筛好）。 */
 function logsMatches(e) {
   if (logsState.level.size && !logsState.level.has(String(e.level || '').toLowerCase())) return false;
+  // 模块按前缀匹配，与 GET /api/logs 的 module 参数同一语义：下拉里的族值
+  // （skill）就是靠前缀命中 skill:sticker 这类具体模块。内存页由服务端筛、
+  // 磁盘页与实时流用这里筛，两处必须同一个判定。
   const mod = String(e.module || '').toLowerCase();
   if (logsState.module && !mod.startsWith(logsState.module.toLowerCase())) return false;
   const q = logsState.q.trim().toLowerCase();
@@ -178,20 +191,76 @@ function logsHistoryQuery(date) {
 
 /* ══════════ 下拉数据源 ══════════ */
 /**
- * 从**未按模块、未搜索**的原始页里累计模块计数，驱动模块下拉选项。
- * 一旦选中模块或输入了关键字，服务端/本地都只返回命中的那一部分，再拿它
- * 重算下拉就会把选项缩成一条、用户无法切回「全部模块」——所以那期间只保留
- * 已有选项，不重算。
+ * 模块下拉的数据来源：`GET /api/logs/modules` 的一次服务端聚合，**不是**当前
+ * 已加载数据的副产品。
+ *
+ * 为什么这么做（旧实现的两个死结）：
+ *   · 从已加载的行里累计计数 → 选了模块后服务端/本地只返回命中的那部分，选项
+ *     集合跟着塌缩，用户再也切不回别的模块；
+ *   · 改成「保留已有计数、只清空不重算」→ 刷新后计数翻倍（app（2000）），
+ *     跨日期切换还会把昨天的模块混进今天。
+ * 下拉要回答的是一个与筛选无关的问题：「这份数据（这一天、这些级别）里有哪些
+ * 模块，各多少条」。这个问题只有数据源自己能回答，所以由服务端在文件上算一次。
+ *
+ * 口径的两条边界：
+ *   · 与 `module` 无关 —— 选中哪个模块都不改变选项集合（否则无法切换）；
+ *   · 与 `q` 无关 —— 关键字是在当前模块筛选**之内**再缩小列表，若让选项跟随
+ *     关键字收缩，用户删不掉关键字之前就找不到自己要切的模块了。
+ *
+ * 切换日期或级别时重取（同一份分布不可能同时属于两天、两套级别）；切换模块或
+ * 关键字不重取，也不清空。内存首屏与磁盘翻页共用这一份快照。
+ *
+ * 实时流进来的新日志不即时计入分布：那份分布描述的是「进页面那一刻的数据」，
+ * 逐条累加就把口径又变回「已加载数据的副产品」。点「刷新」或切换日期/级别时
+ * 连同列表一起重算。
  */
-function logsAggregateModules(logs) {
-  if (logsState.module || logsState.q.trim()) return;
-  for (const e of logs) {
-    const mod = String(e.module || '');
-    if (!mod) continue;
-    logsState.moduleCounts.set(mod, (logsState.moduleCounts.get(mod) || 0) + 1);
-  }
+function logsModuleStatsKey() {
+  return `${logsIsToday() ? logsToday() : logsState.date}|${LOG_LEVELS.filter((lv) => logsState.level.has(lv)).join(',')}`;
 }
 
+async function logsLoadModuleStats(seq) {
+  const key = logsModuleStatsKey();
+  if (key === logsState.moduleStatsKey) return;   // 同一份口径已经有了
+  try {
+    const p = new URLSearchParams({ date: logsIsToday() ? logsToday() : logsState.date });
+    const lv = LOG_LEVELS.filter((x) => logsState.level.has(x));
+    if (lv.length) p.set('level', lv.join(','));
+    const data = await api('/api/logs/modules?' + p.toString());
+    if (seq !== logsState.seq) return;
+    const counts = new Map();
+    for (const it of Array.isArray(data.modules) ? data.modules : []) {
+      if (!it || !it.module) continue;
+      counts.set(String(it.module), Number(it.count) || 0);
+    }
+    logsState.moduleCounts = counts;
+    logsState.moduleStatsKey = key;
+    // 分布被 32MB 扫描预算截断时，选项只覆盖较新的那部分：说清楚，
+    // 否则用户会以为某个模块今天没打过日志。
+    logsState.moduleStatsNote = data.scanTruncated
+      ? '模块分布未覆盖当日全部日志（扫描达到 32MB 上限），更早的模块可能未列出'
+      : '';
+  } catch (e) {
+    // 下拉拿不到分布不该连带整页报错：列表本身是好的。
+    if (seq !== logsState.seq) return;
+    // 手上的快照属于另一天/另一套级别时不能继续挂着——那是另一份数据的计数，
+    // 比空列表更误导。只有「同一份口径重取失败」（点刷新）才保留旧值。
+    if (logsState.moduleStatsKey !== key) {
+      logsState.moduleCounts = new Map();
+      logsState.moduleStatsKey = '';
+    }
+    logsState.moduleStatsNote = `模块分布加载失败：${e?.message || e}`;
+  }
+  logsSyncToolbar();
+}
+
+/**
+ * 模块下拉的选项：族（`skill`）聚合成 `skill:*（N）`，其余模块按条数降序。
+ *
+ * `module` / `q` 只影响列表内容，不影响这里的选项集合——这正是本函数不读
+ * 它们的原因。选中的模块若不在快照里（该模块在这份数据里 0 条，或快照还没
+ * 回来），补一条不带条数的：否则 <select> 落值失败会退成空白按钮，用户看不出
+ * 当前在筛什么。
+ */
 function logsModuleItems() {
   const counts = logsState.moduleCounts;
   const families = new Map();
@@ -208,6 +277,9 @@ function logsModuleItems() {
   const items = [{ value: '', label: '全部模块' }];
   for (const [fam, n] of [...families].sort(byCount)) items.push({ value: fam, label: `${fam}:*（${n}）` });
   for (const [mod, n] of plains.sort(byCount)) items.push({ value: mod, label: `${mod}（${n}）` });
+  if (logsState.module && !items.some((it) => it.value === logsState.module)) {
+    items.push({ value: logsState.module, label: logsState.module });
+  }
   return items;
 }
 
@@ -456,21 +528,26 @@ function logsUpdateNewBtn() {
   }
 }
 
-/** 程序化设置 <select> 的选项与选中值，同时让自绘下拉（.sel）刷新显示。 */
+/**
+ * 程序化设置 <select> 的选项与选中值，同时让自绘下拉（.sel）刷新显示。
+ *
+ * 显示同步不能靠派发 change：重建 options 后原生 select 会自己选中第一项，
+ * 「要选的值恰好也是第一项」时没有任何值变化，change 无从触发，而自绘下拉的
+ * 文案只在 change 上更新 —— 结果就是按钮停在旧文案（首屏是空白按钮）。
+ * 所以这里显式调用 enhanceOneSelect 暴露的同步点（sel._selSyncHead），
+ * 渲染细节走渲染通道，不借业务事件。mute 也随之不再需要。
+ */
 function logsSetSelect(sel, value, items) {
   if (!sel) return;
   const sig = items.map((it) => `${it.value}|${it.label}`).join('\n');
-  const changed = sel.dataset.sig !== sig;
-  if (changed) {
+  if (sel.dataset.sig !== sig) {
     sel.dataset.sig = sig;
     sel.innerHTML = items.map((it) => `<option value="${esc(it.value)}">${esc(it.label)}</option>`).join('');
   }
-  if (sel.value === value) return;
-  logsState.mute = true;
+  // 重建后必须重新落值：innerHTML 会把 selectedIndex 归零，即使 value 没变，
+  // 选中的也可能是别的项。
   sel.value = value;
-  // 自绘下拉只在 change 上同步触发条文案（00-core.js enhanceOneSelect）
-  sel.dispatchEvent(new Event('change', { bubbles: true }));
-  logsState.mute = false;
+  sel._selSyncHead?.();
 }
 
 function logsSyncToolbar() {
@@ -478,6 +555,10 @@ function logsSyncToolbar() {
     cb.checked = logsState.level.has(cb.dataset.logLevel);
   });
   logsSetSelect($('#logs-module'), logsState.module, logsModuleItems());
+  // 分布自身的边界（扫描截断 / 取数失败）不能混进列表计数条——那条讲的是
+  // 「已显示多少行」，与下拉选项是两回事。挂在控件提示上，鼠标悬停可查。
+  const modSel = $('#logs-module');
+  if (modSel) modSel.title = logsState.moduleStatsNote;
   logsSetSelect($('#logs-date'), logsState.date, logsDateItems());
   const follow = $('#logs-follow');
   if (follow) follow.checked = logsState.follow;
@@ -497,7 +578,6 @@ async function logsFetchPage(seq) {
     const data = await api('/api/logs?' + logsMemoryQuery());
     if (seq !== logsState.seq) return 0;
     const logs = Array.isArray(data.logs) ? data.logs : [];
-    logsAggregateModules(logs);
     if (Array.isArray(data.dates)) { logsState.dates = data.dates; logsSyncToolbar(); }
     logsState.fromMemory = false;
     // 内存窗口覆盖到「最旧一条」所在秒的中间，磁盘从这一秒的末尾接上
@@ -542,7 +622,6 @@ async function logsFetchPage(seq) {
     logsState.cursor = stuck ? logsCursorAfter(oldest, { exclusive: true }) : next;
     // 回到常规页长：只有卡在同一秒时才需要大页，之后的大页只是白传体积
     logsState.pageLimit = LOG_HISTORY_LIMIT;
-    logsAggregateModules(raw);
     added = logsInsertRows(raw.filter(logsMatches), 'bottom');
   }
   return added;
@@ -591,7 +670,8 @@ async function logsLoadMore({ auto = false } = {}) {
   return total;
 }
 
-async function logsReload() {
+async function logsReload({ refreshStats = false } = {}) {
+  if (refreshStats) logsState.moduleStatsKey = '';   // 「刷新」要连分布一起重算
   const seq = ++logsState.seq;
   logsState.error = '';
   logsState.loading = true;
@@ -607,9 +687,10 @@ async function logsReload() {
   logsState.live = [];
   logsState.liveInserted = 0;
   logsState.seen = new Map();
-  // 模块下拉的计数与本次筛选结果同源，必须一起重建：只加不减的话，
-  // 每刷新一次计数就翻一倍，下拉里会出现「app（2000）」这种假数字。
-  logsState.moduleCounts = new Map();
+  // 模块下拉的计数**不在**这里清空：它是「这一天 + 这批级别」的分布快照，与
+  // 当前选中的模块、关键字无关。切换模块时清空会让选项塌缩成一项（切不回去），
+  // 逐页累加又会让计数翻倍。快照只在日期/级别变化时由 logsLoadModuleStats 重取，
+  // 见那里的说明。
   const list = $('#logs-list');
   if (list) list.innerHTML = '';
   logsSyncToolbar();
@@ -631,6 +712,9 @@ async function logsReload() {
   logsState.loading = false;
   if (list) list.scrollTop = 0;
   logsRenderMeta();
+  // 分布快照与列表取数并行，只依赖日期与级别。单独 await 不影响列表首屏，
+  // 但必须在 reload 结束前回来，否则用户刚进页面时下拉只有「全部模块」。
+  await logsLoadModuleStats(seq);
 
   if (!logsRowCount()) {
     if (logsState.error) {
@@ -759,10 +843,10 @@ function logsBindToolbar(box) {
     });
   });
 
+  // 程序化改选中项（logsSetSelect）不派发 change，只有用户操作会走到这里。
   const modSel = $('#logs-module', box);
   if (modSel) {
     modSel.addEventListener('change', () => {
-      if (logsState.mute) return;
       logsState.module = modSel.value;
       logsReload();
     });
@@ -771,7 +855,6 @@ function logsBindToolbar(box) {
   const dateSel = $('#logs-date', box);
   if (dateSel) {
     dateSel.addEventListener('change', () => {
-      if (logsState.mute) return;
       logsState.date = dateSel.value;
       logsReload();
     });
@@ -797,7 +880,7 @@ function logsBindToolbar(box) {
     });
   }
 
-  $('#logs-refresh', box)?.addEventListener('click', () => logsReload());
+  $('#logs-refresh', box)?.addEventListener('click', () => logsReload({ refreshStats: true }));
   $('#logs-download', box)?.addEventListener('click', () => logsDownload());
   $('#logs-newbtn', box)?.addEventListener('click', () => {
     logsState.follow = true;

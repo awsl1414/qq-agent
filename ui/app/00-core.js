@@ -1329,6 +1329,10 @@ function enhanceOneSelect(sel) {
 
   const label = () => (sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '');
   const syncHead = () => { head.firstElementChild.textContent = label(); };
+  // 程序化改选中项（重建 options 后由调用方写 sel.value）不会经过 change，
+  // 触发条文案就停在旧值。同步文案是渲染细节，不该借业务事件通道完成，
+  // 所以把同步点暴露给调用方显式调用；菜单选中标记由展开时的 syncMenu 负责。
+  sel._selSyncHead = syncHead;
   // 缓存菜单渲染快照：打开时先比较 options，内容没变就不重建 innerHTML。
   // 每次点击都重建整个选项列表（有些下拉有上百项），随后又立刻读几何信息触发
   // 布局，弹出瞬间主线程忙着重建 DOM，动画第一帧就掉了。

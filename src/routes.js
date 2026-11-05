@@ -4732,6 +4732,28 @@ export function createRoutes(deps) {
       }
     },
     {
+      // 模块下拉的分布快照：某日日志里各模块的条数，服务端聚合一次。
+      //
+      // **刻意只接受 date / level**：模块下拉回答的是「这份数据里有哪些模块」，
+      // 用户选中的模块与搜索关键字都是在这份数据之内再缩小列表，不能反过来让
+      // 选项集合自身收缩（旧实现逐页累加「当前已加载数据」的模块，选了 skill
+      // 之后 app 从下拉里消失、再也切不回去）。因此即使请求里带了 module / q，
+      // 这里也不读它们。
+      method: 'GET', pattern: '/api/logs/modules',
+      handler: async ({ res, json, url }) => {
+        const p = url.searchParams;
+        const date = p.get('date') || undefined;
+        if (date !== undefined && !parseLogDate(date)) {
+          return json(res, 400, { error: 'date 格式无效（应为 YYYY-MM-DD）' });
+        }
+        const levelRaw = p.get('level');
+        if (levelRaw && parseLevels(levelRaw).size === 0) {
+          return json(res, 400, { error: `level 取值无效（可选 ${LOG_LEVELS.join(' / ')}，逗号分隔多值）` });
+        }
+        return json(res, 200, await logger.moduleStats({ date, level: p.get('level') }));
+      }
+    },
+    {
       // 磁盘历史：读取某日日志文件的尾部，反向分块，不整文件读入
       method: 'GET', pattern: '/api/logs/history',
       handler: async ({ res, json, url }) => {

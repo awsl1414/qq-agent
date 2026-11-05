@@ -765,6 +765,24 @@
     }));
   }
 
+  /* 模块分布（GET /api/logs/modules）：与真实后端同一口径——只按 level 统计，
+     不理会 module / q。预览里切换模块时选项集合同样不能塌缩。 */
+  function mockLogModuleStats(u) {
+    const p = new URL(u, 'http://preview.local').searchParams;
+    const levels = new Set(String(p.get('level') || '').split(',').filter(Boolean));
+    const counts = new Map();
+    let total = 0;
+    for (const e of mockAppLogs()) {
+      if (levels.size && !levels.has(e.level)) continue;
+      counts.set(e.module, (counts.get(e.module) || 0) + 1);
+      total += 1;
+    }
+    const modules = [...counts]
+      .map(([module, count]) => ({ module, count }))
+      .sort((a, b) => b.count - a.count || a.module.localeCompare(b.module));
+    return { date: p.get('date') || new Date().toISOString().slice(0, 10), total, modules, scanTruncated: false };
+  }
+
   // ⚠️ 可变副本：预览下"已保存的配置"存在这里。GET 恒定返回上面那个字面量、
   //    POST 只把合并结果塞进响应就扔掉的话，"改设置→保存→页面重新拉取"会回滚
   //    成原值。预览模式要演示"改设置并生效"，所以必须记住写回。
@@ -817,6 +835,7 @@
         // 「重新检测 QQ」会带 ?force=1 打这个接口，不接住就落到 realFetch，
         // 预览没有真后端会 404，按钮报"检测失败"。
         if (u.startsWith('/api/qq-portable/status')) return Promise.resolve(jsonRes(mockStatus().qqPortable));
+        if (u.startsWith('/api/logs/modules')) return Promise.resolve(jsonRes(mockLogModuleStats(u)));
         if (u.startsWith('/api/logs')) return Promise.resolve(jsonRes({ logs: mockAppLogs(), level: pvLogLevel }));
         if (u.startsWith('/api/sessions/')) {
           const id = decodeURIComponent(u.slice('/api/sessions/'.length).split('?')[0]);

@@ -436,6 +436,57 @@ class Logger {
     return { logs: out.slice(0, max), hasMore: truncated, date: key, scanTruncated };
   }
 
+  /**
+   * 某日日志的模块分布 —— 日志页「模块」下拉的**唯一**数据源。
+   *
+   * 口径：这一天落盘的日志里，按 `level` 筛过之后每个模块各多少条。
+   * 刻意**不接受** module / q 这两个参数：模块下拉要回答的是「这份数据里有哪些
+   * 模块」，用户在下拉里选中的模块、搜索框里的关键字都是在**这份数据之内**再
+   * 缩小列表，不能反过来改变选项集合自身。旧实现把选项当成「当前已加载数据的
+   * 副产品」逐页累加，结果是选了 skill 之后 app 从下拉里消失、再也切不回去，
+   * 刷新又把计数翻倍。
+   *
+   * 为什么读磁盘文件而不是内存缓冲：日志页能翻到的当天数据在内存（最近
+   * MAX_MEMORY 条）之外还有磁盘，按内存统计会让几小时前的模块从下拉里漏掉；
+   * 而磁盘页是原始行，前端各自累计又和首屏的口径对不上。文件是这份数据的
+   * 完整来源，内存与磁盘两条路径共用同一份分布。
+   * 已知边界：落盘级别高于 info 时，内存里那些更低级别的行不在文件里，其模块
+   * 不会出现在分布中（页面仍可能显示它们）。
+   *
+   * 扫描复用 iterTailLines 的分块读与 HISTORY_SCAN_MAX_BYTES 预算，不把整份
+   * 文件读进内存；`scanTruncated` 表示预算用尽、更早的模块没统计到。
+   * 不做结果缓存：本接口只在切换日期或级别时请求一次，历史文件读的是同一份
+   * 字节，预算已兜住最坏耗时，加缓存要额外维护失效条件。
+   *
+   * @returns {Promise<{date: string, total: number, modules: {module: string, count: number}[], scanTruncated: boolean}>}
+   */
+  async moduleStats({ date, level } = {}) {
+    const key = parseLogDate(String(date ?? dateKeyOf()));
+    if (!key) throw Object.assign(new Error('日期格式无效（应为 YYYY-MM-DD）'), { expose: true, status: 400 });
+    const levels = parseLevels(level);
+    const empty = { date: key, total: 0, modules: [], scanTruncated: false };
+    let st;
+    try { st = await fs.promises.stat(logFileFor(key)); } catch { return empty; }
+
+    const counts = new Map();
+    let total = 0;
+    let scanTruncated = false;
+    for await (const item of iterTailLines(logFileFor(key), st.size)) {
+      if (item === SCAN_TRUNCATED) { scanTruncated = true; break; }
+      const m = HISTORY_LINE_RE.exec(item.line);
+      if (!m) continue;                        // 续行（stack 等）不引入新模块
+      if (levels.size && !levels.has(m[4].toLowerCase())) continue;
+      const mod = m[5];
+      if (!mod) continue;
+      counts.set(mod, (counts.get(mod) || 0) + 1);
+      total += 1;
+    }
+    const modules = [...counts]
+      .map(([module, count]) => ({ module, count }))
+      .sort((a, b) => b.count - a.count || a.module.localeCompare(b.module));
+    return { date: key, total, modules, scanTruncated };
+  }
+
   /** 可查询的日志日期列表（新到旧），只做 readdir + 文件名解析。 */
   listHistoryDates() {
     const dates = [];

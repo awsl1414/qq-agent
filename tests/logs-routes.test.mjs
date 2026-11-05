@@ -217,6 +217,61 @@ test('dates：只列合法日期文件，新到旧', async () => {
   assert.deepEqual(list.data.dates, r.data.dates);   // 首屏同时带日期列表
 });
 
+test('模块分布：/api/logs/modules 只受日期与级别影响，带 module / q 不改变分布', async () => {
+  const day = '2026-01-08';
+  const dir = path.join(temp, 'logs');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `qq-agent-${day}.log`), [
+    '09:00:01 [INFO ] [app] 启动',
+    '09:00:02 [INFO ] [app] 心跳',
+    '09:00:03 [WARN ] [app] 慢请求',
+    '09:00:04 [INFO ] [skill:sticker] 生成贴纸',
+    '09:00:05 [ERROR] [skill:image-generate] 出图失败',
+    '    at generate (image.js:1:2)',
+    ''
+  ].join('\n'));
+
+  const base = await request('GET', '/api/logs/modules', { query: `?date=${day}&level=info,warn,error` });
+  assert.equal(base.status, 200);
+  assert.equal(base.data.date, day);
+  assert.equal(base.data.total, 5);
+  assert.deepEqual(base.data.modules, [
+    { module: 'app', count: 3 },
+    { module: 'skill:image-generate', count: 1 },
+    { module: 'skill:sticker', count: 1 }
+  ]);
+  assert.equal(base.data.scanTruncated, false);
+
+  // 核心回归：模块下拉的数据源不随「当前选中的模块 / 关键字」变化。
+  // 旧实现是逐页累加当前筛选结果，选 skill 后 app 从下拉里消失且切不回去。
+  const withModule = await request('GET', '/api/logs/modules', {
+    query: `?date=${day}&level=info,warn,error&module=skill`
+  });
+  assert.deepEqual(withModule.data.modules, base.data.modules);
+  const withQ = await request('GET', '/api/logs/modules', {
+    query: `?date=${day}&level=info,warn,error&module=skill&q=sticker`
+  });
+  assert.deepEqual(withQ.data.modules, base.data.modules);
+
+  // 级别是同口径的一部分：只看 warn,error 时 app 只剩 1 条
+  const warnOnly = await request('GET', '/api/logs/modules', { query: `?date=${day}&level=warn,error` });
+  assert.deepEqual(warnOnly.data.modules, [
+    { module: 'app', count: 1 },
+    { module: 'skill:image-generate', count: 1 }
+  ]);
+
+  // 参数校验与其它日志端点一致
+  const badDate = await request('GET', '/api/logs/modules', { query: '?date=../../etc/passwd' });
+  assert.equal(badDate.status, 400);
+  const badLevel = await request('GET', '/api/logs/modules', { query: `?date=${day}&level=war` });
+  assert.equal(badLevel.status, 400);
+  // 没有日志文件的日子：空分布而不是报错（文件尚未产生是正常状态）
+  const missing = await request('GET', '/api/logs/modules', { query: '?date=2020-05-05' });
+  assert.equal(missing.status, 200);
+  assert.deepEqual(missing.data.modules, []);
+  assert.equal(missing.data.total, 0);
+});
+
 test('级别持久化：POST 写配置，重启（重新 loadConfig）后仍生效', async () => {
   const r = await request('POST', '/api/logs/level', { body: { level: 'debug' } });
   assert.equal(r.status, 200);
@@ -282,6 +337,13 @@ test('history：扫描撞上 32MB 预算时 scanTruncated=true，未超预算时
   assert.equal(cut.data.logs.length, 0);
   assert.equal(cut.data.hasMore, false);       // 页长没截断
   assert.equal(cut.data.scanTruncated, true);  // 但扫描被预算截断 → 界面不能说"到底了"
+
+  // 模块分布走同一套预算：截断时 scanTruncated=true，分布只覆盖较新的部分，
+  // 前端据此在下拉上加提示（否则用户会以为早期模块当天没打过日志）。
+  const dist = await request('GET', '/api/logs/modules', { query: '?date=2026-02-01' });
+  assert.equal(dist.status, 200);
+  assert.equal(dist.data.scanTruncated, true);
+  assert.ok(dist.data.modules.length > 0);
 
   // 小文件：完整扫到文件头，scanTruncated=false
   const small = await request('GET', '/api/logs/history', { query: '?date=2026-01-04&limit=100' });
